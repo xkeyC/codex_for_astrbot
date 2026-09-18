@@ -163,6 +163,24 @@ impl Runtime {
         })
     }
 
+    /// Extract and consolidate memories now (global, then the thread's scope).
+    #[pyo3(signature = (thread_id, force = false))]
+    fn consolidate_memories<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        force: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .consolidate_memories(&thread_id, force)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
     fn interrupt<'py>(&self, py: Python<'py>, thread_id: String) -> PyResult<Bound<'py, PyAny>> {
         let engine = Arc::clone(&self.engine);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

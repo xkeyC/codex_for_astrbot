@@ -27,6 +27,7 @@ codex-extension-api = { workspace = true }
 codex-home = { workspace = true }
 codex-login = { workspace = true }
 codex-memories-extension = { workspace = true }
+codex-memories-write = { workspace = true }
 codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }

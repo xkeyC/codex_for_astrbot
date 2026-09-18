@@ -365,6 +365,9 @@ impl Engine {
                 }
             }
         };
+        if matches!(submission, TurnInputSubmission::Started { .. }) {
+            self.start_memories(thread_id, &thread).await;
+        }
         Ok(match submission {
             TurnInputSubmission::Started { turn_id } => {
                 json!({"status": "started", "turn_id": turn_id})
@@ -424,6 +427,43 @@ impl Engine {
             })
             .await?;
         Ok(())
+    }
+
+    /// Background memory extraction / consolidation after a turn starts, like
+    /// the app server. A no-op unless `features.memories` is on for the thread.
+    async fn start_memories(&self, thread_id: &str, thread: &Arc<CodexThread>) {
+        let Ok(id) = ThreadId::from_string(thread_id) else {
+            return;
+        };
+        let snapshot = thread.config_snapshot().await;
+        codex_memories_write::start_memories_startup_task(
+            Arc::clone(&self.thread_manager),
+            Arc::clone(&self.auth_manager),
+            id,
+            Arc::clone(thread),
+            thread.config().await,
+            snapshot.permission_profile,
+            &snapshot.session_source,
+        );
+    }
+
+    /// Run memory extraction and consolidation now for this thread's
+    /// partitions (global, then its scope), ignoring `auto_consolidate`.
+    pub async fn consolidate_memories(&self, thread_id: &str, force: bool) -> Result<()> {
+        let thread = self.thread(thread_id).await?;
+        let id = ThreadId::from_string(thread_id)?;
+        let snapshot = thread.config_snapshot().await;
+        codex_memories_write::run_memories_consolidation_now(
+            Arc::clone(&self.thread_manager),
+            Arc::clone(&self.auth_manager),
+            id,
+            Arc::clone(&thread),
+            thread.config().await,
+            snapshot.permission_profile,
+            &snapshot.session_source,
+            force,
+        )
+        .await
     }
 
     /// Answer an `exec_approval_request` (`kind = "exec"`) or
