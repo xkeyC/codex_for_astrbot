@@ -1,0 +1,189 @@
+//! pyo3 surface (feature `python`).
+use std::sync::Arc;
+
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+
+use super::engine::Engine;
+use super::engine::EngineOptions;
+use super::engine::ThreadParams;
+use super::engine::TurnRequest;
+
+/// Codex worker threads run deep async stacks; match the CLI's 16 MiB.
+const THREAD_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+fn runtime_err(err: anyhow::Error) -> PyErr {
+    PyRuntimeError::new_err(format!("{err:#}"))
+}
+
+fn parse<T: serde::de::DeserializeOwned>(json: &str) -> PyResult<T> {
+    serde_json::from_str(json).map_err(|err| PyValueError::new_err(err.to_string()))
+}
+
+#[pyclass(frozen)]
+struct Runtime {
+    engine: Arc<Engine>,
+}
+
+#[pymethods]
+impl Runtime {
+    /// Create a runtime. `options_json`: `{"codex_home", "config", "codex_self_exe", "code_mode_host"}`.
+    #[staticmethod]
+    fn create<'py>(py: Python<'py>, options_json: String) -> PyResult<Bound<'py, PyAny>> {
+        let options: EngineOptions = parse(&options_json)?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let engine = Engine::new(options).await.map_err(runtime_err)?;
+            Ok(Runtime {
+                engine: Arc::new(engine),
+            })
+        })
+    }
+
+    fn start_thread<'py>(
+        &self,
+        py: Python<'py>,
+        params_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let params: ThreadParams = parse(&params_json)?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let info = engine.start_thread(params).await.map_err(runtime_err)?;
+            Ok(info.to_string())
+        })
+    }
+
+    fn resume_thread<'py>(
+        &self,
+        py: Python<'py>,
+        params_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let params: ThreadParams = parse(&params_json)?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let info = engine.resume_thread(params).await.map_err(runtime_err)?;
+            Ok(info.to_string())
+        })
+    }
+
+    fn is_loaded<'py>(&self, py: Python<'py>, thread_id: String) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(engine.is_loaded(&thread_id).await)
+        })
+    }
+
+    /// `request_json`: `{"input": [UserInput], "mode", "expected_turn_id",
+    /// "additional_context": {key: {"value", "kind"}}, "dynamic_tools", "model", "effort"}`.
+    fn submit_turn<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        request_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request: TurnRequest = parse(&request_json)?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let result = engine
+                .submit_turn(&thread_id, request)
+                .await
+                .map_err(runtime_err)?;
+            Ok(result.to_string())
+        })
+    }
+
+    /// Next event of the thread as `{"id", "msg": {"type", ...}}` JSON, or
+    /// `None` once the thread has terminated and its events are drained.
+    ///
+    /// Do not cancel a pending call (e.g. with `asyncio.wait_for`): an event
+    /// received after cancellation is dropped.
+    fn next_event<'py>(&self, py: Python<'py>, thread_id: String) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            // Resolve the thread first so the wait does not keep the engine alive.
+            let thread = engine.thread(&thread_id).await.map_err(runtime_err)?;
+            drop(engine);
+            let event = Engine::next_event(thread).await.map_err(runtime_err)?;
+            Ok(event.map(|event| event.to_string()))
+        })
+    }
+
+    /// `response_json`: `{"content_items": [...], "success": bool}`.
+    fn dynamic_tool_response<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        call_id: String,
+        response_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let response = parse(&response_json)?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .dynamic_tool_response(&thread_id, call_id, response)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    fn set_dynamic_tools<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        tools_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let tools = parse(&tools_json)?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .set_dynamic_tools(&thread_id, tools)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    fn interrupt<'py>(&self, py: Python<'py>, thread_id: String) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine.interrupt(&thread_id).await.map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    fn shutdown_thread<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .shutdown_thread(&thread_id)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine.shutdown().await.map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+}
+
+#[pymodule]
+fn codex_astrbot(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder
+        .enable_all()
+        .thread_stack_size(THREAD_STACK_SIZE_BYTES)
+        .thread_name("codex-astrbot");
+    pyo3_async_runtimes::tokio::init(builder);
+    m.add_class::<Runtime>()?;
+    Ok(())
+}

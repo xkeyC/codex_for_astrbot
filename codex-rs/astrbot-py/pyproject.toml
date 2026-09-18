@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "codex-astrbot"
+version = "0.1.0"
+description = "In-process codex-core binding for AstrBot"
+requires-python = ">=3.10"
+
+[tool.maturin]
+features = ["python", "pyo3/extension-module"]
+module-name = "codex_astrbot"

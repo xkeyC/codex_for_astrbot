@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "astrbot-py",
     "aws-auth",
     "analytics",
     "agent-graph-store",

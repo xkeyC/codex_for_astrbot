@@ -1,0 +1,39 @@
+[package]
+name = "codex-astrbot-py"
+description = "In-process Python binding that lets AstrBot drive codex-core (fork addition)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "codex_astrbot"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+doctest = false
+
+[features]
+# Off by default so `cargo build --workspace` never needs a Python interpreter.
+python = ["dep:pyo3", "dep:pyo3-async-runtimes"]
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+codex-code-mode = { workspace = true }
+codex-core = { workspace = true }
+codex-exec-server = { workspace = true }
+codex-extension-api = { workspace = true }
+codex-home = { workspace = true }
+codex-login = { workspace = true }
+codex-memories-extension = { workspace = true }
+codex-protocol = { workspace = true }
+codex-rollout = { workspace = true }
+codex-skills-extension = { workspace = true }
+codex-web-search-extension = { workspace = true }
+pyo3 = { version = "0.29.2", features = ["abi3-py310"], optional = true }
+pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"], optional = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros", "time"] }
+toml = { workspace = true }
