@@ -37,7 +37,9 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::turn_input::TurnInputRequest;
@@ -68,6 +70,11 @@ pub struct EngineOptions {
     /// the default lookup next to `current_exe()` finds python.exe.
     #[serde(default)]
     pub code_mode_host: Option<PathBuf>,
+    /// Ask for approval before every native command (and patch), so the host
+    /// can decide per sender. Applied as a harness override because config
+    /// files no longer accept `approval_policy = "untrusted"`.
+    #[serde(default)]
+    pub approve_every_command: bool,
 }
 
 /// Per-thread parameters for start and resume.
@@ -135,6 +142,17 @@ pub struct TurnRequest {
 
 fn default_turn_mode() -> TurnMode {
     TurnMode::StartOrSteer
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewRequest {
+    pub kind: String,
+    pub id: String,
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    pub approved: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 pub struct Engine {
@@ -408,6 +426,31 @@ impl Engine {
         Ok(())
     }
 
+    /// Answer an `exec_approval_request` (`kind = "exec"`) or
+    /// `apply_patch_approval_request` (`kind = "patch"`).
+    pub async fn review_decision(&self, thread_id: &str, request: ReviewRequest) -> Result<()> {
+        let thread = self.thread(thread_id).await?;
+        let decision = if request.approved {
+            ReviewDecision::Approved
+        } else {
+            ReviewDecision::denied(request.reason.unwrap_or_else(|| "denied".to_string()))
+        };
+        let op = match request.kind.as_str() {
+            "exec" => Op::ExecApproval {
+                id: request.id,
+                turn_id: request.turn_id,
+                decision,
+            },
+            "patch" => Op::PatchApproval {
+                id: request.id,
+                decision,
+            },
+            other => return Err(anyhow!("unknown approval kind: {other}")),
+        };
+        thread.submit(op).await?;
+        Ok(())
+    }
+
     pub async fn interrupt(&self, thread_id: &str) -> Result<()> {
         let thread = self.thread(thread_id).await?;
         thread.submit(Op::Interrupt).await?;
@@ -503,6 +546,9 @@ async fn build_config(
         developer_instructions: params.developer_instructions.clone(),
         ephemeral: Some(params.ephemeral),
         codex_self_exe: options.codex_self_exe.clone(),
+        approval_policy: options
+            .approve_every_command
+            .then_some(AskForApproval::UnlessTrusted),
         ..Default::default()
     };
     ConfigBuilder::default()

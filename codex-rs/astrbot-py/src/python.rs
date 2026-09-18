@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 
 use super::engine::Engine;
 use super::engine::EngineOptions;
+use super::engine::ReviewRequest;
 use super::engine::ThreadParams;
 use super::engine::TurnRequest;
 
@@ -138,6 +139,24 @@ impl Runtime {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             engine
                 .set_dynamic_tools(&thread_id, tools)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    /// `request_json`: `{"kind": "exec"|"patch", "id", "turn_id"?, "approved", "reason"?}`.
+    fn review_decision<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        request_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request: ReviewRequest = parse(&request_json)?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .review_decision(&thread_id, request)
                 .await
                 .map_err(runtime_err)?;
             Ok(())
