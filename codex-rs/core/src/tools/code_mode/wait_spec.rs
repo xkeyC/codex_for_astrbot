@@ -47,6 +47,44 @@ pub(crate) fn create_wait_tool() -> ToolSpec {
     })
 }
 
+/// Fork addition: a compact `wait` tool, used with
+/// `features.code_mode.compact_exec_description`.
+pub(crate) fn create_compact_wait_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "cell_id".to_string(),
+            JsonSchema::string(/*description*/ None),
+        ),
+        (
+            "yield_time_ms".to_string(),
+            JsonSchema::number(/*description*/ None),
+        ),
+        (
+            "max_tokens".to_string(),
+            JsonSchema::number(/*description*/ None),
+        ),
+        (
+            "terminate".to_string(),
+            JsonSchema::boolean(/*description*/ None),
+        ),
+    ]);
+    ToolSpec::Function(ResponsesApiTool {
+        name: codex_code_mode::WAIT_TOOL_NAME.to_string(),
+        description: format!(
+            "Resume a `{}` cell that returned `Script running with cell ID ...`: returns output since the last yield, or the final result. `terminate: true` stops the cell.",
+            codex_code_mode::PUBLIC_TOOL_NAME
+        ),
+        strict: false,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["cell_id".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+        defer_loading: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

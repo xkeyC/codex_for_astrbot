@@ -1135,6 +1135,8 @@ pub struct CodeModeConfig {
     pub structured_dynamic_tool_results: bool,
     /// Expose `exec` as a plain function tool instead of a grammar tool.
     pub exec_as_function_tool: bool,
+    /// Use the compact generic `exec` description.
+    pub compact_exec_description: bool,
 }
 
 impl Default for CodeModeConfig {
@@ -1146,6 +1148,7 @@ impl Default for CodeModeConfig {
             disable_in_process_fallback: false,
             structured_dynamic_tool_results: false,
             exec_as_function_tool: false,
+            compact_exec_description: false,
         }
     }
 }
@@ -2725,6 +2728,9 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
             .unwrap_or_default(),
         exec_as_function_tool: base
             .and_then(|config| config.exec_as_function_tool)
+            .unwrap_or_default(),
+        compact_exec_description: base
+            .and_then(|config| config.compact_exec_description)
             .unwrap_or_default(),
     }
 }

@@ -575,6 +575,15 @@ fn spec_for_model_request(
     code_mode_tool_names: &BTreeMap<String, ToolName>,
     spec: ToolSpec,
 ) -> ToolSpec {
+    // Fork addition: compact `wait` alongside the compact `exec` description.
+    let spec = if turn_context.config.code_mode.compact_exec_description
+        && tool_name.is_default_namespace()
+        && tool_name.name == codex_code_mode::WAIT_TOOL_NAME
+    {
+        crate::tools::code_mode::wait_spec::create_compact_wait_tool()
+    } else {
+        spec
+    };
     let tool_mode = effective_tool_mode(turn_context, model_info);
     if matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
         && exposure.is_available_in_code_mode()
@@ -874,18 +883,29 @@ fn register_code_mode_executors(
     );
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
+    let image_detail_visibility =
+        if unified_image_budget_enabled(&turn_context.config.features, model_info) {
+            codex_code_mode::ImageDetailVisibility::Hidden
+        } else {
+            codex_code_mode::ImageDetailVisibility::Visible
+        };
     let mut exec_spec = create_code_mode_tool(
         &enabled_tools,
         &deferred_tools,
         &namespace_descriptions,
         turn_context.config.code_mode.default_exec_yield_time_ms,
         tool_mode == ToolMode::CodeModeOnly,
-        if unified_image_budget_enabled(&turn_context.config.features, model_info) {
-            codex_code_mode::ImageDetailVisibility::Hidden
-        } else {
-            codex_code_mode::ImageDetailVisibility::Visible
-        },
+        image_detail_visibility,
     );
+    if turn_context.config.code_mode.compact_exec_description
+        && let ToolSpec::Freeform(freeform) = &mut exec_spec
+    {
+        freeform.description = crate::tools::code_mode::execute_spec::compact_exec_description(
+            &freeform.description,
+            turn_context.config.code_mode.default_exec_yield_time_ms,
+            image_detail_visibility,
+        );
+    }
     if turn_context.config.code_mode.exec_as_function_tool
         && let ToolSpec::Freeform(freeform) = &exec_spec
     {

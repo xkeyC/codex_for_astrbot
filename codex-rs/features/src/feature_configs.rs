@@ -42,6 +42,9 @@ pub struct CodeModeConfigToml {
     /// providers without grammar-constrained custom tool support.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exec_as_function_tool: Option<bool>,
+    /// Replace the generic part of the `exec` description with a compact one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compact_exec_description: Option<bool>,
 }
 
 impl FeatureConfig for CodeModeConfigToml {

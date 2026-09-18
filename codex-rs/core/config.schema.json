@@ -497,6 +497,10 @@
     "CodeModeConfigToml": {
       "additionalProperties": false,
       "properties": {
+        "compact_exec_description": {
+          "description": "Replace the generic part of the `exec` description with a compact one.",
+          "type": "boolean"
+        },
         "default_exec_yield_time_ms": {
           "description": "Default yield timeout for code-mode exec calls, in milliseconds.",
           "format": "uint64",
