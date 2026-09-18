@@ -158,10 +158,13 @@ impl DynamicToolHandler {
             .into_iter()
             .map(FunctionCallOutputContentItem::from)
             .collect::<Vec<_>>();
-        Ok(boxed_tool_output(FunctionToolOutput::from_content(
-            body,
-            Some(success),
-        )))
+        let output = FunctionToolOutput::from_content(body, Some(success));
+        if turn.config.code_mode.structured_dynamic_tool_results {
+            return Ok(boxed_tool_output(
+                super::dynamic_structured::StructuredDynamicToolOutput::new(output),
+            ));
+        }
+        Ok(boxed_tool_output(output))
     }
 }
 

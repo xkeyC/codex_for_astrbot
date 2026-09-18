@@ -481,6 +481,25 @@ pub fn latest_disabled_plugin_ids(items: &[RolloutItem], thread_id: ThreadId) ->
         .and_then(|context| context.disabled_plugin_ids.as_deref())
 }
 
+/// Returns the dynamic tools most recently set by `thread_id` through a
+/// settings update, when that thread ever replaced them after start.
+///
+/// Fork addition: dynamic tools are normally fixed at thread start and live in
+/// session metadata; snapshots only carry them after a replacement.
+pub fn latest_dynamic_tools(
+    items: &[RolloutItem],
+    thread_id: ThreadId,
+) -> Option<&[DynamicToolSpec]> {
+    items.iter().rev().find_map(|item| match item {
+        RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(event))
+            if event.thread_id == Some(thread_id) =>
+        {
+            event.thread_settings.dynamic_tools.as_deref()
+        }
+        _ => None,
+    })
+}
+
 fn multi_agent_version_from_items(
     items: &[RolloutItem],
     thread_id: Option<ThreadId>,

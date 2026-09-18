@@ -141,6 +141,10 @@ pub(crate) struct SessionConfiguration {
     /// Effective originator used for this thread's Responses requests and analytics events.
     pub(super) originator: String,
     pub(super) dynamic_tools: Vec<DynamicToolSpec>,
+    /// Fork addition: whether `dynamic_tools` was replaced after thread start.
+    /// Only then do settings snapshots carry the tools, keeping upstream
+    /// snapshots unchanged for threads that never replace them.
+    pub(super) dynamic_tools_replaced: bool,
     pub(super) user_shell_override: Option<shell::Shell>,
 }
 
@@ -306,6 +310,9 @@ impl SessionConfiguration {
             personality: self.step_settings.personality,
             collaboration_mode: self.step_settings.collaboration_mode.clone(),
             disabled_plugin_ids: self.disabled_plugin_ids.clone(),
+            dynamic_tools: self
+                .dynamic_tools_replaced
+                .then(|| self.dynamic_tools.clone()),
         }
     }
 
@@ -335,6 +342,9 @@ impl SessionConfiguration {
             collaboration_mode: Some(self.step_settings.collaboration_mode.clone()),
             personality: self.step_settings.personality,
             disabled_plugin_ids: Some(self.disabled_plugin_ids.clone()),
+            dynamic_tools: self
+                .dynamic_tools_replaced
+                .then(|| self.dynamic_tools.clone()),
             ..Default::default()
         }
     }
@@ -377,6 +387,10 @@ impl SessionConfiguration {
         let mut next_configuration = self.clone();
         if let Some(disabled_plugin_ids) = &updates.disabled_plugin_ids {
             next_configuration.disabled_plugin_ids = disabled_plugin_ids.clone();
+        }
+        if let Some(dynamic_tools) = &updates.dynamic_tools {
+            next_configuration.dynamic_tools = dynamic_tools.clone();
+            next_configuration.dynamic_tools_replaced = true;
         }
         let current_file_system_sandbox_policy =
             self.file_system_sandbox_policy(current_environments);
@@ -582,6 +596,7 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) app_server_client_name: Option<String>,
     pub(crate) app_server_client_version: Option<String>,
     pub(crate) disabled_plugin_ids: Option<Vec<String>>,
+    pub(crate) dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 pub(crate) struct AppServerClientMetadata {

@@ -189,6 +189,7 @@ pub(crate) struct ModelInfoOverrides {
     pub(crate) auto_compact_token_limit: Option<i64>,
     pub(crate) tool_output_token_limit: Option<usize>,
     pub(crate) base_instructions: Option<String>,
+    pub(crate) tool_mode: Option<codex_protocol::openai_models::ToolMode>,
 }
 
 impl From<ModelsManagerConfig> for ModelInfoOverrides {
@@ -198,6 +199,7 @@ impl From<ModelsManagerConfig> for ModelInfoOverrides {
             auto_compact_token_limit: config.model_auto_compact_token_limit,
             tool_output_token_limit: config.tool_output_token_limit,
             base_instructions: config.base_instructions,
+            tool_mode: config.tool_mode,
         }
     }
 }
@@ -217,6 +219,7 @@ impl ModelInfoOverrides {
             personality_enabled,
             // The models manager already owns its catalog.
             model_catalog: None,
+            tool_mode: self.tool_mode,
         }
     }
 }

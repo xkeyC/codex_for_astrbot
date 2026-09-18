@@ -5,6 +5,38 @@ use codex_tools::FreeformToolFormat;
 use codex_tools::ToolSpec;
 use std::collections::BTreeMap;
 
+/// Fork addition: `exec` as a plain function tool (`{"code": string}`) for
+/// Responses-compatible providers that do not support grammar-constrained
+/// custom tools. Enabled by `features.code_mode.exec_as_function_tool`.
+pub(crate) fn create_code_mode_function_tool(description: String) -> ToolSpec {
+    use codex_tools::JsonSchema;
+    use codex_tools::ResponsesApiTool;
+
+    let properties = BTreeMap::from([(
+        "code".to_string(),
+        JsonSchema::string(Some(
+            "Raw JavaScript source. It may start with an optional `// @exec: {...}` pragma line."
+                .to_string(),
+        )),
+    )]);
+    let description = description.replace(
+        "- Accepts raw JavaScript source text, not JSON, quoted strings, or markdown code fences.",
+        "- Pass the JavaScript source text in the `code` argument, without markdown code fences.",
+    );
+    ToolSpec::Function(ResponsesApiTool {
+        name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
+        description,
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["code".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })
+}
+
 pub(crate) fn create_code_mode_tool(
     enabled_tools: &[CodeModeToolDefinition],
     deferred_tools: &[CodeModeToolDefinition],

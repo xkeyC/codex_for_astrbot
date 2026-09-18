@@ -727,18 +727,27 @@ impl Session {
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
             .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
 
+        let settings_owner = match &conversation_history {
+            InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
+            InitialHistory::Forked(_) => forked_from_thread_id,
+            InitialHistory::New | InitialHistory::Cleared => None,
+        };
         // Dynamic tools are defined at thread start and persisted in rollout session metadata.
-        let dynamic_tools = if dynamic_tools.is_empty() {
-            conversation_history.get_dynamic_tools().unwrap_or_default()
-        } else {
+        // Fork addition: a thread that replaced them later carries the newer set in its own
+        // settings snapshots, which then win over the session metadata.
+        let replaced_dynamic_tools = settings_owner.and_then(|thread_id| {
+            codex_history::latest_dynamic_tools(conversation_history.get_rollout_items(), thread_id)
+                .map(<[DynamicToolSpec]>::to_vec)
+        });
+        let dynamic_tools_replaced = dynamic_tools.is_empty() && replaced_dynamic_tools.is_some();
+        let dynamic_tools = if !dynamic_tools.is_empty() {
             dynamic_tools
+        } else if let Some(replaced) = replaced_dynamic_tools {
+            replaced
+        } else {
+            conversation_history.get_dynamic_tools().unwrap_or_default()
         };
         let disabled_plugin_ids = disabled_plugin_ids.unwrap_or_else(|| {
-            let settings_owner = match &conversation_history {
-                InitialHistory::Resumed(resumed) => Some(resumed.conversation_id),
-                InitialHistory::Forked(_) => forked_from_thread_id,
-                InitialHistory::New | InitialHistory::Cleared => None,
-            };
             settings_owner
                 .and_then(|thread_id| {
                     codex_history::latest_disabled_plugin_ids(
@@ -806,6 +815,7 @@ impl Session {
             thread_source,
             originator,
             dynamic_tools,
+            dynamic_tools_replaced,
             user_shell_override,
         };
         session_configuration

@@ -205,6 +205,23 @@ impl CodeModeExecuteHandler {
                 )
                 .await
                 .map(boxed_tool_output),
+            // Fork addition: `exec` exposed as a function tool carries `{"code": ...}`.
+            ToolPayload::Function { arguments } if is_exec_tool_name(&tool_name) => {
+                match exec_function_arguments_to_source(&arguments) {
+                    Ok(input) => self
+                        .execute(
+                            session,
+                            step_context,
+                            call_id,
+                            originating_call,
+                            input,
+                            &mut telemetry,
+                        )
+                        .await
+                        .map(boxed_tool_output),
+                    Err(err) => Err(err),
+                }
+            }
             _ => Err(FunctionCallError::RespondToModel(format!(
                 "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
             ))),
@@ -220,6 +237,38 @@ impl CodeModeExecuteHandler {
 
 impl CoreToolRuntime for CodeModeExecuteHandler {
     fn matches_kind(&self, payload: &ToolPayload) -> bool {
-        matches!(payload, ToolPayload::Custom { .. })
+        matches!(
+            payload,
+            ToolPayload::Custom { .. } | ToolPayload::Function { .. }
+        )
+    }
+}
+
+/// Extracts the script from function-tool arguments (`{"code": "..."}`).
+fn exec_function_arguments_to_source(arguments: &str) -> Result<String, FunctionCallError> {
+    #[derive(serde::Deserialize)]
+    struct ExecFunctionArgs {
+        code: String,
+    }
+    serde_json::from_str::<ExecFunctionArgs>(arguments)
+        .map(|args| args.code)
+        .map_err(|err| {
+            FunctionCallError::RespondToModel(format!(
+                "{PUBLIC_TOOL_NAME} expects {{\"code\": string}} arguments: {err}"
+            ))
+        })
+}
+
+#[cfg(test)]
+mod exec_function_tool_tests {
+    use super::exec_function_arguments_to_source;
+
+    #[test]
+    fn extracts_code_from_function_arguments() {
+        assert_eq!(
+            exec_function_arguments_to_source(r#"{"code":"text(1)"}"#).ok(),
+            Some("text(1)".to_string())
+        );
+        assert!(exec_function_arguments_to_source("text(1)").is_err());
     }
 }

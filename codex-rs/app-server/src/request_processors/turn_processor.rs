@@ -890,6 +890,7 @@ impl TurnRequestProcessor {
                     service_tier: service_tier.clone(),
                     collaboration_mode: collaboration_mode.clone(),
                     personality,
+                    dynamic_tools: None,
                 })
                 .await
                 .map_err(|err| {
@@ -914,6 +915,7 @@ impl TurnRequestProcessor {
             service_tier,
             collaboration_mode,
             personality,
+            dynamic_tools: None,
         })
     }
 

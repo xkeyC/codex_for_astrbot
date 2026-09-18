@@ -639,6 +639,10 @@ pub struct Config {
     /// active context or only tokens after the carried compaction-window prefix.
     pub model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope,
 
+    /// Forces the tool mode (direct / code_mode / code_mode_only) regardless of
+    /// the model catalog.
+    pub model_tool_mode: Option<codex_protocol::openai_models::ToolMode>,
+
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
 
@@ -1127,6 +1131,10 @@ pub struct CodeModeConfig {
     pub direct_only_tool_namespaces: Vec<String>,
     /// Keep code mode fail-closed when the standalone host is unavailable.
     pub disable_in_process_fallback: bool,
+    /// Return dynamic tool results to code-mode scripts as MCP-shaped objects.
+    pub structured_dynamic_tool_results: bool,
+    /// Expose `exec` as a plain function tool instead of a grammar tool.
+    pub exec_as_function_tool: bool,
 }
 
 impl Default for CodeModeConfig {
@@ -1136,6 +1144,8 @@ impl Default for CodeModeConfig {
             excluded_tool_namespaces: Vec::new(),
             direct_only_tool_namespaces: Vec::new(),
             disable_in_process_fallback: false,
+            structured_dynamic_tool_results: false,
+            exec_as_function_tool: false,
         }
     }
 }
@@ -1633,6 +1643,7 @@ impl Config {
             personality_enabled: self.features.enabled(Feature::Personality),
             personality: self.personality,
             model_catalog: self.model_catalog.clone(),
+            tool_mode: self.model_tool_mode,
         }
     }
 
@@ -2708,6 +2719,12 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
             .unwrap_or_default(),
         disable_in_process_fallback: host
             .and_then(|config| config.disable_in_process_fallback)
+            .unwrap_or_default(),
+        structured_dynamic_tool_results: base
+            .and_then(|config| config.structured_dynamic_tool_results)
+            .unwrap_or_default(),
+        exec_as_function_tool: base
+            .and_then(|config| config.exec_as_function_tool)
             .unwrap_or_default(),
     }
 }
@@ -4188,6 +4205,7 @@ impl Config {
             model_auto_compact_token_limit_scope: cfg
                 .model_auto_compact_token_limit_scope
                 .unwrap_or_default(),
+            model_tool_mode: cfg.model_tool_mode,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,

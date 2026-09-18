@@ -351,3 +351,23 @@ fn model_context_window_uses_model_value_without_override() {
 
     assert_eq!(updated, model);
 }
+
+#[test]
+fn config_tool_mode_overrides_catalog_tool_mode() {
+    use codex_protocol::openai_models::ToolMode;
+
+    let mut model = model_info_from_slug("unknown-model");
+    model.tool_mode = Some(ToolMode::CodeModeOnly);
+
+    let unchanged = with_config_overrides(model.clone(), &ModelsManagerConfig::default());
+    assert_eq!(unchanged.tool_mode, Some(ToolMode::CodeModeOnly));
+
+    let forced = with_config_overrides(
+        model,
+        &ModelsManagerConfig {
+            tool_mode: Some(ToolMode::Direct),
+            ..Default::default()
+        },
+    );
+    assert_eq!(forced.tool_mode, Some(ToolMode::Direct));
+}

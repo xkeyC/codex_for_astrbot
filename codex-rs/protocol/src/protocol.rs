@@ -577,6 +577,10 @@ pub struct ThreadSettingsOverrides {
     /// Replace the thread's disabled plugin IDs. Omission preserves the current
     /// selection, and an empty list clears it.
     pub disabled_plugin_ids: Option<Vec<String>>,
+
+    /// Replace the thread's client-provided dynamic tools. Omission preserves
+    /// the current set, and an empty list clears it. History is kept.
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 /// Source classification for client-supplied context.
@@ -2227,6 +2231,11 @@ pub struct ThreadSettingsSnapshot {
     /// Thread-owned plugin selection, retained even when a plugin is unavailable.
     #[serde(default)]
     pub disabled_plugin_ids: Vec<String>,
+    /// Thread-owned dynamic tools. Absent in snapshots written before dynamic
+    /// tools became updatable; readers then fall back to session metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq, Eq, JsonSchema, TS)]

@@ -1,5 +1,6 @@
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::openai_models::ToolMode;
 
 #[derive(Debug, Clone, Default)]
 pub struct ModelsManagerConfig {
@@ -10,4 +11,6 @@ pub struct ModelsManagerConfig {
     pub personality_enabled: bool,
     pub personality: Option<Personality>,
     pub model_catalog: Option<ModelsResponse>,
+    /// Forces the tool mode regardless of the model catalog.
+    pub tool_mode: Option<ToolMode>,
 }

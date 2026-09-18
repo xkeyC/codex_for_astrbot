@@ -827,3 +827,60 @@ fn multi_agent_version_uses_newest_present_session_meta_value() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn latest_dynamic_tools_only_reads_owned_replacements() -> Result<()> {
+    use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+    use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
+    use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
+
+    let spec = |name: &str| {
+        DynamicToolSpec::Namespace(DynamicToolNamespaceSpec {
+            name: "astrbot".to_string(),
+            description: "Host tools.".to_string(),
+            tools: vec![DynamicToolNamespaceTool::Function(
+                DynamicToolFunctionSpec {
+                    name: name.to_string(),
+                    description: String::new(),
+                    input_schema: json!({"type": "object", "properties": {}}),
+                    defer_loading: false,
+                },
+            )],
+        })
+    };
+    let owner = ThreadId::new();
+    let foreign = ThreadId::new();
+    let applied =
+        |thread_id: ThreadId, tools: Option<Vec<DynamicToolSpec>>| -> Result<RolloutItem> {
+            let mut thread_settings = thread_settings_snapshot(Vec::new())?;
+            thread_settings.dynamic_tools = tools;
+            Ok(RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(
+                codex_protocol::protocol::ThreadSettingsAppliedEvent {
+                    thread_id: Some(thread_id),
+                    thread_settings,
+                },
+            )))
+        };
+
+    // Never replaced: snapshots carry no tools, session meta stays authoritative.
+    let untouched = vec![applied(owner, None)?];
+    assert_eq!(latest_dynamic_tools(&untouched, owner), None);
+
+    let items = vec![
+        applied(owner, Some(vec![spec("old")]))?,
+        applied(owner, Some(vec![spec("new")]))?,
+        applied(foreign, Some(vec![spec("foreign")]))?,
+    ];
+    assert_eq!(
+        latest_dynamic_tools(&items, owner),
+        Some(vec![spec("new")].as_slice())
+    );
+
+    // An explicit empty set clears the tools instead of falling back.
+    let cleared = vec![
+        applied(owner, Some(vec![spec("old")]))?,
+        applied(owner, Some(Vec::new()))?,
+    ];
+    assert_eq!(latest_dynamic_tools(&cleared, owner), Some(&[][..]));
+    Ok(())
+}

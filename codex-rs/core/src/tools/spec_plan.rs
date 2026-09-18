@@ -874,21 +874,26 @@ fn register_code_mode_executors(
     );
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
-    let execute_handler = CodeModeExecuteHandler::new(
-        create_code_mode_tool(
-            &enabled_tools,
-            &deferred_tools,
-            &namespace_descriptions,
-            turn_context.config.code_mode.default_exec_yield_time_ms,
-            tool_mode == ToolMode::CodeModeOnly,
-            if unified_image_budget_enabled(&turn_context.config.features, model_info) {
-                codex_code_mode::ImageDetailVisibility::Hidden
-            } else {
-                codex_code_mode::ImageDetailVisibility::Visible
-            },
-        ),
-        code_mode_nested_tool_specs,
+    let mut exec_spec = create_code_mode_tool(
+        &enabled_tools,
+        &deferred_tools,
+        &namespace_descriptions,
+        turn_context.config.code_mode.default_exec_yield_time_ms,
+        tool_mode == ToolMode::CodeModeOnly,
+        if unified_image_budget_enabled(&turn_context.config.features, model_info) {
+            codex_code_mode::ImageDetailVisibility::Hidden
+        } else {
+            codex_code_mode::ImageDetailVisibility::Visible
+        },
     );
+    if turn_context.config.code_mode.exec_as_function_tool
+        && let ToolSpec::Freeform(freeform) = &exec_spec
+    {
+        exec_spec = crate::tools::code_mode::execute_spec::create_code_mode_function_tool(
+            freeform.description.clone(),
+        );
+    }
+    let execute_handler = CodeModeExecuteHandler::new(exec_spec, code_mode_nested_tool_specs);
 
     registry.prepend_trusted(Arc::new(CodeModeWaitHandler));
     registry.prepend_trusted(Arc::new(execute_handler));

@@ -2,6 +2,7 @@ pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 mod current_time;
 mod dynamic;
+mod dynamic_structured;
 pub(crate) mod extension_tools;
 mod get_context_remaining;
 pub(crate) mod get_context_remaining_spec;

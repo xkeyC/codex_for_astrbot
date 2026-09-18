@@ -153,6 +153,7 @@ pub struct CodexThreadSettingsOverrides {
     pub collaboration_mode: Option<CollaborationMode>,
     pub personality: Option<Personality>,
     pub disabled_plugin_ids: Option<Vec<String>>,
+    pub dynamic_tools: Option<Vec<codex_protocol::dynamic_tools::DynamicToolSpec>>,
 }
 
 pub use codex_guardian_context::GuardianRootMessage;
@@ -562,6 +563,7 @@ impl CodexThread {
             collaboration_mode,
             personality,
             disabled_plugin_ids,
+            dynamic_tools,
         } = overrides;
         SessionSettingsUpdate {
             step_settings: StepSettingsUpdate {
@@ -582,6 +584,7 @@ impl CodexThread {
             active_permission_profile,
             windows_sandbox_level,
             disabled_plugin_ids,
+            dynamic_tools,
             ..Default::default()
         }
     }

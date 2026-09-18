@@ -171,6 +171,10 @@ pub struct ConfigToml {
     /// only to tokens after the carried prefix in the current compaction window.
     pub model_auto_compact_token_limit_scope: Option<AutoCompactTokenLimitScope>,
 
+    /// Forces the tool mode (`direct`, `code_mode`, `code_mode_only`)
+    /// regardless of the model catalog.
+    pub model_tool_mode: Option<codex_protocol::openai_models::ToolMode>,
+
     /// Default approval policy for executing commands.
     #[schemars(with = "Option<crate::schema::ConfigAskForApproval>")]
     pub approval_policy: Option<AskForApproval>,

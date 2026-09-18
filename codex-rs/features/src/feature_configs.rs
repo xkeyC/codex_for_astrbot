@@ -34,6 +34,14 @@ pub struct CodeModeConfigToml {
     /// from the nested code-mode tool surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direct_only_tool_namespaces: Option<Vec<String>>,
+    /// Return dynamic tool results to code-mode scripts as MCP-shaped objects
+    /// (`{content, isError, text}`) instead of one joined string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_dynamic_tool_results: Option<bool>,
+    /// Expose `exec` as a plain function tool (`{"code": string}`) for
+    /// providers without grammar-constrained custom tool support.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exec_as_function_tool: Option<bool>,
 }
 
 impl FeatureConfig for CodeModeConfigToml {

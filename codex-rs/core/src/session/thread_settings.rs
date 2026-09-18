@@ -72,6 +72,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         collaboration_mode,
         personality,
         disabled_plugin_ids,
+        dynamic_tools,
     } = overrides;
     SessionSettingsUpdate {
         step_settings: StepSettingsUpdate {
@@ -92,6 +93,7 @@ pub(super) fn prepare_update(overrides: ThreadSettingsOverrides) -> SessionSetti
         active_permission_profile,
         windows_sandbox_level,
         disabled_plugin_ids,
+        dynamic_tools,
         ..Default::default()
     }
 }
