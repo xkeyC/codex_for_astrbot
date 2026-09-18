@@ -59,6 +59,9 @@ use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
 
+#[path = "startup_scopes_tests.rs"]
+mod scopes;
+
 #[path = "startup_dual_write_tests.rs"]
 mod dual_write;
 

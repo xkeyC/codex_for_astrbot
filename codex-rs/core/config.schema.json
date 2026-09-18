@@ -2164,6 +2164,10 @@
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
       "properties": {
+        "auto_consolidate": {
+          "description": "Fork addition: `false` disables automatic extraction and consolidation (immediate writes through the memory tools keep working).",
+          "type": "boolean"
+        },
         "consolidation_model": {
           "description": "Model used for memory consolidation.",
           "type": "string"
@@ -2179,6 +2183,13 @@
         "dual_write": {
           "description": "Generate both versions while the selected version supplies context.",
           "type": "boolean"
+        },
+        "extra_session_sources": {
+          "description": "Fork addition: extra `SessionSource::Custom` names whose threads feed memory extraction (e.g. `[\"astrbot\"]`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "extract_model": {
           "description": "Model used for thread summarisation.",
@@ -2212,6 +2223,10 @@
           "format": "int64",
           "type": "integer"
         },
+        "may_write_global": {
+          "description": "Fork addition: whether this thread may contribute to the global store.",
+          "type": "boolean"
+        },
         "min_rate_limit_remaining_percent": {
           "description": "Minimum remaining percentage required in Codex rate-limit windows before memory startup runs.",
           "format": "int64",
@@ -2223,6 +2238,10 @@
           "description": "Minimum idle time between last thread activity and memory creation (hours). > 12h recommended.",
           "format": "int64",
           "type": "integer"
+        },
+        "scope_key": {
+          "description": "Fork addition: memory scope of this thread. Threads with a scope keep private memories in `memories_scopes/<scope_key>` next to the global store.",
+          "type": "string"
         },
         "use_memories": {
           "description": "When `false`, skip injecting memory usage instructions into developer prompts.",

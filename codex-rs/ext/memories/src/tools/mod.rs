@@ -23,7 +23,11 @@ use crate::schema;
 mod ad_hoc_note;
 mod list;
 mod read;
+// Fork addition: scope-aware ad-hoc note tool.
+mod scoped_ad_hoc_note;
 mod search;
+
+pub(crate) use scoped_ad_hoc_note::ScopedAddAdHocNoteTool;
 
 pub(crate) fn memory_tools<B>(
     backend: B,

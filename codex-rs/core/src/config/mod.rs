@@ -4098,6 +4098,14 @@ impl Config {
             main_execve_wrapper_exe.as_ref(),
         );
         if features.enabled(Feature::MemoryTool) && memories_config.use_memories {
+            // Fork addition: a scoped thread may also read its own memory scope.
+            if let Some(scope_key) = memories_config.scope_key.as_deref() {
+                helper_readable_roots.push(codex_config::memory_scopes::memory_scope_root(
+                    &codex_home,
+                    memories_config.version.directory_name(),
+                    scope_key,
+                ));
+            }
             helper_readable_roots.push(memories_root);
         }
         let effective_permission_profile = constrained_permission_profile.value.get().clone();

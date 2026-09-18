@@ -1,3 +1,4 @@
 bin/
 *.pyd
 *.so
+*.pdb

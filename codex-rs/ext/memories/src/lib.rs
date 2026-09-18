@@ -4,6 +4,8 @@ mod local;
 mod metrics;
 mod prompts;
 mod schema;
+// Fork addition: per-chat memory scopes.
+mod scoped;
 mod tools;
 
 pub use extension::install;

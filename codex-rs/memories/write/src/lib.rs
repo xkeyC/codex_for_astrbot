@@ -14,6 +14,8 @@ mod phase2;
 mod prompts;
 mod rollout_input;
 mod runtime;
+// Fork addition: per-chat memory scopes and manual consolidation.
+mod scopes;
 mod start;
 mod storage;
 pub mod workspace;
@@ -26,6 +28,7 @@ pub use control::clear_memory_roots_contents;
 pub use extensions::prune_old_extension_resources;
 pub use prompts::build_consolidation_prompt;
 pub use prompts::build_stage_one_input_message;
+pub use scopes::run_memories_consolidation_now;
 pub use start::start_memories_startup_task;
 pub use storage::rebuild_raw_memories_file_from_memories;
 pub use storage::rollout_summary_file_stem;

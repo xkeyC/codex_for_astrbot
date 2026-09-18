@@ -19,7 +19,9 @@ use codex_protocol::MemoryVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::local::LocalMemoriesBackend;
-use crate::prompts::build_memory_tool_developer_instructions;
+use crate::scoped::ScopedMemoriesConfig;
+use crate::scoped::developer_instructions;
+use crate::scoped::scoped_memory_tools;
 use crate::tools;
 
 /// Contributes Codex memory read-path prompt context and memory read tools.
@@ -67,8 +69,15 @@ impl ContextContributor for MemoriesExtension {
                 return Vec::new();
             }
 
-            let Some(instructions) =
-                build_memory_tool_developer_instructions(&config.codex_home, config.version).await
+            // Fork addition: scoped threads see the global store plus their own scope.
+            let scope = thread_store.get::<ScopedMemoriesConfig>();
+            let Some(instructions) = developer_instructions(
+                &config.codex_home,
+                config.version,
+                scope.as_deref(),
+                config.dedicated_tools,
+            )
+            .await
             else {
                 return Vec::new();
             };
@@ -111,6 +120,9 @@ impl ThreadLifecycleContributor<Config> for MemoriesExtension {
             input
                 .thread_store
                 .insert(MemoriesExtensionConfig::from_config(input.config));
+            input
+                .thread_store
+                .insert(ScopedMemoriesConfig::from_config(input.config));
         })
     }
 }
@@ -129,6 +141,7 @@ impl ConfigContributor<Config> for MemoriesExtension {
             config.version = previous.version;
         }
         thread_store.insert(config);
+        thread_store.insert(ScopedMemoriesConfig::from_config(new_config));
     }
 }
 
@@ -145,6 +158,16 @@ impl ToolContributor for MemoriesExtension {
         };
         if !config.enabled || !config.dedicated_tools {
             return Vec::new();
+        }
+        if let Some(scope) = thread_store.get::<ScopedMemoriesConfig>()
+            && let Some(tools) = scoped_memory_tools(
+                &config.codex_home,
+                config.version,
+                &scope,
+                self.metrics_client.clone(),
+            )
+        {
+            return tools;
         }
 
         tools::memory_tools(

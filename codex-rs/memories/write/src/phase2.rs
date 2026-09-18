@@ -7,6 +7,7 @@ use crate::prune_old_extension_resources;
 use crate::rebuild_raw_memories_file_from_memories;
 use crate::runtime::MemoryStartupContext;
 use crate::runtime::SpawnedConsolidationAgent;
+use crate::scopes::Phase2Target;
 use crate::sync_rollout_summaries_from_memories;
 use crate::workspace::memory_workspace_diff;
 use crate::workspace::prepare_memory_workspace;
@@ -37,6 +38,8 @@ use std::time::Duration;
 struct Claim {
     token: String,
     watermark: i64,
+    /// Fork addition: memory partition (Phase 2 job key) owned by this claim.
+    partition: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -51,20 +54,29 @@ pub async fn run(
     config: Arc<Config>,
     parent_permission_profile: PermissionProfile,
 ) {
+    let target = Phase2Target::global(&config, /*skip_cooldown*/ false);
+    run_for_target(context, config, parent_permission_profile, target).await;
+}
+
+/// Fork addition: Phase 2 for one memory partition (global or a chat scope).
+pub(crate) async fn run_for_target(
+    context: Arc<MemoryStartupContext>,
+    config: Arc<Config>,
+    parent_permission_profile: PermissionProfile,
+    target: Phase2Target,
+) {
     let phase_two_e2e_timer = context.start_timer(MEMORY_PHASE_TWO_E2E_MS);
 
     let Some(db) = context.memory_store().await else {
         // This should not happen.
         return;
     };
-    let root = config
-        .codex_home
-        .join(config.memories.version.directory_name());
+    let root = target.root.clone();
     let max_raw_memories = config.memories.max_raw_memories_for_consolidation;
     let max_unused_days = config.memories.max_unused_days;
 
     // 1. Claim the global Phase 2 lock before touching the memory workspace.
-    let claim = match job::claim(context.as_ref(), &db).await {
+    let claim = match job::claim(context.as_ref(), &db, &target).await {
         Ok(claim) => claim,
         Err(e) => {
             context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", e)]);
@@ -80,20 +92,26 @@ pub async fn run(
     }
 
     // 3. Build the locked-down config used by the consolidation agent.
-    let Some(agent_config) = agent::get_config(
+    let Some(mut agent_config) = agent::get_config_for_root(
         config.as_ref(),
         parent_permission_profile,
         context.provider(),
+        root.clone(),
     ) else {
         // If we can't get the config, we can't consolidate.
         tracing::error!("failed to get agent config");
         job::failed(context.as_ref(), &db, &claim, "failed_sandbox_policy").await;
         return;
     };
+    crate::scopes::adjust_agent_config(&mut agent_config, &config);
 
     // 4. Load current DB-backed Phase 2 inputs.
     let raw_memories = match db
-        .get_phase2_input_selection(max_raw_memories, max_unused_days)
+        .get_phase2_input_selection_for_partition(
+            max_raw_memories,
+            max_unused_days,
+            &target.partition,
+        )
         .await
     {
         Ok(raw_memories) => raw_memories,
@@ -155,7 +173,8 @@ pub async fn run(
     }
 
     // 8. Spawn the consolidation agent.
-    let prompt = agent::get_prompt(&root, config.memories.version);
+    let mut prompt = agent::get_prompt(&root, config.memories.version);
+    crate::scopes::extend_consolidation_prompt(context.as_ref(), &target, &mut prompt).await;
     let agent = match context
         .spawn_consolidation_agent(agent_config, prompt)
         .await
@@ -210,9 +229,15 @@ mod job {
     pub(super) async fn claim(
         context: &MemoryStartupContext,
         db: &MemoryStore,
+        target: &Phase2Target,
     ) -> Result<Claim, &'static str> {
         let claim = db
-            .try_claim_global_phase2_job(context.thread_id(), crate::stage_two::JOB_LEASE_SECONDS)
+            .try_claim_phase2_job_for_partition(
+                context.thread_id(),
+                crate::stage_two::JOB_LEASE_SECONDS,
+                &target.partition,
+                target.skip_cooldown,
+            )
             .await
             .map_err(|e| {
                 tracing::error!("failed to claim job: {e}");
@@ -239,7 +264,11 @@ mod job {
             codex_state::Phase2JobClaimOutcome::SkippedRunning => return Err("skipped_running"),
         };
 
-        Ok(Claim { token, watermark })
+        Ok(Claim {
+            token,
+            watermark,
+            partition: target.partition.clone(),
+        })
     }
 
     pub(super) async fn failed(
@@ -250,19 +279,21 @@ mod job {
     ) {
         context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", reason)]);
         if matches!(
-            db.mark_global_phase2_job_failed(
+            db.mark_phase2_job_failed_for_partition(
                 &claim.token,
                 reason,
                 crate::stage_two::JOB_RETRY_DELAY_SECONDS,
+                &claim.partition,
             )
             .await,
             Ok(false)
         ) {
             let _ = db
-                .mark_global_phase2_job_failed_if_unowned(
+                .mark_phase2_job_failed_if_unowned_for_partition(
                     &claim.token,
                     reason,
                     crate::stage_two::JOB_RETRY_DELAY_SECONDS,
+                    &claim.partition,
                 )
                 .await;
         }
@@ -277,9 +308,14 @@ mod job {
         reason: &'static str,
     ) -> bool {
         context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", reason)]);
-        db.mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
-            .await
-            .unwrap_or(false)
+        db.mark_phase2_job_succeeded_for_partition(
+            &claim.token,
+            completion_watermark,
+            selected_outputs,
+            &claim.partition,
+        )
+        .await
+        .unwrap_or(false)
     }
 }
 
@@ -287,6 +323,7 @@ mod agent {
     use super::*;
     use tracing::warn;
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn get_config(
         config: &Config,
         parent_permission_profile: PermissionProfile,
@@ -295,6 +332,16 @@ mod agent {
         let root = config
             .codex_home
             .join(config.memories.version.directory_name());
+        get_config_for_root(config, parent_permission_profile, provider, root)
+    }
+
+    /// Fork addition: [`get_config`] for an explicit memory root.
+    pub(super) fn get_config_for_root(
+        config: &Config,
+        parent_permission_profile: PermissionProfile,
+        provider: &dyn ModelProvider,
+        root: codex_utils_absolute_path::AbsolutePathBuf,
+    ) -> Option<Config> {
         let mut agent_config = config.clone();
 
         agent_config.cwd = root.clone();
@@ -377,8 +424,14 @@ mod agent {
             let SpawnedConsolidationAgent { thread_id, thread } = agent;
 
             // Loop the agent until we have the final status.
-            let final_status =
-                loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
+            let final_status = loop_agent(
+                db.clone(),
+                claim.token.clone(),
+                claim.partition.clone(),
+                thread_id,
+                &thread,
+            )
+            .await;
 
             let agent_completed = matches!(final_status, AgentStatus::Completed(_));
             if agent_completed
@@ -417,9 +470,10 @@ mod agent {
             if agent_completed && artifacts_valid {
                 // Do not reset the workspace baseline if we lost the lock.
                 let still_owns_lock = match db
-                    .heartbeat_global_phase2_job(
+                    .heartbeat_phase2_job_for_partition(
                         &claim.token,
                         crate::stage_two::JOB_LEASE_SECONDS,
+                        &claim.partition,
                     )
                     .await
                     .inspect_err(|err| {
@@ -471,6 +525,7 @@ mod agent {
     async fn loop_agent(
         db: MemoryStore,
         token: String,
+        partition: String,
         thread_id: ThreadId,
         thread: &codex_core::CodexThread,
     ) -> AgentStatus {
@@ -505,9 +560,10 @@ mod agent {
                 }
                 _ = heartbeat_interval.tick() => {
                     match db
-                        .heartbeat_global_phase2_job(
+                        .heartbeat_phase2_job_for_partition(
                             &token,
                             crate::stage_two::JOB_LEASE_SECONDS,
+                            &partition,
                         )
                         .await
                     {

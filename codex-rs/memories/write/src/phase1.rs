@@ -127,10 +127,26 @@ async fn claim_startup_jobs(
         return None;
     };
 
-    let allowed_sources = INTERACTIVE_SESSION_SOURCES
+    let mut allowed_sources = INTERACTIVE_SESSION_SOURCES
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>();
+    // Fork addition: custom sources, encoded the way the state db stores them.
+    allowed_sources.extend(
+        memories_config
+            .extra_session_sources
+            .iter()
+            .filter_map(|name| {
+                serde_json::to_value(codex_protocol::protocol::SessionSource::Custom(
+                    name.clone(),
+                ))
+                .ok()
+                .map(|value| match value {
+                    serde_json::Value::String(source) => source,
+                    other => other.to_string(),
+                })
+            }),
+    );
 
     match state_db
         .claim_stage1_jobs_for_startup(
@@ -201,13 +217,23 @@ mod job {
         stage_one_context: &StageOneRequestContext,
     ) -> JobResult {
         let claimed_thread = claim.thread;
-        let (stage_one_output, token_usage) = match sample(
+        // Fork addition: per-chat memory scopes (upstream routing without a scope row).
+        let routing = crate::scopes::thread_routing(context, claimed_thread.id).await;
+        if routing == crate::scopes::ThreadRouting::Drop {
+            return JobResult {
+                outcome: result::no_output(context, claimed_thread.id, &claim.ownership_token)
+                    .await,
+                token_usage: None,
+            };
+        }
+        let (stage_one_output, token_usage, visibility) = match sample(
             context,
             config,
             &claimed_thread.rollout_path,
             &claimed_thread.cwd,
             claimed_thread.git_branch.as_deref(),
             stage_one_context,
+            routing.classify(),
         )
         .await
         {
@@ -240,6 +266,32 @@ mod job {
             };
         }
 
+        if let Some(partition) = routing.partition(visibility) {
+            let succeeded = crate::scopes::mark_success_in_partition(
+                context,
+                (
+                    claimed_thread.id,
+                    &claim.ownership_token,
+                    claimed_thread.updated_at.timestamp(),
+                ),
+                (
+                    stage_one_output.raw_memory.as_deref().unwrap_or_default(),
+                    &stage_one_output.rollout_summary,
+                    stage_one_output.rollout_slug.as_deref(),
+                ),
+                &partition,
+            )
+            .await;
+            return JobResult {
+                outcome: if succeeded {
+                    JobOutcome::SucceededWithOutput
+                } else {
+                    JobOutcome::Failed
+                },
+                token_usage,
+            };
+        }
+
         JobResult {
             outcome: result::success(
                 context,
@@ -263,7 +315,12 @@ mod job {
         rollout_cwd: &Path,
         rollout_git_branch: Option<&str>,
         stage_one_context: &StageOneRequestContext,
-    ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
+        classify: bool,
+    ) -> anyhow::Result<(
+        StageOneOutput,
+        Option<TokenUsage>,
+        Option<crate::scopes::Visibility>,
+    )> {
         let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
         let rollout_contents = match config.memories.version {
             MemoryVersion::V1 => serialize_filtered_rollout_response_items(&rollout_items)?,
@@ -309,14 +366,23 @@ mod job {
         };
         prompt.output_schema = Some(output_schema(config.memories.version));
         prompt.output_schema_strict = true;
+        if classify && let Some(schema) = prompt.output_schema.as_mut() {
+            crate::scopes::add_classification(&mut prompt.base_instructions.text, schema);
+        }
 
         let (result, token_usage) = context
             .stream_stage_one_prompt(config, &prompt, stage_one_context)
             .await?;
 
+        let (result, visibility) = if classify {
+            let (result, visibility) = crate::scopes::split_visibility(&result);
+            (result, Some(visibility))
+        } else {
+            (result, None)
+        };
         let output = StageOneOutput::parse(&result, config.memories.version)?;
 
-        Ok((output, token_usage))
+        Ok((output, token_usage, visibility))
     }
 
     mod result {

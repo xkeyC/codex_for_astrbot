@@ -324,6 +324,21 @@ pub struct MemoriesToml {
     pub extract_model: Option<String>,
     /// Model used for memory consolidation.
     pub consolidation_model: Option<String>,
+    /// Fork addition: extra `SessionSource::Custom` names whose threads feed
+    /// memory extraction (e.g. `["astrbot"]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_session_sources: Option<Vec<String>>,
+    /// Fork addition: memory scope of this thread. Threads with a scope keep
+    /// private memories in `memories_scopes/<scope_key>` next to the global store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_key: Option<String>,
+    /// Fork addition: whether this thread may contribute to the global store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_write_global: Option<bool>,
+    /// Fork addition: `false` disables automatic extraction and consolidation
+    /// (immediate writes through the memory tools keep working).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_consolidate: Option<bool>,
 }
 
 /// Effective memories settings after defaults are applied.
@@ -343,6 +358,20 @@ pub struct MemoriesConfig {
     pub min_rate_limit_remaining_percent: i64,
     pub extract_model: Option<String>,
     pub consolidation_model: Option<String>,
+    // Fork additions; skipped when default so serialized output matches upstream.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra_session_sources: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope_key: Option<String>,
+    #[serde(skip_serializing_if = "is_true")]
+    pub may_write_global: bool,
+    #[serde(skip_serializing_if = "is_true")]
+    pub auto_consolidate: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference.
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 impl Default for MemoriesConfig {
@@ -362,6 +391,10 @@ impl Default for MemoriesConfig {
             min_rate_limit_remaining_percent: DEFAULT_MEMORIES_MIN_RATE_LIMIT_REMAINING_PERCENT,
             extract_model: None,
             consolidation_model: None,
+            extra_session_sources: Vec::new(),
+            scope_key: None,
+            may_write_global: true,
+            auto_consolidate: true,
         }
     }
 }
@@ -410,6 +443,10 @@ impl From<MemoriesToml> for MemoriesConfig {
                 .clamp(0, 100),
             extract_model: toml.extract_model,
             consolidation_model: toml.consolidation_model,
+            extra_session_sources: toml.extra_session_sources.unwrap_or_default(),
+            scope_key: toml.scope_key.filter(|key| !key.trim().is_empty()),
+            may_write_global: toml.may_write_global.unwrap_or(defaults.may_write_global),
+            auto_consolidate: toml.auto_consolidate.unwrap_or(defaults.auto_consolidate),
         }
     }
 }

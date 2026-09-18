@@ -71,6 +71,10 @@ pub fn start_memories_startup_task(
             if let Err(err) = seed_extension_instructions(&root).await {
                 warn!("failed seeding memory extension instructions: {err}");
             }
+            // Fork addition: scope registration; `auto_consolidate = false` stops here.
+            if !crate::scopes::prepare_startup(context.as_ref(), &config).await {
+                return;
+            }
 
             // Clean memories to make preserve DB size. This does not consume tokens so can be
             // done before the quota check.
@@ -88,7 +92,20 @@ pub fn start_memories_startup_task(
             // Run phase 1.
             phase1::run(Arc::clone(&context), Arc::clone(&config)).await;
             // Run phase 2.
-            phase2::run(context, config, parent_permission_profile).await;
+            phase2::run(
+                Arc::clone(&context),
+                Arc::clone(&config),
+                parent_permission_profile.clone(),
+            )
+            .await;
+            // Fork addition: consolidate this thread's private scope, if any.
+            crate::scopes::run_scope_phase2(
+                context,
+                config,
+                parent_permission_profile,
+                /*skip_cooldown*/ false,
+            )
+            .await;
         });
     }
 }

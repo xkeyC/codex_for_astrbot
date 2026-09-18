@@ -2476,6 +2476,7 @@ dependencies = [
  "codex-home",
  "codex-login",
  "codex-memories-extension",
+ "codex-memories-write",
  "codex-models-manager",
  "codex-protocol",
  "codex-rollout",

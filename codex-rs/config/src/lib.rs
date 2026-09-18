@@ -39,6 +39,8 @@ pub mod test_support;
 mod thread_config;
 mod tui_keymap;
 pub mod types;
+// Fork addition: per-chat memory scopes.
+pub mod memory_scopes;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 

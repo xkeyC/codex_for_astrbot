@@ -63,6 +63,40 @@ pub(crate) async fn build_memory_tool_developer_instructions(
         .ok()
 }
 
+/// Fork addition: renders the read-path prompt for an arbitrary memory root
+/// (used for per-chat memory scopes).
+pub(crate) async fn build_memory_instructions_for_root(
+    base_path: &AbsolutePathBuf,
+    version: MemoryVersion,
+) -> Option<String> {
+    let memory_summary = read_memory_summary(base_path).await?;
+    let base_path = base_path.display().to_string();
+    let template = match version {
+        MemoryVersion::V1 => &MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_TEMPLATE,
+        MemoryVersion::V2 => &MEMORY_V2_TEMPLATE,
+    };
+    template
+        .render([
+            ("base_path", base_path.as_str()),
+            ("memory_summary", memory_summary.as_str()),
+        ])
+        .ok()
+}
+
+/// Fork addition: reads and truncates `memory_summary.md` under a root.
+pub(crate) async fn read_memory_summary(base_path: &AbsolutePathBuf) -> Option<String> {
+    let memory_summary = fs::read_to_string(base_path.join("memory_summary.md"))
+        .await
+        .ok()?
+        .trim()
+        .to_string();
+    let memory_summary = truncate_text(
+        &memory_summary,
+        TruncationPolicy::Tokens(MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT),
+    );
+    (!memory_summary.is_empty()).then_some(memory_summary)
+}
+
 #[cfg(test)]
 #[path = "prompts_tests.rs"]
 mod tests;

@@ -1,5 +1,9 @@
 #[path = "memory_readiness.rs"]
 mod readiness;
+// Fork addition: per-chat memory scopes.
+#[path = "memory_scopes.rs"]
+mod scopes;
+pub use scopes::ThreadMemoryScope;
 
 use super::threads::ThreadFilterOptions;
 use super::threads::push_thread_filters;
@@ -370,7 +374,8 @@ SELECT
     so.rollout_slug,
     so.generated_at
 FROM stage1_outputs AS so
-WHERE length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0
+WHERE (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+  AND so.memory_partition = 'global'
 ORDER BY so.source_updated_at DESC, so.thread_id DESC
             "#,
         )
@@ -453,6 +458,22 @@ WHERE thread_id IN (
         n: usize,
         max_unused_days: i64,
     ) -> anyhow::Result<Vec<Stage1Output>> {
+        self.get_phase2_input_selection_for_partition(
+            n,
+            max_unused_days,
+            MEMORY_CONSOLIDATION_JOB_KEY,
+        )
+        .await
+    }
+
+    /// Fork addition: [`Self::get_phase2_input_selection`] restricted to one
+    /// memory partition (`global` or `scope:<key>`).
+    pub async fn get_phase2_input_selection_for_partition(
+        &self,
+        n: usize,
+        max_unused_days: i64,
+        partition: &str,
+    ) -> anyhow::Result<Vec<Stage1Output>> {
         if n == 0 {
             return Ok(Vec::new());
         }
@@ -471,6 +492,7 @@ SELECT
     so.source_updated_at
 FROM stage1_outputs AS so
 WHERE (length(trim(so.raw_memory)) > 0 OR length(trim(so.rollout_summary)) > 0)
+  AND so.memory_partition = ?
   AND (
         (so.last_usage IS NOT NULL AND so.last_usage >= ?)
         OR (so.last_usage IS NULL AND so.source_updated_at >= ?)
@@ -483,6 +505,7 @@ ORDER BY
 LIMIT ? OFFSET ?
             "#,
             )
+            .bind(partition)
             .bind(cutoff)
             .bind(cutoff)
             .bind(page_size_i64)
@@ -525,11 +548,12 @@ SELECT
     so.rollout_slug,
     so.generated_at
 FROM stage1_outputs AS so
-WHERE so.thread_id = ? AND so.source_updated_at = ?
+WHERE so.thread_id = ? AND so.source_updated_at = ? AND so.memory_partition = ?
             "#,
             )
             .bind(thread_id.as_str())
             .bind(source_updated_at)
+            .bind(partition)
             .fetch_optional(self.pool.as_ref())
             .await?
             else {
@@ -1085,9 +1109,31 @@ WHERE kind = ? AND job_key = ?
         worker_id: ThreadId,
         lease_seconds: i64,
     ) -> anyhow::Result<Phase2JobClaimOutcome> {
+        self.try_claim_phase2_job_for_partition(
+            worker_id,
+            lease_seconds,
+            MEMORY_CONSOLIDATION_JOB_KEY,
+            /*skip_cooldown*/ false,
+        )
+        .await
+    }
+
+    /// Fork addition: [`Self::try_claim_global_phase2_job`] for one memory
+    /// partition. `skip_cooldown` ignores the success cooldown (manual runs).
+    pub async fn try_claim_phase2_job_for_partition(
+        &self,
+        worker_id: ThreadId,
+        lease_seconds: i64,
+        partition: &str,
+        skip_cooldown: bool,
+    ) -> anyhow::Result<Phase2JobClaimOutcome> {
         let now = Utc::now().timestamp();
         let lease_until = now.saturating_add(lease_seconds.max(0));
-        let cooldown_cutoff = now.saturating_sub(PHASE2_SUCCESS_COOLDOWN_SECONDS);
+        let cooldown_cutoff = if skip_cooldown {
+            i64::MAX
+        } else {
+            now.saturating_sub(PHASE2_SUCCESS_COOLDOWN_SECONDS)
+        };
         let ownership_token = Uuid::new_v4().to_string();
         let worker_id = worker_id.to_string();
 
@@ -1101,7 +1147,7 @@ WHERE kind = ? AND job_key = ?
             "#,
         )
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(partition)
         .fetch_optional(&mut *tx)
         .await?;
 
@@ -1126,7 +1172,7 @@ INSERT INTO jobs (
                 "#,
             )
             .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-            .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+            .bind(partition)
             .bind(worker_id.as_str())
             .bind(ownership_token.as_str())
             .bind(now)
@@ -1193,7 +1239,7 @@ WHERE kind = ? AND job_key = ?
         .bind(now)
         .bind(lease_until)
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(partition)
         .bind(now)
         .bind(now)
         .bind(cooldown_cutoff)
@@ -1222,6 +1268,21 @@ WHERE kind = ? AND job_key = ?
         ownership_token: &str,
         lease_seconds: i64,
     ) -> anyhow::Result<bool> {
+        self.heartbeat_phase2_job_for_partition(
+            ownership_token,
+            lease_seconds,
+            MEMORY_CONSOLIDATION_JOB_KEY,
+        )
+        .await
+    }
+
+    /// Fork addition: [`Self::heartbeat_global_phase2_job`] for one partition.
+    pub async fn heartbeat_phase2_job_for_partition(
+        &self,
+        ownership_token: &str,
+        lease_seconds: i64,
+        partition: &str,
+    ) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
         let lease_until = now.saturating_add(lease_seconds.max(0));
         let rows_affected = sqlx::query(
@@ -1234,7 +1295,7 @@ WHERE kind = ? AND job_key = ?
         )
         .bind(lease_until)
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(partition)
         .bind(ownership_token)
         .execute(self.pool.as_ref())
         .await?
@@ -1259,10 +1320,32 @@ WHERE kind = ? AND job_key = ?
         completed_watermark: i64,
         selected_outputs: &[Stage1Output],
     ) -> anyhow::Result<bool> {
+        self.mark_phase2_job_succeeded_for_partition(
+            ownership_token,
+            completed_watermark,
+            selected_outputs,
+            MEMORY_CONSOLIDATION_JOB_KEY,
+        )
+        .await
+    }
+
+    /// Fork addition: [`Self::mark_global_phase2_job_succeeded`] for one
+    /// partition; only that partition's selection baseline is rewritten.
+    pub async fn mark_phase2_job_succeeded_for_partition(
+        &self,
+        ownership_token: &str,
+        completed_watermark: i64,
+        selected_outputs: &[Stage1Output],
+        partition: &str,
+    ) -> anyhow::Result<bool> {
         let mut tx = self.pool.begin().await?;
-        let rows_affected =
-            mark_global_phase2_job_succeeded_row(&mut *tx, ownership_token, completed_watermark)
-                .await?;
+        let rows_affected = mark_global_phase2_job_succeeded_row(
+            &mut *tx,
+            ownership_token,
+            completed_watermark,
+            partition,
+        )
+        .await?;
 
         if rows_affected == 0 {
             tx.commit().await?;
@@ -1275,9 +1358,11 @@ UPDATE stage1_outputs
 SET
     selected_for_phase2 = 0,
     selected_for_phase2_source_updated_at = NULL
-WHERE selected_for_phase2 != 0 OR selected_for_phase2_source_updated_at IS NOT NULL
+WHERE (selected_for_phase2 != 0 OR selected_for_phase2_source_updated_at IS NOT NULL)
+  AND memory_partition = ?
             "#,
         )
+        .bind(partition)
         .execute(&mut *tx)
         .await?;
 
@@ -1288,22 +1373,25 @@ UPDATE stage1_outputs
 SET
     selected_for_phase2 = 1,
     selected_for_phase2_source_updated_at = ?
-WHERE thread_id = ? AND source_updated_at = ?
+WHERE thread_id = ? AND source_updated_at = ? AND memory_partition = ?
                 "#,
             )
             .bind(output.source_updated_at.timestamp())
             .bind(output.thread_id.to_string())
             .bind(output.source_updated_at.timestamp())
+            .bind(partition)
             .execute(&mut *tx)
             .await?;
         }
 
-        sqlx::query(
-            "UPDATE consolidation_progress SET max_thread_count = MAX(max_thread_count, ?)",
-        )
-        .bind(i64::try_from(selected_outputs.len())?)
-        .execute(&mut *tx)
-        .await?;
+        if partition == MEMORY_CONSOLIDATION_JOB_KEY {
+            sqlx::query(
+                "UPDATE consolidation_progress SET max_thread_count = MAX(max_thread_count, ?)",
+            )
+            .bind(i64::try_from(selected_outputs.len())?)
+            .execute(&mut *tx)
+            .await?;
+        }
         tx.commit().await?;
         Ok(true)
     }
@@ -1320,6 +1408,23 @@ WHERE thread_id = ? AND source_updated_at = ?
         ownership_token: &str,
         failure_reason: &str,
         retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        self.mark_phase2_job_failed_for_partition(
+            ownership_token,
+            failure_reason,
+            retry_delay_seconds,
+            MEMORY_CONSOLIDATION_JOB_KEY,
+        )
+        .await
+    }
+
+    /// Fork addition: [`Self::mark_global_phase2_job_failed`] for one partition.
+    pub async fn mark_phase2_job_failed_for_partition(
+        &self,
+        ownership_token: &str,
+        failure_reason: &str,
+        retry_delay_seconds: i64,
+        partition: &str,
     ) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
         let retry_at = now.saturating_add(retry_delay_seconds.max(0));
@@ -1341,7 +1446,7 @@ WHERE kind = ? AND job_key = ?
         .bind(retry_at)
         .bind(failure_reason)
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(partition)
         .bind(ownership_token)
         .execute(self.pool.as_ref())
         .await?
@@ -1361,6 +1466,24 @@ WHERE kind = ? AND job_key = ?
         ownership_token: &str,
         failure_reason: &str,
         retry_delay_seconds: i64,
+    ) -> anyhow::Result<bool> {
+        self.mark_phase2_job_failed_if_unowned_for_partition(
+            ownership_token,
+            failure_reason,
+            retry_delay_seconds,
+            MEMORY_CONSOLIDATION_JOB_KEY,
+        )
+        .await
+    }
+
+    /// Fork addition: [`Self::mark_global_phase2_job_failed_if_unowned`] for
+    /// one partition.
+    pub async fn mark_phase2_job_failed_if_unowned_for_partition(
+        &self,
+        ownership_token: &str,
+        failure_reason: &str,
+        retry_delay_seconds: i64,
+        partition: &str,
     ) -> anyhow::Result<bool> {
         let now = Utc::now().timestamp();
         let retry_at = now.saturating_add(retry_delay_seconds.max(0));
@@ -1383,7 +1506,7 @@ WHERE kind = ? AND job_key = ?
         .bind(retry_at)
         .bind(failure_reason)
         .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-        .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+        .bind(partition)
         .bind(ownership_token)
         .execute(self.pool.as_ref())
         .await?
@@ -1397,6 +1520,7 @@ async fn mark_global_phase2_job_succeeded_row<'e, E>(
     executor: E,
     ownership_token: &str,
     completed_watermark: i64,
+    partition: &str,
 ) -> anyhow::Result<u64>
 where
     E: Executor<'e, Database = Sqlite>,
@@ -1418,7 +1542,7 @@ WHERE kind = ? AND job_key = ?
     .bind(now)
     .bind(completed_watermark)
     .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-    .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+    .bind(partition)
     .bind(ownership_token)
     .execute(executor)
     .await?
@@ -1489,6 +1613,23 @@ async fn enqueue_global_consolidation_with_executor<'e, E>(
 where
     E: Executor<'e, Database = Sqlite>,
 {
+    enqueue_consolidation_for_partition_with_executor(
+        executor,
+        input_watermark,
+        MEMORY_CONSOLIDATION_JOB_KEY,
+    )
+    .await
+}
+
+/// Fork addition: enqueue the Phase 2 job of one memory partition.
+async fn enqueue_consolidation_for_partition_with_executor<'e, E>(
+    executor: E,
+    input_watermark: i64,
+    partition: &str,
+) -> anyhow::Result<()>
+where
+    E: Executor<'e, Database = Sqlite>,
+{
     sqlx::query(
         r#"
 INSERT INTO jobs (
@@ -1524,7 +1665,7 @@ ON CONFLICT(kind, job_key) DO UPDATE SET
         "#,
     )
     .bind(JOB_KIND_MEMORY_CONSOLIDATE_GLOBAL)
-    .bind(MEMORY_CONSOLIDATION_JOB_KEY)
+    .bind(partition)
     .bind(DEFAULT_RETRY_REMAINING)
     .bind(input_watermark)
     .execute(executor)
