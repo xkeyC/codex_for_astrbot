@@ -2476,6 +2476,7 @@ dependencies = [
  "codex-home",
  "codex-login",
  "codex-memories-extension",
+ "codex-models-manager",
  "codex-protocol",
  "codex-rollout",
  "codex-skills-extension",
@@ -3944,6 +3945,7 @@ dependencies = [
 name = "codex-memories-extension"
 version = "0.0.0"
 dependencies = [
+ "codex-config",
  "codex-core",
  "codex-extension-api",
  "codex-features",

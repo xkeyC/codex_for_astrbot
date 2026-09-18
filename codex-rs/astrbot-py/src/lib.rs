@@ -9,6 +9,7 @@
 //! event = json.loads(await rt.next_event(info["thread_id"]))
 //! ```
 
+mod account;
 mod convert;
 pub mod engine;
 #[cfg(feature = "python")]

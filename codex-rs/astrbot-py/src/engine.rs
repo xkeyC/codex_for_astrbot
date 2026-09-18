@@ -47,6 +47,7 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 use tokio::sync::RwLock;
 
+use crate::account::Accounts;
 use crate::convert::json_overrides_to_toml;
 
 const ORIGINATOR: &str = "astrbot";
@@ -141,6 +142,9 @@ pub struct Engine {
     base_overrides: Vec<(String, toml::Value)>,
     thread_manager: Arc<ThreadManager>,
     threads: RwLock<HashMap<String, Arc<CodexThread>>>,
+    base_config: Config,
+    auth_manager: Arc<AuthManager>,
+    accounts: Accounts,
 }
 
 impl Engine {
@@ -177,6 +181,7 @@ impl Engine {
             config.codex_home.clone(),
         ));
         let extensions = build_extensions(Arc::clone(&auth_manager));
+        let base_config = config.clone();
         let mut thread_manager = ThreadManager::new(
             &config,
             Arc::clone(&auth_manager),
@@ -204,6 +209,9 @@ impl Engine {
             base_overrides,
             thread_manager: Arc::new(thread_manager),
             threads: RwLock::new(HashMap::new()),
+            base_config,
+            auth_manager,
+            accounts: Accounts::default(),
         })
     }
 
@@ -418,6 +426,36 @@ impl Engine {
                 .await;
         }
         result.map_err(Into::into)
+    }
+
+    pub async fn account_status(&self) -> JsonValue {
+        Accounts::status(&self.auth_manager).await
+    }
+
+    pub async fn login_api_key(&self, api_key: &str) -> Result<()> {
+        Accounts::login_api_key(&self.base_config, &self.auth_manager, api_key).await
+    }
+
+    pub async fn start_device_login(&self) -> Result<JsonValue> {
+        self.accounts
+            .start_device_login(&self.base_config, Arc::clone(&self.auth_manager))
+            .await
+    }
+
+    pub async fn device_login_status(&self, login_id: &str) -> JsonValue {
+        self.accounts.device_login_status(login_id).await
+    }
+
+    pub async fn cancel_device_login(&self, login_id: &str) -> bool {
+        self.accounts.cancel_device_login(login_id).await
+    }
+
+    pub async fn logout(&self) -> Result<bool> {
+        Accounts::logout(&self.auth_manager).await
+    }
+
+    pub async fn list_models(&self, include_hidden: bool) -> JsonValue {
+        Accounts::list_models(&self.base_config, &self.thread_manager, include_hidden).await
     }
 
     pub async fn shutdown(&self) -> Result<()> {

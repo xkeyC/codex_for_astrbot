@@ -167,6 +167,74 @@ impl Runtime {
         })
     }
 
+    /// `{"logged_in", "mode", "email", "account_id", "plan"}` as JSON.
+    fn account_status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(engine.account_status().await.to_string())
+        })
+    }
+
+    fn login_api_key<'py>(&self, py: Python<'py>, api_key: String) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine.login_api_key(&api_key).await.map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    /// Start ChatGPT device-code login: `{"login_id", "verification_url", "user_code"}`.
+    fn start_device_login<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let info = engine.start_device_login().await.map_err(runtime_err)?;
+            Ok(info.to_string())
+        })
+    }
+
+    /// `{"status": "pending" | "success" | "failed" | "unknown", "error"?}`.
+    fn device_login_status<'py>(
+        &self,
+        py: Python<'py>,
+        login_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(engine.device_login_status(&login_id).await.to_string())
+        })
+    }
+
+    fn cancel_device_login<'py>(
+        &self,
+        py: Python<'py>,
+        login_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(engine.cancel_device_login(&login_id).await)
+        })
+    }
+
+    fn logout<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine.logout().await.map_err(runtime_err)
+        })
+    }
+
+    /// Model presets available to the current account, as a JSON array.
+    #[pyo3(signature = (include_hidden = false))]
+    fn list_models<'py>(
+        &self,
+        py: Python<'py>,
+        include_hidden: bool,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(engine.list_models(include_hidden).await.to_string())
+        })
+    }
+
     fn shutdown<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let engine = Arc::clone(&self.engine);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
