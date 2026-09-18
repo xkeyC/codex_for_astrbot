@@ -28,6 +28,10 @@ def main() -> int:
     ap.add_argument("--develop", action="store_true", help="maturin develop")
     args = ap.parse_args()
     profile = [] if args.debug else ["--release"]
+    if not args.debug:
+        # The workspace release profile keeps debuginfo; drop it from the wheel.
+        os.environ.setdefault("CARGO_PROFILE_RELEASE_DEBUG", "0")
+        os.environ.setdefault("CARGO_PROFILE_RELEASE_STRIP", "symbols")
     exe = ".exe" if os.name == "nt" else ""
     target = WORKSPACE / "target" / ("debug" if args.debug else "release")
 
