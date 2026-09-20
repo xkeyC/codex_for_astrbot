@@ -70,6 +70,21 @@ relationships, health, finances, locations, per-user preferences, group-internal
 matters), even if it appears in the inputs.
 "#;
 
+const MAINTENANCE_TOOLS_ADDENDUM: &str = r#"
+
+## File access
+
+This session has no shell and no apply_patch. Use the memory file tools:
+
+- `memories.list` to see what the memory root holds
+- `memories.read` to read one file
+- `memories.write` to create or replace one file with its full new contents
+
+Paths work either as written elsewhere in this prompt or relative to the
+memory root. These tools are the only way to change anything here; do not try
+to run commands.
+"#;
+
 const SCOPE_CONSOLIDATION_ADDENDUM: &str = r#"
 
 ## Private chat memory store
@@ -273,23 +288,32 @@ pub(crate) fn adjust_agent_config(agent_config: &mut Config, parent: &Config) {
 /// .shell_tool = false`) and in code mode, because Codex is an orchestrator
 /// there and must stay off the machine's filesystem. Consolidation is the one
 /// session where that is backwards: its entire job is to read the workspace
-/// diff and rewrite the files under the memory root, and the sandbox already
-/// confines it to exactly that directory (see `phase2::agent::
-/// get_config_for_root`, which narrows the policy to `writable_roots =
-/// [memory root]` with no network). Without this the agent is handed a
-/// consolidation prompt and no way to carry it out, so memory files silently
-/// stop being maintained.
+/// diff and rewrite the files under the memory root. Without this the agent is
+/// handed a consolidation prompt and no way to carry it out, so memory files
+/// silently stop being maintained.
 fn restore_file_editing_surface(agent_config: &mut Config) {
     // Code mode defers every tool behind a JS host process; the consolidation
     // prompt expects to call the tools directly.
     agent_config.model_tool_mode = None;
+
+    if agent_config.codex_self_exe.is_none() {
+        // No Codex executable means no local execution environment, and both
+        // the shell and `apply_patch` are registered only when one exists --
+        // enabling the feature would change nothing. The memories extension
+        // serves file tools over the agent's cwd instead, which needs no
+        // executable, no sandbox and no subprocess.
+        agent_config.memories.maintenance_tools = true;
+        return;
+    }
+
     if let Err(err) = agent_config.features.enable(Feature::ShellTool) {
         // A managed policy can pin the feature off. Say so instead of leaving
         // an agent that cannot touch the files it was asked to rewrite.
         warn!("memory consolidation could not enable the shell tool: {err}");
     }
     // With a shell back, the agent needs to know which platform it is on to
-    // pick working commands.
+    // pick working commands. The sandbox confines it to the memory root
+    // either way (see `phase2::agent::get_config_for_root`).
     agent_config.include_environment_context = true;
 }
 
@@ -313,6 +337,17 @@ pub(crate) async fn extend_consolidation_prompt(
     };
     if let Some(UserInput::Text { text, .. }) = prompt.first_mut() {
         text.push_str(addendum);
+    }
+}
+
+/// Tells a consolidation agent with no execution environment how to reach its
+/// files, since the prompt it was given assumes a shell.
+pub(crate) fn append_maintenance_tools_note(agent_config: &Config, prompt: &mut [UserInput]) {
+    if !agent_config.memories.maintenance_tools {
+        return;
+    }
+    if let Some(UserInput::Text { text, .. }) = prompt.first_mut() {
+        text.push_str(MAINTENANCE_TOOLS_ADDENDUM);
     }
 }
 

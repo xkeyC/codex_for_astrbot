@@ -62,6 +62,7 @@ fn tools_are_not_contributed_when_disabled() {
     thread_store.insert(MemoriesExtensionConfig {
         version: codex_protocol::MemoryVersion::V1,
         enabled: false,
+        maintenance_root: None,
         dedicated_tools: true,
         codex_home: test_path_buf("/tmp/codex-home").abs(),
     });
@@ -80,6 +81,7 @@ fn tools_are_not_contributed_when_dedicated_tools_disabled() {
     thread_store.insert(MemoriesExtensionConfig {
         version: codex_protocol::MemoryVersion::V1,
         enabled: true,
+        maintenance_root: None,
         dedicated_tools: false,
         codex_home: test_path_buf("/tmp/codex-home").abs(),
     });
@@ -98,6 +100,7 @@ fn tools_are_contributed_when_enabled_with_dedicated_tools() {
     thread_store.insert(MemoriesExtensionConfig {
         version: codex_protocol::MemoryVersion::V1,
         enabled: true,
+        maintenance_root: None,
         dedicated_tools: true,
         codex_home: test_path_buf("/tmp/codex-home").abs(),
     });
@@ -128,6 +131,7 @@ fn install_registers_dedicated_tool_contributor() {
     thread_store.insert(MemoriesExtensionConfig {
         version: codex_protocol::MemoryVersion::V1,
         enabled: true,
+        maintenance_root: None,
         dedicated_tools: true,
         codex_home: test_path_buf("/tmp/codex-home").abs(),
     });
@@ -189,6 +193,7 @@ async fn prompt_contribution_uses_memory_summary_when_enabled() {
     thread_store.insert(MemoriesExtensionConfig {
         version: codex_protocol::MemoryVersion::V1,
         enabled: true,
+        maintenance_root: None,
         dedicated_tools: false,
         codex_home: tempdir.path().abs(),
     });

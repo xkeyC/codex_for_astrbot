@@ -32,6 +32,8 @@ use crate::backend::ReadMemoryRequest;
 use crate::backend::ReadMemoryResponse;
 use crate::backend::SearchMemoriesRequest;
 use crate::backend::SearchMemoriesResponse;
+use crate::backend::WriteMemoryRequest;
+use crate::backend::WriteMemoryResponse;
 use crate::local::LocalMemoriesBackend;
 use crate::prompts::build_memory_instructions_for_root;
 use crate::prompts::build_memory_tool_developer_instructions;
@@ -400,6 +402,29 @@ impl MemoriesBackend for ScopedMemoriesBackend {
             .map_err(|err| prefix_error(prefix, err))?;
         response.path = request.path;
         Ok(response)
+    }
+
+    /// Unused: the maintenance tools address one root directly, never through
+    /// the `global/` + `local/` routing this backend exists for.
+    async fn write(
+        &self,
+        request: WriteMemoryRequest,
+    ) -> Result<WriteMemoryResponse, MemoriesBackendError> {
+        let route = route(Some(request.path.as_str()))?;
+        let Some((prefix, backend, Some(rest))) = self.pick(&route) else {
+            return Err(MemoriesBackendError::NotFile { path: request.path });
+        };
+        let response = backend
+            .write(WriteMemoryRequest {
+                path: rest.to_string(),
+                content: request.content,
+            })
+            .await
+            .map_err(|err| prefix_error(prefix, err))?;
+        Ok(WriteMemoryResponse {
+            path: request.path,
+            bytes_written: response.bytes_written,
+        })
     }
 
     async fn delete(

@@ -14,6 +14,8 @@ use crate::backend::ReadMemoryRequest;
 use crate::backend::ReadMemoryResponse;
 use crate::backend::SearchMemoriesRequest;
 use crate::backend::SearchMemoriesResponse;
+use crate::backend::WriteMemoryRequest;
+use crate::backend::WriteMemoryResponse;
 
 mod ad_hoc_note;
 // Fork addition: entry-level deletion.
@@ -22,6 +24,8 @@ mod list;
 mod path;
 mod read;
 mod search;
+// Fork addition: file-level writes for the consolidation agent.
+mod write;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LocalMemoriesBackend {
@@ -131,5 +135,13 @@ impl MemoriesBackend for LocalMemoriesBackend {
         request: DeleteMemoryRequest,
     ) -> Result<DeleteMemoryResponse, MemoriesBackendError> {
         delete::delete(self, request).await
+    }
+
+    // Fork addition: used by the consolidation maintenance tools.
+    async fn write(
+        &self,
+        request: WriteMemoryRequest,
+    ) -> Result<WriteMemoryResponse, MemoriesBackendError> {
+        write::write(self, request).await
     }
 }

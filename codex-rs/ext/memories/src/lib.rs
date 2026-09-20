@@ -1,6 +1,8 @@
 mod backend;
 mod extension;
 mod local;
+// Fork addition: memory-file maintenance for a consolidation agent.
+mod maintenance;
 mod metrics;
 mod prompts;
 mod schema;
@@ -24,6 +26,8 @@ pub(crate) const READ_TOOL_NAME: &str = "read";
 pub(crate) const SEARCH_TOOL_NAME: &str = "search";
 // Fork addition: entry-level deletion tool, gated by `memories.may_delete`.
 pub(crate) const DELETE_TOOL_NAME: &str = "delete_memory";
+// Fork addition: file write, gated by `memories.maintenance_tools`.
+pub(crate) const WRITE_TOOL_NAME: &str = "write";
 
 #[cfg(test)]
 mod tests;
@@ -32,3 +36,8 @@ mod tests;
 #[cfg(test)]
 #[path = "delete_tests.rs"]
 mod delete_tests;
+
+// Fork addition: tests for the consolidation agent's memory-file tools.
+#[cfg(test)]
+#[path = "maintenance_tests.rs"]
+mod maintenance_tests;

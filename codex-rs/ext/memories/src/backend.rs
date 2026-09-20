@@ -38,6 +38,27 @@ pub trait MemoriesBackend: Clone + Send + Sync + 'static {
         &self,
         request: DeleteMemoryRequest,
     ) -> impl Future<Output = Result<DeleteMemoryResponse, MemoriesBackendError>> + Send;
+
+    /// Fork addition: creates or overwrites one file under the memory root.
+    fn write(
+        &self,
+        request: WriteMemoryRequest,
+    ) -> impl Future<Output = Result<WriteMemoryResponse, MemoriesBackendError>> + Send;
+}
+
+/// Fork addition: request for [`MemoriesBackend::write`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriteMemoryRequest {
+    pub path: String,
+    pub content: String,
+}
+
+/// Fork addition: response of [`MemoriesBackend::write`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct WriteMemoryResponse {
+    pub path: String,
+    pub bytes_written: usize,
 }
 
 /// Fork addition: request for [`MemoriesBackend::delete`].

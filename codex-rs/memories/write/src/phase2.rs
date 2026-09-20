@@ -175,6 +175,7 @@ pub(crate) async fn run_for_target(
     // 8. Spawn the consolidation agent.
     let mut prompt = agent::get_prompt(&root, config.memories.version);
     crate::scopes::extend_consolidation_prompt(context.as_ref(), &target, &mut prompt).await;
+    crate::scopes::append_maintenance_tools_note(&agent_config, &mut prompt);
     let agent = match context
         .spawn_consolidation_agent(agent_config, prompt)
         .await

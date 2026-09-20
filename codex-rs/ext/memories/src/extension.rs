@@ -19,6 +19,7 @@ use codex_protocol::MemoryVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::local::LocalMemoriesBackend;
+use crate::maintenance::MaintenanceBackend;
 use crate::scoped::ScopedMemoriesConfig;
 use crate::scoped::developer_instructions;
 use crate::scoped::scoped_memory_tools;
@@ -42,6 +43,9 @@ pub(crate) struct MemoriesExtensionConfig {
     pub(crate) dedicated_tools: bool,
     pub(crate) codex_home: AbsolutePathBuf,
     pub(crate) version: MemoryVersion,
+    /// Fork addition: root a consolidation agent maintains through the memory
+    /// file tools, which is its `cwd`. `None` for an ordinary chat thread.
+    pub(crate) maintenance_root: Option<AbsolutePathBuf>,
 }
 
 impl MemoriesExtensionConfig {
@@ -51,6 +55,10 @@ impl MemoriesExtensionConfig {
             dedicated_tools: config.memories.dedicated_tools,
             codex_home: config.codex_home.clone(),
             version: config.memories.version,
+            maintenance_root: config
+                .memories
+                .maintenance_tools
+                .then(|| config.cwd.clone()),
         }
     }
 }
@@ -156,6 +164,15 @@ impl ToolContributor for MemoriesExtension {
         let Some(config) = thread_store.get::<MemoriesExtensionConfig>() else {
             return Vec::new();
         };
+        // Fork addition: a consolidation agent works on one root and needs
+        // nothing else, so this comes before the chat-thread gates -- which it
+        // would fail anyway, since consolidation runs with use_memories off.
+        if let Some(root) = config.maintenance_root.clone() {
+            return tools::maintenance_tools(
+                MaintenanceBackend::new(root.to_path_buf()),
+                self.metrics_client.clone(),
+            );
+        }
         if !config.enabled || !config.dedicated_tools {
             return Vec::new();
         }

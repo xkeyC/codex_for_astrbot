@@ -2207,6 +2207,10 @@
           "description": "When `false`, newly created threads are stored with `memory_mode = \"disabled\"` in the state DB.",
           "type": "boolean"
         },
+        "maintenance_tools": {
+          "description": "Fork addition: exposes file tools over the memory root so a consolidation agent can maintain the files without a shell. Set by the consolidation worker, not by users. Defaults to `false`.",
+          "type": "boolean"
+        },
         "max_raw_memories_for_consolidation": {
           "description": "Maximum number of recent raw memories retained for global consolidation.",
           "format": "uint",

@@ -343,6 +343,11 @@ pub struct MemoriesToml {
     /// (immediate writes through the memory tools keep working).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_consolidate: Option<bool>,
+    /// Fork addition: exposes file tools over the memory root so a
+    /// consolidation agent can maintain the files without a shell. Set by the
+    /// consolidation worker, not by users. Defaults to `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance_tools: Option<bool>,
 }
 
 /// Effective memories settings after defaults are applied.
@@ -373,6 +378,8 @@ pub struct MemoriesConfig {
     pub may_delete: bool,
     #[serde(skip_serializing_if = "is_true")]
     pub auto_consolidate: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub maintenance_tools: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference.
@@ -407,6 +414,7 @@ impl Default for MemoriesConfig {
             may_write_global: true,
             may_delete: false,
             auto_consolidate: true,
+            maintenance_tools: false,
         }
     }
 }
@@ -459,6 +467,7 @@ impl From<MemoriesToml> for MemoriesConfig {
             scope_key: toml.scope_key.filter(|key| !key.trim().is_empty()),
             may_write_global: toml.may_write_global.unwrap_or(defaults.may_write_global),
             may_delete: toml.may_delete.unwrap_or(defaults.may_delete),
+            maintenance_tools: toml.maintenance_tools.unwrap_or(defaults.maintenance_tools),
             auto_consolidate: toml.auto_consolidate.unwrap_or(defaults.auto_consolidate),
         }
     }

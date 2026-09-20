@@ -28,6 +28,8 @@ mod read;
 // Fork addition: scope-aware ad-hoc note tool.
 mod scoped_ad_hoc_note;
 mod search;
+// Fork addition: file write for a consolidation agent with no shell.
+mod write;
 
 pub(crate) use delete::DeleteMemoryTool;
 pub(crate) use scoped_ad_hoc_note::ScopedAddAdHocNoteTool;
@@ -53,6 +55,35 @@ where
             metrics_client: metrics_client.clone(),
         }),
         Arc::new(search::SearchTool {
+            backend,
+            metrics_client,
+        }),
+    ]
+}
+
+/// Fork addition: the tools a consolidation agent needs to maintain the files
+/// under one memory root without a shell.
+///
+/// Deliberately narrower than [`memory_tools`]: no search (the root is small
+/// and the prompt names the files) and no ad-hoc notes (those are a user
+/// feature, and consolidation writes the summary itself).
+pub(crate) fn maintenance_tools<B>(
+    backend: B,
+    metrics_client: Option<MetricsClient>,
+) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>>
+where
+    B: MemoriesBackend,
+{
+    vec![
+        Arc::new(list::ListTool {
+            backend: backend.clone(),
+            metrics_client: metrics_client.clone(),
+        }),
+        Arc::new(read::ReadTool {
+            backend: backend.clone(),
+            metrics_client: metrics_client.clone(),
+        }),
+        Arc::new(write::WriteTool {
             backend,
             metrics_client,
         }),
