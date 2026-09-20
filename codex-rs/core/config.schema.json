@@ -523,6 +523,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "exec_as_function_tool": {
+          "description": "Expose `exec` as a plain function tool (`{\"code\": string}`) for providers without grammar-constrained custom tool support.",
+          "type": "boolean"
+        },
+        "structured_dynamic_tool_results": {
+          "description": "Return dynamic tool results to code-mode scripts as MCP-shaped objects (`{content, isError, text}`) instead of one joined string.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -3867,6 +3875,14 @@
         }
       ]
     },
+    "ToolMode": {
+      "enum": [
+        "direct",
+        "code_mode",
+        "code_mode_only"
+      ],
+      "type": "string"
+    },
     "ToolRegistryConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -6859,6 +6875,14 @@
     },
     "model_reasoning_summary": {
       "$ref": "#/definitions/ReasoningSummary"
+    },
+    "model_tool_mode": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ToolMode"
+        }
+      ],
+      "description": "Forces the tool mode (`direct`, `code_mode`, `code_mode_only`) regardless of the model catalog."
     },
     "model_verbosity": {
       "allOf": [
