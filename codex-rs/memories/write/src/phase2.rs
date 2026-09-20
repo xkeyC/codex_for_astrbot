@@ -597,6 +597,10 @@ mod sandbox_tests;
 #[cfg(test)]
 #[path = "phase2_workspace_roots_tests.rs"]
 mod workspace_roots_tests;
+// Fork addition.
+#[cfg(test)]
+#[path = "phase2_consolidation_tools_tests.rs"]
+mod consolidation_tools_tests;
 
 pub(super) fn get_watermark(
     claimed_watermark: i64,

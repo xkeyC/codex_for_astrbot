@@ -256,12 +256,41 @@ pub(crate) fn fork_mode_active(memories: &MemoriesConfig) -> bool {
 }
 
 /// Consolidation agents must not inherit a host persona from the triggering
-/// thread (e.g. a chatbot's base instructions).
+/// thread (e.g. a chatbot's base instructions), and they need a plain
+/// file-editing tool surface even when the host denies its chat threads one.
 pub(crate) fn adjust_agent_config(agent_config: &mut Config, parent: &Config) {
-    if fork_mode_active(&parent.memories) {
-        agent_config.base_instructions = None;
-        agent_config.developer_instructions = None;
+    if !fork_mode_active(&parent.memories) {
+        return;
     }
+    agent_config.base_instructions = None;
+    agent_config.developer_instructions = None;
+    restore_file_editing_surface(agent_config);
+}
+
+/// Gives the consolidation agent back the tools its prompt assumes.
+///
+/// A host like AstrBot runs its chat threads with no shell (`features
+/// .shell_tool = false`) and in code mode, because Codex is an orchestrator
+/// there and must stay off the machine's filesystem. Consolidation is the one
+/// session where that is backwards: its entire job is to read the workspace
+/// diff and rewrite the files under the memory root, and the sandbox already
+/// confines it to exactly that directory (see `phase2::agent::
+/// get_config_for_root`, which narrows the policy to `writable_roots =
+/// [memory root]` with no network). Without this the agent is handed a
+/// consolidation prompt and no way to carry it out, so memory files silently
+/// stop being maintained.
+fn restore_file_editing_surface(agent_config: &mut Config) {
+    // Code mode defers every tool behind a JS host process; the consolidation
+    // prompt expects to call the tools directly.
+    agent_config.model_tool_mode = None;
+    if let Err(err) = agent_config.features.enable(Feature::ShellTool) {
+        // A managed policy can pin the feature off. Say so instead of leaving
+        // an agent that cannot touch the files it was asked to rewrite.
+        warn!("memory consolidation could not enable the shell tool: {err}");
+    }
+    // With a shell back, the agent needs to know which platform it is on to
+    // pick working commands.
+    agent_config.include_environment_context = true;
 }
 
 /// Appends scope rules to the consolidation prompt.
