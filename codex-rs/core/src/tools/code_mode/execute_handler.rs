@@ -213,7 +213,7 @@ impl CodeModeExecuteHandler {
                             session,
                             step_context,
                             call_id,
-                            originating_call,
+                            originating_item_id,
                             input,
                             &mut telemetry,
                         )
