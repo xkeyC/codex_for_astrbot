@@ -2474,6 +2474,7 @@ dependencies = [
  "codex-exec-server",
  "codex-extension-api",
  "codex-home",
+ "codex-image-generation-extension",
  "codex-login",
  "codex-memories-extension",
  "codex-memories-write",

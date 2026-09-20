@@ -605,7 +605,13 @@ fn build_extensions(
 ) -> codex_extension_api::ExtensionRegistry<Config> {
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     codex_memories_extension::install(&mut builder, /*metrics_client*/ None);
-    codex_web_search_extension::install(&mut builder, auth_manager);
+    codex_web_search_extension::install(&mut builder, Arc::clone(&auth_manager));
+    // Codex's own image generation, saved under CODEX_HOME. It registers a
+    // tool only for an OpenAI-authenticated account on a paid plan with an
+    // image-capable model, so it costs nothing otherwise.
+    codex_image_generation_extension::install(&mut builder, auth_manager, |config: &Config| {
+        Some(config.codex_home.clone())
+    });
     codex_skills_extension::install(&mut builder, |config: &Config| {
         codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
