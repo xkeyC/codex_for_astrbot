@@ -1,6 +1,7 @@
 [build-system]
 requires = ["maturin>=1.7,<2"]
-build-backend = "maturin"
+build-backend = "build_backend"
+backend-path = ["."]
 
 [project]
 name = "codex-astrbot"
@@ -12,6 +13,6 @@ requires-python = ">=3.10"
 features = ["python", "pyo3/extension-module"]
 python-source = "python"
 module-name = "codex_astrbot.codex_astrbot"
-# bin/ is gitignored (built by bundle.py), so include it explicitly.
+# bin/ is gitignored (build_backend.py compiles it), so include it explicitly.
 include = [{ path = "python/codex_astrbot/bin/*", format = "wheel" }]
 exclude = ["python/codex_astrbot/.gitignore", "python/codex_astrbot/__pycache__/**"]
