@@ -29,6 +29,29 @@ pub trait MemoriesBackend: Clone + Send + Sync + 'static {
         &self,
         request: SearchMemoriesRequest,
     ) -> impl Future<Output = Result<SearchMemoriesResponse, MemoriesBackendError>> + Send;
+
+    /// Fork addition: permanently remove one memory file.
+    ///
+    /// Only reachable through the `memories.may_delete` config switch; the
+    /// tool that calls it is not registered otherwise.
+    fn delete(
+        &self,
+        request: DeleteMemoryRequest,
+    ) -> impl Future<Output = Result<DeleteMemoryResponse, MemoriesBackendError>> + Send;
+}
+
+/// Fork addition: request for [`MemoriesBackend::delete`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteMemoryRequest {
+    pub path: String,
+}
+
+/// Fork addition: response of [`MemoriesBackend::delete`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct DeleteMemoryResponse {
+    pub path: String,
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

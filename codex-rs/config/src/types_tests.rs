@@ -87,6 +87,36 @@ fn memories_config_clamps_rate_limit_remaining_threshold() {
     );
 }
 
+// Fork addition: entry-level memory deletion switch.
+#[test]
+fn memories_may_delete_defaults_to_false_and_is_omitted_when_unset() {
+    let parsed: MemoriesToml = toml::from_str("").expect("parse memories config");
+    assert_eq!(parsed.may_delete, None);
+    assert!(!MemoriesConfig::from(parsed).may_delete);
+    assert!(!MemoriesConfig::default().may_delete);
+
+    let serialized =
+        serde_json::to_value(MemoriesConfig::default()).expect("serialize memories config");
+    assert!(
+        serialized.get("may_delete").is_none(),
+        "the default must serialize exactly like upstream"
+    );
+
+    let parsed: MemoriesToml = toml::from_str("may_delete = true").expect("parse memories config");
+    let config = MemoriesConfig::from(parsed);
+    assert_eq!(
+        config,
+        MemoriesConfig {
+            may_delete: true,
+            ..MemoriesConfig::default()
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(config).expect("serialize memories config")["may_delete"],
+        serde_json::json!(true)
+    );
+}
+
 #[test]
 fn memories_version_selects_pipeline_without_changing_other_defaults() {
     for (source, version) in [

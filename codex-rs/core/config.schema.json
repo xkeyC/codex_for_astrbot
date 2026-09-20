@@ -2231,6 +2231,10 @@
           "format": "int64",
           "type": "integer"
         },
+        "may_delete": {
+          "description": "Fork addition: whether the memory tools may delete individual memory files in this thread. Defaults to `false`.",
+          "type": "boolean"
+        },
         "may_write_global": {
           "description": "Fork addition: whether this thread may contribute to the global store.",
           "type": "boolean"

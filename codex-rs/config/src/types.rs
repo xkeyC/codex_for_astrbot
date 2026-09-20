@@ -335,6 +335,10 @@ pub struct MemoriesToml {
     /// Fork addition: whether this thread may contribute to the global store.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_write_global: Option<bool>,
+    /// Fork addition: whether the memory tools may delete individual memory
+    /// files in this thread. Defaults to `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub may_delete: Option<bool>,
     /// Fork addition: `false` disables automatic extraction and consolidation
     /// (immediate writes through the memory tools keep working).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -365,6 +369,8 @@ pub struct MemoriesConfig {
     pub scope_key: Option<String>,
     #[serde(skip_serializing_if = "is_true")]
     pub may_write_global: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub may_delete: bool,
     #[serde(skip_serializing_if = "is_true")]
     pub auto_consolidate: bool,
 }
@@ -372,6 +378,11 @@ pub struct MemoriesConfig {
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference.
 fn is_true(value: &bool) -> bool {
     *value
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Default for MemoriesConfig {
@@ -394,6 +405,7 @@ impl Default for MemoriesConfig {
             extra_session_sources: Vec::new(),
             scope_key: None,
             may_write_global: true,
+            may_delete: false,
             auto_consolidate: true,
         }
     }
@@ -446,6 +458,7 @@ impl From<MemoriesToml> for MemoriesConfig {
             extra_session_sources: toml.extra_session_sources.unwrap_or_default(),
             scope_key: toml.scope_key.filter(|key| !key.trim().is_empty()),
             may_write_global: toml.may_write_global.unwrap_or(defaults.may_write_global),
+            may_delete: toml.may_delete.unwrap_or(defaults.may_delete),
             auto_consolidate: toml.auto_consolidate.unwrap_or(defaults.auto_consolidate),
         }
     }

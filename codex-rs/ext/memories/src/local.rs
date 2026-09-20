@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use crate::backend::AddAdHocMemoryNoteRequest;
 use crate::backend::AddAdHocMemoryNoteResponse;
+use crate::backend::DeleteMemoryRequest;
+use crate::backend::DeleteMemoryResponse;
 use crate::backend::ListMemoriesRequest;
 use crate::backend::ListMemoriesResponse;
 use crate::backend::MemoriesBackend;
@@ -14,6 +16,8 @@ use crate::backend::SearchMemoriesRequest;
 use crate::backend::SearchMemoriesResponse;
 
 mod ad_hoc_note;
+// Fork addition: entry-level deletion.
+mod delete;
 mod list;
 mod path;
 mod read;
@@ -119,5 +123,13 @@ impl MemoriesBackend for LocalMemoriesBackend {
         request: SearchMemoriesRequest,
     ) -> Result<SearchMemoriesResponse, MemoriesBackendError> {
         search::search(self, request).await
+    }
+
+    // Fork addition: entry-level deletion, gated by `memories.may_delete`.
+    async fn delete(
+        &self,
+        request: DeleteMemoryRequest,
+    ) -> Result<DeleteMemoryResponse, MemoriesBackendError> {
+        delete::delete(self, request).await
     }
 }

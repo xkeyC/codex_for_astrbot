@@ -60,6 +60,7 @@ fn scope(may_write_global: bool) -> ScopedMemoriesConfig {
     ScopedMemoriesConfig {
         scope_key: Some("chat-1".to_string()),
         may_write_global,
+        may_delete: false,
     }
 }
 
@@ -245,6 +246,7 @@ async fn developer_instructions_are_upstream_without_fork_settings() {
         Some(ScopedMemoriesConfig {
             scope_key: None,
             may_write_global: true,
+            may_delete: false,
         }),
     ] {
         assert_eq!(
@@ -264,6 +266,7 @@ async fn developer_instructions_are_upstream_without_fork_settings() {
         Some(&ScopedMemoriesConfig {
             scope_key: None,
             may_write_global: false,
+            may_delete: false,
         }),
         /*dedicated_tools*/ true,
     )
@@ -284,6 +287,7 @@ async fn unscoped_threads_without_global_permission_get_no_ad_hoc_tool() {
             &ScopedMemoriesConfig {
                 scope_key: None,
                 may_write_global: true,
+                may_delete: false,
             },
             None,
         )
@@ -296,6 +300,7 @@ async fn unscoped_threads_without_global_permission_get_no_ad_hoc_tool() {
         &ScopedMemoriesConfig {
             scope_key: None,
             may_write_global: false,
+            may_delete: false,
         },
         None,
     )

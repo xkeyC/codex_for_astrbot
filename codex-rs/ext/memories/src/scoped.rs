@@ -16,9 +16,12 @@ use codex_protocol::MemoryVersion;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::ADD_AD_HOC_NOTE_TOOL_NAME;
+use crate::DELETE_TOOL_NAME;
 use crate::MEMORY_TOOLS_NAMESPACE;
 use crate::backend::AddAdHocMemoryNoteRequest;
 use crate::backend::AddAdHocMemoryNoteResponse;
+use crate::backend::DeleteMemoryRequest;
+use crate::backend::DeleteMemoryResponse;
 use crate::backend::ListMemoriesRequest;
 use crate::backend::ListMemoriesResponse;
 use crate::backend::MemoriesBackend;
@@ -45,6 +48,7 @@ const LOCAL_PREFIX: &str = "local";
 pub(crate) struct ScopedMemoriesConfig {
     pub(crate) scope_key: Option<String>,
     pub(crate) may_write_global: bool,
+    pub(crate) may_delete: bool,
 }
 
 impl ScopedMemoriesConfig {
@@ -52,11 +56,12 @@ impl ScopedMemoriesConfig {
         Self {
             scope_key: config.memories.scope_key.clone(),
             may_write_global: config.memories.may_write_global,
+            may_delete: config.memories.may_delete,
         }
     }
 }
 
-fn scope_root(
+pub(crate) fn scope_root(
     codex_home: &AbsolutePathBuf,
     version: MemoryVersion,
     scope_key: &str,
@@ -68,6 +73,13 @@ const NO_GLOBAL_WRITE_INSTRUCTIONS: &str = "\n\n## Shared memory is read-only in
 This memory folder is SHARED with every other chat. This chat may not write to \
 it: do not create ad-hoc update notes or any other file under it, even when \
 asked to remember something. Tell the user that memories cannot be saved here.\n";
+
+/// Fork addition: appended when `delete_memory` is registered on a thread
+/// without a memory scope.
+const DELETE_TOOL_INSTRUCTIONS: &str = "\n\n## Deleting memories\n\n\
+The `memories` tools include `delete_memory`, which permanently deletes one \
+memory file by relative path. Use it only when the user explicitly asks to \
+delete or forget a stored memory, and delete nothing else.\n";
 
 /// Read-path developer instructions for a thread.
 ///
@@ -85,6 +97,12 @@ pub(crate) async fn developer_instructions(
         Some(scope) if !scope.may_write_global => {
             let mut text = build_memory_tool_developer_instructions(codex_home, version).await?;
             text.push_str(NO_GLOBAL_WRITE_INSTRUCTIONS);
+            Some(text)
+        }
+        // Fork addition: mention `delete_memory` only where it is registered.
+        Some(scope) if dedicated_tools && scope.may_delete => {
+            let mut text = build_memory_tool_developer_instructions(codex_home, version).await?;
+            text.push_str(DELETE_TOOL_INSTRUCTIONS);
             Some(text)
         }
         _ => build_memory_tool_developer_instructions(codex_home, version).await,
@@ -158,6 +176,20 @@ address the shared folder and paths starting with `{LOCAL_PREFIX}/` address the 
 write shared memories.\n"
             ));
         }
+        if scope.may_delete {
+            if scope.may_write_global {
+                text.push_str(&format!(
+                    "- `{DELETE_TOOL_NAME}` permanently deletes one memory file at the given \
+`{GLOBAL_PREFIX}/` or `{LOCAL_PREFIX}/` path; use it only when the user asks to delete or forget \
+a stored memory.\n"
+                ));
+            } else {
+                text.push_str(&format!(
+                    "- `{DELETE_TOOL_NAME}` permanently deletes one `{LOCAL_PREFIX}/` memory file \
+when the user asks to delete or forget it; shared memories cannot be deleted here.\n"
+                ));
+            }
+        }
     }
     if let Some(local_summary) = local_summary {
         text.push_str("\n========= PRIVATE MEMORY_SUMMARY BEGINS =========\n");
@@ -184,7 +216,17 @@ pub(crate) fn scoped_memory_tools(
     );
     let Some(scope_key) = scope.scope_key.as_deref() else {
         if scope.may_write_global {
-            return None;
+            if !scope.may_delete {
+                return None;
+            }
+            // No private store, but this thread may curate the single store.
+            let mut memory_tools = tools::memory_tools(global.clone(), metrics_client.clone());
+            memory_tools.push(Arc::new(tools::DeleteMemoryTool {
+                backend: global,
+                may_delete_global: true,
+                metrics_client,
+            }));
+            return Some(memory_tools);
         }
         // No private store and no global write permission: read-only tools.
         let mut memory_tools = tools::memory_tools(global, metrics_client);
@@ -198,7 +240,7 @@ pub(crate) fn scoped_memory_tools(
         global: global.clone(),
         local: local.clone(),
     };
-    let mut memory_tools = tools::memory_tools(backend, metrics_client.clone());
+    let mut memory_tools = tools::memory_tools(backend.clone(), metrics_client.clone());
     if scope.may_write_global {
         memory_tools.retain(|tool| tool.tool_name() != ad_hoc_name);
         memory_tools.insert(
@@ -206,9 +248,16 @@ pub(crate) fn scoped_memory_tools(
             Arc::new(tools::ScopedAddAdHocNoteTool {
                 local,
                 global,
-                metrics_client,
+                metrics_client: metrics_client.clone(),
             }),
         );
+    }
+    if scope.may_delete {
+        memory_tools.push(Arc::new(tools::DeleteMemoryTool {
+            backend,
+            may_delete_global: scope.may_write_global,
+            metrics_client,
+        }));
     }
     Some(memory_tools)
 }
@@ -248,6 +297,11 @@ fn route(path: Option<&str>) -> Result<Route<'_>, MemoriesBackendError> {
             "must start with `global/` (shared memories) or `local/` (this chat's memories)",
         )),
     }
+}
+
+/// Whether a tool path addresses the shared (global) memory store.
+pub(crate) fn addresses_global_store(path: &str) -> bool {
+    matches!(route(Some(path)), Ok(Route::Global(_)))
 }
 
 fn prefixed(prefix: &str, path: &str) -> String {
@@ -346,6 +400,26 @@ impl MemoriesBackend for ScopedMemoriesBackend {
             .map_err(|err| prefix_error(prefix, err))?;
         response.path = request.path;
         Ok(response)
+    }
+
+    async fn delete(
+        &self,
+        request: DeleteMemoryRequest,
+    ) -> Result<DeleteMemoryResponse, MemoriesBackendError> {
+        let route = route(Some(request.path.as_str()))?;
+        let Some((prefix, backend, Some(rest))) = self.pick(&route) else {
+            return Err(MemoriesBackendError::NotFile { path: request.path });
+        };
+        backend
+            .delete(DeleteMemoryRequest {
+                path: rest.to_string(),
+            })
+            .await
+            .map_err(|err| prefix_error(prefix, err))?;
+        Ok(DeleteMemoryResponse {
+            path: request.path,
+            deleted: true,
+        })
     }
 
     async fn search(

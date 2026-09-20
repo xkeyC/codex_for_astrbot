@@ -21,12 +21,15 @@ use crate::backend::MemoriesBackendError;
 use crate::schema;
 
 mod ad_hoc_note;
+// Fork addition: entry-level deletion tool, gated by `memories.may_delete`.
+mod delete;
 mod list;
 mod read;
 // Fork addition: scope-aware ad-hoc note tool.
 mod scoped_ad_hoc_note;
 mod search;
 
+pub(crate) use delete::DeleteMemoryTool;
 pub(crate) use scoped_ad_hoc_note::ScopedAddAdHocNoteTool;
 
 pub(crate) fn memory_tools<B>(
