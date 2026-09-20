@@ -113,36 +113,52 @@ def _ensure_v8_archive(env: dict) -> None:
         f"https://github.com/openai/codex/releases/download/rusty-v8-v{version}",
     )
 
-    if not path.is_file():
+    # The crate generates its Rust binding next to the archive and only
+    # downloads it when RUSTY_V8_MIRROR is set, so an archive on its own
+    # leaves `include!(env!("RUSTY_V8_SRC_BINDING_PATH"))` pointing at a file
+    # that does not exist. Fetch both.
+    binding = f"src_binding_ptrcomp_sandbox_release_{target}.rs"
+    wanted = {archive: path}
+    if not env.get("RUSTY_V8_SRC_BINDING_PATH"):
+        wanted[binding] = cache / binding
+
+    missing = {name: dest for name, dest in wanted.items() if not dest.is_file()}
+    if missing:
         cache.mkdir(parents=True, exist_ok=True)
-        print(f"Downloading {base}/{archive}", flush=True)
         try:
-            with urllib.request.urlopen(f"{base}/{archive}") as response:
-                payload = response.read()
             with urllib.request.urlopen(f"{base}/{stem}.sha256") as response:
                 checksums = response.read().decode("utf-8")
+            for name, dest in missing.items():
+                print(f"Downloading {base}/{name}", flush=True)
+                with urllib.request.urlopen(f"{base}/{name}") as response:
+                    payload = response.read()
+                expected = next(
+                    (
+                        line.split()[0]
+                        for line in checksums.splitlines()
+                        if line.strip().endswith(name)
+                    ),
+                    "",
+                )
+                actual = hashlib.sha256(payload).hexdigest()
+                if expected and actual != expected:
+                    raise RuntimeError(
+                        f"Checksum mismatch for {name}: expected {expected}, "
+                        f"got {actual}"
+                    )
+                dest.write_bytes(payload)
         except (urllib.error.URLError, OSError) as err:
             raise RuntimeError(
-                f"Failed to download the prebuilt V8 archive for {target} from "
-                f"{base}. Download {archive} yourself and set RUSTY_V8_ARCHIVE to "
-                "it, or set CODEX_ASTRBOT_SKIP_HOST=1 to build without code "
-                f"mode's host: {err}"
+                f"Failed to download the prebuilt V8 files for {target} from "
+                f"{base}. Download {archive} and {binding} yourself and set "
+                "RUSTY_V8_ARCHIVE and RUSTY_V8_SRC_BINDING_PATH to them, or set "
+                "CODEX_ASTRBOT_SKIP_HOST=1 to build without code mode's host: "
+                f"{err}"
             ) from err
-        expected = next(
-            (
-                line.split()[0]
-                for line in checksums.splitlines()
-                if line.strip().endswith(archive)
-            ),
-            "",
-        )
-        actual = hashlib.sha256(payload).hexdigest()
-        if expected and actual != expected:
-            raise RuntimeError(
-                f"Checksum mismatch for {archive}: expected {expected}, got {actual}"
-            )
-        path.write_bytes(payload)
+
     env["RUSTY_V8_ARCHIVE"] = str(path)
+    if binding in wanted:
+        env["RUSTY_V8_SRC_BINDING_PATH"] = str(wanted[binding])
 
 
 def _build_helpers() -> None:
