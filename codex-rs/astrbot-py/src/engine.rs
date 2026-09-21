@@ -30,6 +30,8 @@ use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimePaths;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_home::CodexHomeUserInstructionsProvider;
+use codex_image_generation_extension::SavedImage;
+use codex_image_generation_extension::SavedImageHook;
 use codex_login::AuthManager;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -155,6 +157,11 @@ pub struct ReviewRequest {
     pub reason: Option<String>,
 }
 
+/// Host callback for saved images, filled in after the engine exists: the
+/// extension is installed while the engine is built, before the host can hand
+/// over a callback.
+type SavedImageSlot = Arc<std::sync::RwLock<Option<SavedImageHook>>>;
+
 pub struct Engine {
     options: EngineOptions,
     base_overrides: Vec<(String, toml::Value)>,
@@ -163,6 +170,7 @@ pub struct Engine {
     base_config: Config,
     auth_manager: Arc<AuthManager>,
     accounts: Accounts,
+    saved_image_hook: SavedImageSlot,
 }
 
 impl Engine {
@@ -198,7 +206,8 @@ impl Engine {
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
         ));
-        let extensions = build_extensions(Arc::clone(&auth_manager));
+        let saved_image_hook = SavedImageSlot::default();
+        let extensions = build_extensions(Arc::clone(&auth_manager), Arc::clone(&saved_image_hook));
         let base_config = config.clone();
         let mut thread_manager = ThreadManager::new(
             &config,
@@ -230,7 +239,27 @@ impl Engine {
             base_config,
             auth_manager,
             accounts: Accounts::default(),
+            saved_image_hook,
         })
+    }
+
+    /// Runs the saved-image callback as Codex would. Exists so the host can
+    /// check the round trip through the binding without generating an image.
+    pub async fn fire_saved_image_hook(&self, image: SavedImage) -> Option<String> {
+        let hook = match self.saved_image_hook.read() {
+            Ok(slot) => slot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }?;
+        hook(image).await
+    }
+
+    /// Sets (or clears) the callback run after Codex saves a generated image.
+    /// The text it returns becomes the tool result the model sees.
+    pub fn set_saved_image_hook(&self, hook: Option<SavedImageHook>) {
+        match self.saved_image_hook.write() {
+            Ok(mut slot) => *slot = hook,
+            Err(poisoned) => *poisoned.into_inner() = hook,
+        }
     }
 
     async fn thread_config(&self, params: &ThreadParams) -> Result<Config> {
@@ -602,6 +631,7 @@ async fn build_config(
 
 fn build_extensions(
     auth_manager: Arc<AuthManager>,
+    saved_image_hook: SavedImageSlot,
 ) -> codex_extension_api::ExtensionRegistry<Config> {
     let mut builder = ExtensionRegistryBuilder::<Config>::new();
     codex_memories_extension::install(&mut builder, /*metrics_client*/ None);
@@ -609,9 +639,28 @@ fn build_extensions(
     // Codex's own image generation, saved under CODEX_HOME. It registers a
     // tool only for an OpenAI-authenticated account on a paid plan with an
     // image-capable model, so it costs nothing otherwise.
-    codex_image_generation_extension::install(&mut builder, auth_manager, |config: &Config| {
-        Some(config.codex_home.clone())
+    //
+    // The host is called after each saved image: CODEX_HOME is on the host and
+    // out of reach of the model's tools, so AstrBot copies the image into the
+    // chat's workspace and says where in the same tool result.
+    let forward: SavedImageHook = Arc::new(move |image| {
+        let current = match saved_image_hook.read() {
+            Ok(slot) => slot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        Box::pin(async move {
+            match current {
+                Some(hook) => hook(image).await,
+                None => None,
+            }
+        })
     });
+    codex_image_generation_extension::install_with_saved_image_hook(
+        &mut builder,
+        auth_manager,
+        |config: &Config| Some(config.codex_home.clone()),
+        Some(forward),
+    );
     codex_skills_extension::install(&mut builder, |config: &Config| {
         codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,

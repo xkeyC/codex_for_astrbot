@@ -16,6 +16,7 @@ use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
+use crate::SavedImageHook;
 use crate::backend::CodexImagesBackend;
 use crate::tool::ImageGenerationTool;
 
@@ -23,6 +24,8 @@ use crate::tool::ImageGenerationTool;
 struct ImageGenerationExtension {
     auth_manager: Arc<AuthManager>,
     resolve_save_root: Arc<SaveRootResolver>,
+    /// Fork addition: see [`SavedImageHook`].
+    saved_image_hook: Option<SavedImageHook>,
 }
 
 type SaveRootResolver = dyn Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync;
@@ -103,6 +106,7 @@ impl ToolContributor for ImageGenerationExtension {
             ),
             config.save_root.clone(),
             thread_store.level_id().to_string(),
+            self.saved_image_hook.clone(),
         ))]
     }
 }
@@ -113,9 +117,20 @@ pub fn install(
     auth_manager: Arc<AuthManager>,
     resolve_save_root: impl Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
 ) {
+    install_with_saved_image_hook(registry, auth_manager, resolve_save_root, None);
+}
+
+/// Fork addition: [`install`] with a host callback run after each saved image.
+pub fn install_with_saved_image_hook(
+    registry: &mut ExtensionRegistryBuilder<Config>,
+    auth_manager: Arc<AuthManager>,
+    resolve_save_root: impl Fn(&Config) -> Option<AbsolutePathBuf> + Send + Sync + 'static,
+    saved_image_hook: Option<SavedImageHook>,
+) {
     let extension = Arc::new(ImageGenerationExtension {
         auth_manager,
         resolve_save_root: Arc::new(resolve_save_root),
+        saved_image_hook,
     });
     registry.thread_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());

@@ -33,6 +33,7 @@ codex-models-manager = { workspace = true }
 codex-protocol = { workspace = true }
 codex-rollout = { workspace = true }
 codex-skills-extension = { workspace = true }
+codex-utils-absolute-path = { workspace = true }
 codex-web-search-extension = { workspace = true }
 pyo3 = { version = "0.29.2", features = ["abi3-py310"], optional = true }
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"], optional = true }

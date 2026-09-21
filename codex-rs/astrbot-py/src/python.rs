@@ -5,6 +5,9 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use codex_image_generation_extension::SavedImage;
+use codex_image_generation_extension::SavedImageHook;
+
 use super::engine::Engine;
 use super::engine::EngineOptions;
 use super::engine::ReviewRequest;
@@ -29,6 +32,71 @@ struct Runtime {
 
 #[pymethods]
 impl Runtime {
+    /// Test seam: call the registered saved-image hook as Codex would, and
+    /// return what it produced. Lets a host verify the Rust -> Python async
+    /// round trip without spending an image generation.
+    fn _fire_saved_image_hook<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        call_id: String,
+        saved_path: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        let saved_path = codex_utils_absolute_path::AbsolutePathBuf::try_from(
+            std::path::PathBuf::from(saved_path),
+        )
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(engine
+                .fire_saved_image_hook(SavedImage {
+                    thread_id,
+                    call_id,
+                    saved_path,
+                })
+                .await)
+        })
+    }
+
+    /// Register `async def callback(thread_id, call_id, saved_path) -> str | None`,
+    /// awaited after Codex saves a generated image. The string it returns is
+    /// what the model sees as the tool result; `None` keeps Codex's own hint.
+    /// Must be called from inside a running asyncio loop, which is where the
+    /// callback will run. Pass `None` to remove it.
+    #[pyo3(signature = (callback))]
+    fn set_saved_image_hook(&self, py: Python<'_>, callback: Option<Py<PyAny>>) -> PyResult<()> {
+        let Some(callback) = callback else {
+            self.engine.set_saved_image_hook(None);
+            return Ok(());
+        };
+        let locals = pyo3_async_runtimes::tokio::get_current_locals(py)?;
+        let callback = Arc::new(callback);
+        let hook: SavedImageHook = Arc::new(move |image: SavedImage| {
+            let callback = Arc::clone(&callback);
+            let locals = locals.clone();
+            Box::pin(async move {
+                let saved_path = image.saved_path.as_path().to_string_lossy().into_owned();
+                let pending = Python::attach(|py| {
+                    let awaitable =
+                        callback
+                            .bind(py)
+                            .call1((image.thread_id, image.call_id, saved_path))?;
+                    pyo3_async_runtimes::into_future_with_locals(&locals, awaitable)
+                });
+                let result = match pending {
+                    Ok(pending) => pending.await,
+                    Err(err) => Err(err),
+                };
+                // The host logs its own failures; an exception that still
+                // escapes it only means Codex's built-in hint is used.
+                let value = result.ok()?;
+                Python::attach(|py| value.bind(py).extract::<Option<String>>().ok().flatten())
+            })
+        });
+        self.engine.set_saved_image_hook(Some(hook));
+        Ok(())
+    }
+
     /// Create a runtime. `options_json`: `{"codex_home", "config", "codex_self_exe", "code_mode_host"}`.
     #[staticmethod]
     fn create<'py>(py: Python<'py>, options_json: String) -> PyResult<Bound<'py, PyAny>> {

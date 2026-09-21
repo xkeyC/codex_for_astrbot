@@ -51,6 +51,8 @@ use serde_json::Value;
 
 use crate::IMAGE_GEN_NAMESPACE;
 use crate::IMAGEGEN_TOOL_NAME;
+use crate::SavedImage;
+use crate::SavedImageHook;
 use crate::artifact::image_generation_artifact_path;
 use crate::artifact::image_generation_output_hint;
 use crate::backend::CodexImagesBackend;
@@ -62,11 +64,16 @@ const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
     MAX_EXECUTOR_GENERATED_IMAGE_BYTES.div_ceil(3) * 4;
 const IMAGEGEN_DESCRIPTION: &str = include_str!("../imagegen_description.md");
 
+/// Fork addition: how long the host gets to place a saved image before the
+/// built-in hint is used instead. Placing it can mean an upload into a sandbox.
+const SAVED_IMAGE_HOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[derive(Clone)]
 pub(crate) struct ImageGenerationTool {
     backend: CodexImagesBackend,
     save_root: Option<AbsolutePathBuf>,
     thread_id: String,
+    saved_image_hook: Option<SavedImageHook>,
 }
 
 impl ImageGenerationTool {
@@ -75,11 +82,37 @@ impl ImageGenerationTool {
         backend: CodexImagesBackend,
         save_root: Option<AbsolutePathBuf>,
         thread_id: String,
+        saved_image_hook: Option<SavedImageHook>,
     ) -> Self {
         Self {
             backend,
             save_root,
             thread_id,
+            saved_image_hook,
+        }
+    }
+
+    /// Fork addition: the host's hint for a saved image, if it gave one in time.
+    ///
+    /// Runs before the completed item is emitted, so a host that watches the
+    /// event stream as a fallback already knows the image was handled here.
+    pub(crate) async fn host_hint(
+        &self,
+        call_id: &str,
+        saved_path: &AbsolutePathBuf,
+    ) -> Option<String> {
+        let hook = self.saved_image_hook.as_ref()?;
+        let placed = hook(SavedImage {
+            thread_id: self.thread_id.clone(),
+            call_id: call_id.to_string(),
+            saved_path: saved_path.clone(),
+        });
+        match tokio::time::timeout(SAVED_IMAGE_HOOK_TIMEOUT, placed).await {
+            Ok(hint) => hint,
+            Err(_) => {
+                tracing::warn!("saved-image hook timed out for call {call_id}");
+                None
+            }
         }
     }
 }
@@ -224,6 +257,10 @@ impl ImageGenerationTool {
             &result,
         )
         .await;
+        let host_hint = match saved_path.as_ref() {
+            Some(path) => self.host_hint(&call.call_id, path).await,
+            None => None,
+        };
         let item = ImageGenerationItem {
             id: call.call_id.clone(),
             status: "completed".to_string(),
@@ -239,9 +276,11 @@ impl ImageGenerationTool {
         call.turn_item_emitter
             .emit_completed(extension_turn_item(item, legacy_event))
             .await;
-        let output_hint = saved_path.as_ref().and_then(|output_path| {
-            let output_dir = output_path.parent()?;
-            image_generation_output_hint(output_dir.display(), output_path.display())
+        let output_hint = host_hint.or_else(|| {
+            saved_path.as_ref().and_then(|output_path| {
+                let output_dir = output_path.parent()?;
+                image_generation_output_hint(output_dir.display(), output_path.display())
+            })
         });
         Ok(Box::new(GeneratedImageOutput {
             result,

@@ -2482,6 +2482,7 @@ dependencies = [
  "codex-protocol",
  "codex-rollout",
  "codex-skills-extension",
+ "codex-utils-absolute-path",
  "codex-web-search-extension",
  "pyo3",
  "pyo3-async-runtimes",
