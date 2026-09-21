@@ -353,3 +353,14 @@ fn function_payload() -> ToolPayload {
         arguments: "{}".to_string(),
     }
 }
+
+// Fork addition: under AstrBot nothing displays the image, so the hint must not
+// claim otherwise, or the model tells the user a picture arrived that never did.
+#[test]
+fn output_hint_does_not_claim_the_image_was_shown() {
+    let hint = image_generation_output_hint("/tmp", "/tmp/call-1.png").expect("hint should fit");
+
+    assert!(!hint.contains("already displayed"));
+    assert!(hint.contains("NOT been shown to the user"));
+    assert!(hint.contains("you will be told its path"));
+}

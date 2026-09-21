@@ -35,12 +35,19 @@ pub(crate) fn image_generation_artifact_path(
 }
 
 /// Returns the model-facing generated-image path hint, or omits it if it is too large.
+///
+/// Fork change: upstream tells the model the image "is already displayed to the
+/// user", which holds in the TUI. Under AstrBot nothing shows it, and the save
+/// directory lives in CODEX_HOME on the host, outside every tool the model has.
+/// AstrBot copies the image into the chat's workspace and then tells the model
+/// where; this hint only has to keep it from claiming the image was delivered
+/// in the meantime.
 pub(crate) fn image_generation_output_hint(
     image_output_dir: impl Display,
     image_output_path: impl Display,
 ) -> Option<String> {
     let hint = format!(
-        "Generated images are saved to {image_output_dir} as {image_output_path} by default.\nIf you need to use a generated image at another path, copy it and leave the original in place unless the user explicitly asks you to delete it.\nThe generated image is already displayed to the user. There is no need to render it in the final response as a Markdown image or file link."
+        "The image was generated and saved on the host as {image_output_path} (in {image_output_dir}), which none of your tools can reach.\nIt has NOT been shown to the user. A copy is being placed in your workspace and you will be told its path; send it from there, or keep working with it there.\nDo not tell the user the image is already visible, and do not render it as a Markdown image or file link."
     );
     (hint.len() <= MAX_IMAGE_GENERATION_OUTPUT_HINT_BYTES).then_some(hint)
 }
