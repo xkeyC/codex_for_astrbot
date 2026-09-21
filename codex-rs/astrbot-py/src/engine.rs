@@ -344,6 +344,23 @@ impl Engine {
         self.threads.read().await.contains_key(thread_id)
     }
 
+    /// The model a thread runs on and its cumulative token usage, for host-side
+    /// usage stats. `total_token_usage` only grows when a model response
+    /// reports usage, so the difference across a turn is that turn's usage.
+    pub async fn thread_usage(&self, thread_id: &str) -> Result<JsonValue> {
+        let thread = self.thread(thread_id).await?;
+        let snapshot = thread.config_snapshot().await;
+        let total = thread
+            .token_usage_info()
+            .await
+            .map(|info| info.total_token_usage);
+        Ok(json!({
+            "model": snapshot.model,
+            "model_provider": snapshot.model_provider_id,
+            "total_token_usage": total,
+        }))
+    }
+
     pub async fn submit_turn(&self, thread_id: &str, request: TurnRequest) -> Result<JsonValue> {
         let thread = self.thread(thread_id).await?;
         let mut turn = TurnInputRequest::user_input(request.input);

@@ -142,6 +142,16 @@ impl Runtime {
         })
     }
 
+    /// JSON `{"model", "model_provider", "total_token_usage": TokenUsage | null}`
+    /// for a loaded thread.
+    fn thread_usage<'py>(&self, py: Python<'py>, thread_id: String) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let usage = engine.thread_usage(&thread_id).await.map_err(runtime_err)?;
+            Ok(usage.to_string())
+        })
+    }
+
     /// `request_json`: `{"input": [UserInput], "mode", "expected_turn_id",
     /// "additional_context": {key: {"value", "kind"}}, "dynamic_tools", "model", "effort"}`.
     fn submit_turn<'py>(
