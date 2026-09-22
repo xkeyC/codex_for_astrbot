@@ -203,6 +203,7 @@ async fn legacy_custom_ca_fallback_is_limited_to_reqwest_default() {
     .with_legacy_custom_ca_fallback();
 
     match outbound_proxy_policy {
+        OutboundProxyPolicy::Explicit => unreachable!("not a case of this test"),
         OutboundProxyPolicy::ReqwestDefault => {
             let (address, server) = spawn_response_server(vec![
                 "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),

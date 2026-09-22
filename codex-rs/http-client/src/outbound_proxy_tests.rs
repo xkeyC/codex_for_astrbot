@@ -655,3 +655,36 @@ fn system_proxy_cache_key_preserves_url_specific_pac_decisions() {
     );
     assert!(!cache_key.contains(request_url));
 }
+
+#[test]
+fn explicit_proxy_routes_every_destination_through_it() {
+    let factory = HttpClientFactory::with_explicit_proxy("socks5h://127.0.0.1:1080");
+    assert_eq!(
+        factory.outbound_proxy_policy(),
+        OutboundProxyPolicy::Explicit
+    );
+    for url in [
+        "https://chatgpt.com/backend-api/codex/responses",
+        "wss://api.openai.com/v1/realtime?call_id=rtc_1",
+        "http://localhost:8080/",
+    ] {
+        assert_eq!(
+            factory.resolve_proxy_route(url),
+            OutboundProxyRoute::Proxy {
+                url: "socks5h://127.0.0.1:1080".to_string(),
+                no_proxy: None,
+            }
+        );
+    }
+    assert_ne!(
+        factory,
+        HttpClientFactory::with_explicit_proxy("http://127.0.0.1:8080")
+    );
+    factory
+        .build_reqwest_client(
+            reqwest::Client::builder(),
+            "https://chatgpt.com/",
+            ClientRouteClass::Api,
+        )
+        .expect("a socks5 proxy builds a client");
+}

@@ -604,6 +604,7 @@ mod tests {
                         .is_empty()
                 );
             }
+            OutboundProxyPolicy::Explicit => unreachable!("not a case of this test"),
         }
     }
 

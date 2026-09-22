@@ -31,6 +31,7 @@ use codex_api::build_session_headers;
 use codex_api::map_api_error;
 use codex_config::config_toml::RealtimeWsMode;
 use codex_config::config_toml::RealtimeWsVersion;
+use codex_http_client::HttpClientFactory;
 use codex_login::CodexAuth;
 use codex_login::default_client::add_originator_header;
 use codex_login::default_client::default_headers;
@@ -520,6 +521,7 @@ struct RealtimeStart {
     model_client: ModelClient,
     sdp: Option<String>,
     existing_call_id: Option<String>,
+    http_client_factory: HttpClientFactory,
 }
 
 struct RealtimeStartOutput {
@@ -613,6 +615,7 @@ impl RealtimeConversationManager {
             model_client,
             sdp,
             existing_call_id,
+            http_client_factory,
         } = start;
         let event_parser = session_config.event_parser;
         let session_kind = match event_parser {
@@ -653,7 +656,8 @@ impl RealtimeConversationManager {
             audio_rx,
         };
 
-        let client = RealtimeWebsocketClient::new(api_provider);
+        let client = RealtimeWebsocketClient::new(api_provider)
+            .with_http_client_factory(http_client_factory);
         let client = match realtime_sideband_base_url {
             Some(base_url) => client.with_webrtc_sideband_base_url(base_url),
             None => client,
@@ -1606,6 +1610,7 @@ async fn handle_start_inner(
         realtime_call_api_provider,
         session_config,
         model_client: sess.services.model_client.clone(),
+        http_client_factory: sess.get_config().await.http_client_factory(),
         sdp,
         existing_call_id,
     };

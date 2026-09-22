@@ -22,11 +22,13 @@ use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_client::backoff;
+use codex_http_client::HttpClientFactory;
 use codex_http_client::maybe_build_rustls_client_config_with_custom_ca;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
+use codex_websocket_client::WebSocketConnector;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -37,13 +39,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::sleep;
-use tokio_tungstenite::MaybeTlsStream;
-use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -77,9 +76,14 @@ enum WsCommand {
 }
 
 impl WsStream {
-    fn new(
-        inner: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    ) -> (Self, async_channel::Receiver<Result<Message, WsError>>) {
+    fn new<S>(inner: S) -> (Self, async_channel::Receiver<Result<Message, WsError>>)
+    where
+        S: futures::Stream<Item = Result<Message, WsError>>
+            + futures::Sink<Message, Error = WsError>
+            + Unpin
+            + Send
+            + 'static,
+    {
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = async_channel::unbounded::<Result<Message, WsError>>();
 
@@ -106,7 +110,7 @@ impl WsStream {
                             }
                             WsCommand::Close { tx_result } => {
                                 info!("realtime websocket sending close");
-                                let result = inner.close(None).await;
+                                let result = SinkExt::close(&mut inner).await;
                                 if let Err(err) = &result {
                                     error!("realtime websocket close failed: {err}");
                                 }
@@ -768,6 +772,9 @@ fn contains_transcript_entry(entries: &[RealtimeTranscriptEntry], role: &str, te
 pub struct RealtimeWebsocketClient {
     provider: Provider,
     webrtc_sideband_base_url: String,
+    /// Routes the connection like the rest of Codex's traffic (proxy settings); without it the
+    /// connection is made by Tungstenite's default dialer.
+    http_client_factory: Option<HttpClientFactory>,
 }
 
 #[derive(Clone, Copy)]
@@ -782,7 +789,14 @@ impl RealtimeWebsocketClient {
         Self {
             provider,
             webrtc_sideband_base_url: OPENAI_REALTIME_API_BASE_URL.to_string(),
+            http_client_factory: None,
         }
+    }
+
+    /// Connects through the outbound routing (proxy) of `http_client_factory`.
+    pub fn with_http_client_factory(mut self, http_client_factory: HttpClientFactory) -> Self {
+        self.http_client_factory = Some(http_client_factory);
+        self
     }
 
     /// Overrides the direct WebRTC sideband URL for local development and tests.
@@ -960,26 +974,38 @@ impl RealtimeWebsocketClient {
         request.headers_mut().extend(headers);
 
         info!("connecting realtime websocket: {ws_url}");
-        // Realtime websocket TLS should honor the same custom-CA env vars as the rest of Codex's
-        // outbound HTTPS and websocket traffic.
-        let connector = maybe_build_rustls_client_config_with_custom_ca()
-            .map_err(|err| ApiError::Stream(format!("failed to configure websocket TLS: {err}")))?
-            .map(tokio_tungstenite::Connector::Rustls);
-        let (stream, response) = tokio_tungstenite::connect_async_tls_with_config(
-            request,
-            Some(websocket_config()),
-            false,
-            connector,
-        )
-        .await
-        .map_err(map_realtime_websocket_connect_error)?;
-        info!(
-            ws_url = %ws_url,
-            status = %response.status(),
-            "realtime websocket connected"
-        );
+        let (stream, rx_message, status) = if let Some(factory) = &self.http_client_factory {
+            // The same routing (proxy) and custom-CA handling as Codex's other websockets.
+            let connector = WebSocketConnector::new(factory).map_err(|err| {
+                ApiError::Stream(format!("failed to configure websocket TLS: {err}"))
+            })?;
+            let (stream, response) = connector
+                .connect(request, websocket_config())
+                .await
+                .map_err(map_realtime_websocket_connect_error)?;
+            let (stream, rx_message) = WsStream::new(stream);
+            (stream, rx_message, response.status())
+        } else {
+            // Realtime websocket TLS should honor the same custom-CA env vars as the rest of
+            // Codex's outbound HTTPS and websocket traffic.
+            let connector = maybe_build_rustls_client_config_with_custom_ca()
+                .map_err(|err| {
+                    ApiError::Stream(format!("failed to configure websocket TLS: {err}"))
+                })?
+                .map(tokio_tungstenite::Connector::Rustls);
+            let (stream, response) = tokio_tungstenite::connect_async_tls_with_config(
+                request,
+                Some(websocket_config()),
+                /*disable_nagle*/ false,
+                connector,
+            )
+            .await
+            .map_err(map_realtime_websocket_connect_error)?;
+            let (stream, rx_message) = WsStream::new(stream);
+            (stream, rx_message, response.status())
+        };
+        info!(ws_url = %ws_url, status = %status, "realtime websocket connected");
 
-        let (stream, rx_message) = WsStream::new(stream);
         let connection = RealtimeWebsocketConnection::new(
             stream,
             rx_message,

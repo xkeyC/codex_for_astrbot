@@ -101,6 +101,10 @@ pub enum OutboundProxyPolicy {
     ReqwestDefault,
     /// Resolve system/PAC/WPAD settings, then environment settings, then direct routing.
     RespectSystemProxy,
+    /// Route every destination through one configured proxy URL (`http://`, `https://`,
+    /// `socks5://` or `socks5h://`), ignoring system and environment settings. The URL is
+    /// carried by the factory; see [`HttpClientFactory::with_explicit_proxy`].
+    Explicit,
 }
 
 /// Privacy-safe macOS system proxy configuration for one outbound destination.
@@ -165,12 +169,15 @@ impl fmt::Debug for OutboundProxyRoute {
 #[derive(Clone)]
 pub struct HttpClientFactory {
     outbound_proxy_policy: OutboundProxyPolicy,
+    /// Proxy URL of [`OutboundProxyPolicy::Explicit`].
+    explicit_proxy: Option<Arc<str>>,
     chatgpt_cookie_store: Option<Arc<ChatGptCookieStore>>,
 }
 
 impl PartialEq for HttpClientFactory {
     fn eq(&self, other: &Self) -> bool {
         self.outbound_proxy_policy == other.outbound_proxy_policy
+            && self.explicit_proxy == other.explicit_proxy
             && self
                 .chatgpt_cookie_store
                 .as_ref()
@@ -197,8 +204,28 @@ impl HttpClientFactory {
     pub const fn new(outbound_proxy_policy: OutboundProxyPolicy) -> Self {
         Self {
             outbound_proxy_policy,
+            explicit_proxy: None,
             chatgpt_cookie_store: None,
         }
+    }
+
+    /// Creates a factory that sends every request through `proxy_url`
+    /// ([`OutboundProxyPolicy::Explicit`]).
+    pub fn with_explicit_proxy(proxy_url: impl Into<Arc<str>>) -> Self {
+        Self {
+            outbound_proxy_policy: OutboundProxyPolicy::Explicit,
+            explicit_proxy: Some(proxy_url.into()),
+            chatgpt_cookie_store: None,
+        }
+    }
+
+    fn explicit_route(&self) -> Option<OutboundProxyRoute> {
+        self.explicit_proxy
+            .as_ref()
+            .map(|url| OutboundProxyRoute::Proxy {
+                url: url.to_string(),
+                no_proxy: None,
+            })
     }
 
     /// Adds process-scoped cookies to requests made by ChatGPT cookie-store clients.
@@ -230,6 +257,9 @@ impl HttpClientFactory {
     /// resolution is unavailable, explicit environment settings are resolved before falling back
     /// to a direct route.
     pub fn resolve_proxy_route(&self, request_url: &str) -> OutboundProxyRoute {
+        if let Some(route) = self.explicit_route() {
+            return route;
+        }
         resolve_proxy_route(
             &ProcessEnv,
             request_url,
@@ -243,6 +273,9 @@ impl HttpClientFactory {
         &self,
         request_url: String,
     ) -> io::Result<OutboundProxyRoute> {
+        if let Some(route) = self.explicit_route() {
+            return Ok(route);
+        }
         if matches!(
             self.outbound_proxy_policy,
             OutboundProxyPolicy::ReqwestDefault
@@ -292,6 +325,9 @@ impl HttpClientFactory {
         request_url: &str,
         route_class: ClientRouteClass,
     ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
+        if let Some(route) = self.explicit_route() {
+            return self.build_reqwest_client_for_resolved_route(builder, route_class, &route);
+        }
         build_reqwest_client_for_route(
             builder,
             request_url,

@@ -6940,6 +6940,10 @@
       ],
       "description": "OTEL configuration."
     },
+    "outbound_proxy": {
+      "description": "Proxy for all of Codex's outbound HTTP and WebSocket traffic: `http://`, `https://`, `socks5://` or `socks5h://` (credentials may be embedded). Takes precedence over system and environment proxy settings.",
+      "type": "string"
+    },
     "permissions": {
       "allOf": [
         {

@@ -757,7 +757,9 @@ impl RouteAwareClientPool {
             }
             (OutboundProxyPolicy::ReqwestDefault, CustomCaFallback::Disabled)
             | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::Disabled)
-            | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::LegacyTransportDefault) => {
+            | (OutboundProxyPolicy::RespectSystemProxy, CustomCaFallback::LegacyTransportDefault)
+            | (OutboundProxyPolicy::Explicit, CustomCaFallback::Disabled)
+            | (OutboundProxyPolicy::Explicit, CustomCaFallback::LegacyTransportDefault) => {
                 client_builder.build_for_resolved_route(
                     &self.http_client_factory,
                     self.route_class,
@@ -787,9 +789,10 @@ impl RouteAwareClientPool {
 
     fn follows_redirects_manually(&self) -> bool {
         self.client_builder.follows_redirects()
-            && (self.http_client_factory.outbound_proxy_policy()
-                == OutboundProxyPolicy::RespectSystemProxy
-                || self.rustls_clients.is_some())
+            && (matches!(
+                self.http_client_factory.outbound_proxy_policy(),
+                OutboundProxyPolicy::RespectSystemProxy | OutboundProxyPolicy::Explicit
+            ) || self.rustls_clients.is_some())
     }
 
     fn rustls_client_for_route(

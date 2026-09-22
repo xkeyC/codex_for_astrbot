@@ -990,6 +990,10 @@ pub struct Config {
     /// Whether Codex-owned clients should respect host system proxy settings.
     pub respect_system_proxy: bool,
 
+    /// Proxy URL every Codex-owned client goes through, overriding system and environment
+    /// proxy settings.
+    pub outbound_proxy: Option<String>,
+
     /// Optional product SKU forwarded to the host-owned apps MCP server.
     pub apps_mcp_product_sku: Option<String>,
 
@@ -1657,12 +1661,13 @@ impl Config {
 
     /// Creates the HTTP client factory resolved from the effective feature configuration.
     pub fn http_client_factory(&self) -> HttpClientFactory {
-        let outbound_proxy_policy = if self.respect_system_proxy {
-            OutboundProxyPolicy::RespectSystemProxy
+        let factory = if let Some(proxy) = &self.outbound_proxy {
+            HttpClientFactory::with_explicit_proxy(proxy.as_str())
+        } else if self.respect_system_proxy {
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy)
         } else {
-            OutboundProxyPolicy::ReqwestDefault
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
         };
-        let factory = HttpClientFactory::new(outbound_proxy_policy);
         if self.features.enabled(Feature::Psp) {
             factory.with_chatgpt_cookies([HeaderValue::from_static("oai-chat-psp=true")])
         } else {
@@ -3034,12 +3039,17 @@ pub fn resolve_bootstrap_http_client_factory(
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<HttpClientFactory> {
     resolve_bootstrap_respect_system_proxy(cfg, feature_requirements).map(|respect_system_proxy| {
-        let outbound_proxy_policy = if respect_system_proxy {
-            OutboundProxyPolicy::RespectSystemProxy
+        if let Some(proxy) = cfg
+            .outbound_proxy
+            .as_deref()
+            .filter(|proxy| !proxy.trim().is_empty())
+        {
+            HttpClientFactory::with_explicit_proxy(proxy)
+        } else if respect_system_proxy {
+            HttpClientFactory::new(OutboundProxyPolicy::RespectSystemProxy)
         } else {
-            OutboundProxyPolicy::ReqwestDefault
-        };
-        HttpClientFactory::new(outbound_proxy_policy)
+            HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault)
+        }
     })
 }
 
@@ -4344,6 +4354,10 @@ impl Config {
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             respect_system_proxy,
+            outbound_proxy: cfg
+                .outbound_proxy
+                .clone()
+                .filter(|proxy| !proxy.trim().is_empty()),
             apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
             responses_api_metadata: cfg.responses_api_metadata.unwrap_or_default(),
             realtime_audio: cfg
