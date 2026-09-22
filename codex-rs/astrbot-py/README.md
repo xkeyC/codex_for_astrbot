@@ -33,6 +33,21 @@ under `~/.cache/codex-astrbot/v8/<version>/`.
 Helper binaries land in `codex_astrbot/bin/`; `codex_astrbot.bundled_executable(name)`
 returns their installed path, which is what AstrBot looks up by default.
 
+## Realtime voice
+
+`Runtime.realtime_start(thread_id, request_json)` attaches a realtime (voice)
+conversation to a loaded thread; the realtime model hands tasks off to that
+thread. With `{"transport": {"type": "webrtc", "sdp": offer}}` the host keeps
+the media (e.g. with aiortc) and receives the answer as a
+`realtime_conversation_sdp` event; this transport works with a ChatGPT account,
+while `websocket` needs an API key. `realtime_append_text`,
+`realtime_append_speech`, `realtime_append_audio` (websocket only),
+`realtime_stop` and `Runtime.realtime_list_voices()` cover the rest; realtime
+events come through `next_event` like any other.
+
+`Runtime.create` accepts `"originator"` to send another client identity
+(`originator` header and User-Agent), e.g. `codex-tui` as the official TUI does.
+
 ## Development
 
 ```bash

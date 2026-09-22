@@ -13,6 +13,9 @@ use super::engine::EngineOptions;
 use super::engine::ReviewRequest;
 use super::engine::ThreadParams;
 use super::engine::TurnRequest;
+use super::realtime::RealtimeStartRequest;
+use super::realtime::list_voices;
+use super::realtime::parse_text_role;
 
 /// Codex worker threads run deep async stacks; match the CLI's 16 MiB.
 const THREAD_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
@@ -97,7 +100,8 @@ impl Runtime {
         Ok(())
     }
 
-    /// Create a runtime. `options_json`: `{"codex_home", "config", "codex_self_exe", "code_mode_host"}`.
+    /// Create a runtime. `options_json`: `{"codex_home", "config", "codex_self_exe",
+    /// "code_mode_host", "approve_every_command", "originator"}`.
     #[staticmethod]
     fn create<'py>(py: Python<'py>, options_json: String) -> PyResult<Bound<'py, PyAny>> {
         let options: EngineOptions = parse(&options_json)?;
@@ -257,6 +261,106 @@ impl Runtime {
                 .map_err(runtime_err)?;
             Ok(())
         })
+    }
+
+    /// Start a realtime (voice) conversation on the thread. `request_json`:
+    /// `{"transport": {"type": "webrtc", "sdp"} | {"type": "websocket"} |
+    /// {"type": "existing_call", "call_id"}, "output_modality", "voice",
+    /// "version", "prompt", "client_managed_handoffs", ...}`. The WebRTC
+    /// answer arrives as a `realtime_conversation_sdp` event.
+    fn realtime_start<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        request_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let request: RealtimeStartRequest = parse(&request_json)?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .realtime_start(&thread_id, request)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    /// `role`: `"user"` (default), `"developer"` or `"assistant"`.
+    #[pyo3(signature = (thread_id, text, role = "user"))]
+    fn realtime_append_text<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        text: String,
+        role: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let role = parse_text_role(role).map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .realtime_append_text(&thread_id, text, role)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    fn realtime_append_speech<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        text: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .realtime_append_speech(&thread_id, text)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    /// Websocket transport only. `frame_json`: `{"data": base64 PCM16,
+    /// "sample_rate", "num_channels", "samples_per_channel"?}`.
+    fn realtime_append_audio<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+        frame_json: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let frame = parse(&frame_json)?;
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .realtime_append_audio(&thread_id, frame)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    fn realtime_stop<'py>(
+        &self,
+        py: Python<'py>,
+        thread_id: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let engine = Arc::clone(&self.engine);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            engine
+                .realtime_stop(&thread_id)
+                .await
+                .map_err(runtime_err)?;
+            Ok(())
+        })
+    }
+
+    /// `{"v1": [voice], "v2": [voice], "defaultV1", "defaultV2"}` as JSON.
+    /// WebRTC sessions run on v1.
+    #[staticmethod]
+    fn realtime_list_voices() -> PyResult<String> {
+        serde_json::to_string(&list_voices())
+            .map_err(|err| PyRuntimeError::new_err(err.to_string()))
     }
 
     fn interrupt<'py>(&self, py: Python<'py>, thread_id: String) -> PyResult<Bound<'py, PyAny>> {

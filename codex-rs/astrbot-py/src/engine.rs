@@ -77,6 +77,13 @@ pub struct EngineOptions {
     /// files no longer accept `approval_policy = "untrusted"`.
     #[serde(default)]
     pub approve_every_command: bool,
+    /// `originator` header, User-Agent prefix and suffix for every request of
+    /// this process, as an app-server client with this `clientInfo.name` gets
+    /// them; defaults to `astrbot`. The official TUI is `codex-tui`. Threads
+    /// resumed from a rollout keep the originator recorded there. Only the
+    /// first runtime of a process can set it.
+    #[serde(default)]
+    pub originator: Option<String>,
 }
 
 /// Per-thread parameters for start and resume.
@@ -178,7 +185,19 @@ impl Engine {
         if !options.codex_home.is_absolute() {
             options.codex_home = std::env::current_dir()?.join(&options.codex_home);
         }
-        let _ = codex_login::default_client::set_default_originator(ORIGINATOR.to_string());
+        match options.originator.clone() {
+            // Same identity an app-server client with this name gets.
+            Some(originator) => {
+                if codex_login::default_client::set_default_originator(originator.clone()).is_ok()
+                    && let Ok(mut suffix) = codex_login::default_client::USER_AGENT_SUFFIX.lock()
+                {
+                    *suffix = Some(format!("{originator}; {}", env!("CARGO_PKG_VERSION")));
+                }
+            }
+            None => {
+                let _ = codex_login::default_client::set_default_originator(ORIGINATOR.to_string());
+            }
+        }
         let base_overrides = json_overrides_to_toml(&options.config)?;
         let config = build_config(&options, &base_overrides, &ThreadParams::default()).await?;
         let state_db = init_state_db(&config).await;
