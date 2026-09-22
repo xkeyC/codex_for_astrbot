@@ -267,7 +267,9 @@ impl Runtime {
     /// `{"transport": {"type": "webrtc", "sdp"} | {"type": "websocket"} |
     /// {"type": "existing_call", "call_id"}, "output_modality", "voice",
     /// "version", "prompt", "client_managed_handoffs", ...}`. The WebRTC
-    /// answer arrives as a `realtime_conversation_sdp` event.
+    /// answer arrives as a `realtime_conversation_sdp` event; a failed start
+    /// as a `realtime_conversation_realtime` event with an `Error` payload.
+    /// Subscription WebRTC calls need `"version": "v3"`.
     fn realtime_start<'py>(
         &self,
         py: Python<'py>,
@@ -355,8 +357,8 @@ impl Runtime {
         })
     }
 
-    /// `{"v1": [voice], "v2": [voice], "defaultV1", "defaultV2"}` as JSON.
-    /// WebRTC sessions run on v1.
+    /// `{"v1": [voice], "v2": [voice], "defaultV1", "defaultV2"}` as JSON
+    /// (camelCase keys). Realtime v1 and v3 take the `v1` voices.
     #[staticmethod]
     fn realtime_list_voices() -> PyResult<String> {
         serde_json::to_string(&list_voices())

@@ -188,10 +188,27 @@ impl Engine {
         match options.originator.clone() {
             // Same identity an app-server client with this name gets.
             Some(originator) => {
-                if codex_login::default_client::set_default_originator(originator.clone()).is_ok()
-                    && let Ok(mut suffix) = codex_login::default_client::USER_AGENT_SUFFIX.lock()
-                {
-                    *suffix = Some(format!("{originator}; {}", env!("CARGO_PKG_VERSION")));
+                use codex_login::default_client::SetOriginatorError;
+                match codex_login::default_client::set_default_originator(originator.clone()) {
+                    Ok(()) => {
+                        if let Ok(mut suffix) =
+                            codex_login::default_client::USER_AGENT_SUFFIX.lock()
+                        {
+                            *suffix = Some(format!("{originator}; {}", env!("CARGO_PKG_VERSION")));
+                        }
+                    }
+                    Err(SetOriginatorError::InvalidHeaderValue) => {
+                        return Err(anyhow!(
+                            "originator {originator:?} is not a valid header value"
+                        ));
+                    }
+                    Err(SetOriginatorError::AlreadyInitialized) => {
+                        if codex_login::default_client::originator().value != originator {
+                            return Err(anyhow!(
+                                "originator is already set for this process; only the first runtime can set it"
+                            ));
+                        }
+                    }
                 }
             }
             None => {

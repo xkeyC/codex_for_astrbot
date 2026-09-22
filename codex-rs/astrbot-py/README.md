@@ -37,10 +37,12 @@ returns their installed path, which is what AstrBot looks up by default.
 
 `Runtime.realtime_start(thread_id, request_json)` attaches a realtime (voice)
 conversation to a loaded thread; the realtime model hands tasks off to that
-thread. With `{"transport": {"type": "webrtc", "sdp": offer}}` the host keeps
-the media (e.g. with aiortc) and receives the answer as a
-`realtime_conversation_sdp` event; this transport works with a ChatGPT account,
-while `websocket` needs an API key. `realtime_append_text`,
+thread. With `{"transport": {"type": "webrtc", "sdp": offer}, "version": "v3"}`
+the host keeps the media (e.g. with aiortc) and receives the answer as a
+`realtime_conversation_sdp` event; this transport works with a ChatGPT account
+(which only accepts realtime v3), while `websocket` needs an API key. A failed
+start arrives as a `realtime_conversation_realtime` event with an `Error`
+payload. `realtime_append_text`,
 `realtime_append_speech`, `realtime_append_audio` (websocket only),
 `realtime_stop` and `Runtime.realtime_list_voices()` cover the rest; realtime
 events come through `next_event` like any other.

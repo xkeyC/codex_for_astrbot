@@ -131,6 +131,8 @@ fn rejects_unknown_fields_and_transports() {
         json!({"transprot": {"type": "webrtc", "sdp": "v=0"}}),
         json!({"transport": {"type": "sip"}}),
         json!({"transport": {"type": "webrtc"}}),
+        json!({"transport": {"type": "websocket", "sdp": "v=0"}}),
+        json!({"initial_items": [{"text": "x", "rol": "developer"}]}),
     ] {
         assert!(
             serde_json::from_value::<RealtimeStartRequest>(request.clone()).is_err(),

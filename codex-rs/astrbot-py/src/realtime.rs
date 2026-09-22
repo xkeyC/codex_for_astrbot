@@ -32,17 +32,18 @@ use serde::Deserializer;
 use crate::engine::Engine;
 
 #[derive(Debug, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RealtimeTransport {
     /// Media over a WebRTC call the host terminates; `sdp` is its offer.
     Webrtc { sdp: String },
     /// Audio as base64 PCM through core. Needs API key auth.
-    Websocket,
+    Websocket {},
     /// Attach the sideband to a call the host created itself.
     ExistingCall { call_id: String },
 }
 
 #[derive(Debug, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RealtimeTextItem {
     pub text: String,
     #[serde(default)]
@@ -50,6 +51,9 @@ pub struct RealtimeTextItem {
 }
 
 /// `realtime_start` request. Omitted fields take the app server's defaults.
+///
+/// Keys are snake_case; `codex_response_handoff_mode` values are camelCase
+/// (`thinking`, `commentary`, `bemTags`) as in the app-server API.
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RealtimeStartRequest {
@@ -139,7 +143,7 @@ impl RealtimeStartRequest {
             realtime_session_id: self.realtime_session_id,
             transport: self.transport.map(|transport| match transport {
                 RealtimeTransport::Webrtc { sdp } => ConversationStartTransport::Webrtc { sdp },
-                RealtimeTransport::Websocket => ConversationStartTransport::Websocket,
+                RealtimeTransport::Websocket {} => ConversationStartTransport::Websocket,
                 RealtimeTransport::ExistingCall { call_id } => {
                     ConversationStartTransport::ExistingCall {
                         call_id,
@@ -165,9 +169,11 @@ pub fn list_voices() -> RealtimeVoicesList {
 
 impl Engine {
     /// Starts a realtime conversation on the thread. The outcome arrives as
-    /// events: `realtime_conversation_sdp` (WebRTC answer), then
-    /// `realtime_conversation_started`, or `realtime_conversation_closed`
-    /// with a reason if it failed.
+    /// events: `realtime_conversation_started`, then `realtime_conversation_sdp`
+    /// (the WebRTC answer). A failed start sends only a
+    /// `realtime_conversation_realtime` event whose payload is `Error`; treat
+    /// that as the end of the start. ChatGPT (subscription) WebRTC calls need
+    /// `version: "v3"`: without a version core picks v1, which they reject.
     pub async fn realtime_start(
         &self,
         thread_id: &str,
