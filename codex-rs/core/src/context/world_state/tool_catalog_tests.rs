@@ -11,11 +11,12 @@ fn tool(global_name: &str, group: &str, description: &str) -> CatalogTool {
         global_name: global_name.to_string(),
         group: group.to_string(),
         description: description.to_string(),
-        group_description: if group == "astrbot__" {
-            "AstrBot plugin tools for the current chat session.\nMore detail.".to_string()
-        } else {
-            String::new()
-        },
+        group_description: match group {
+            "astrbot__" => "AstrBot tools for the current chat session.\nMore detail.",
+            "astrbot__harness__" => "Plugin harness: test tools.",
+            _ => "",
+        }
+        .to_string(),
     }
 }
 
@@ -37,6 +38,17 @@ fn lists_tools_by_prefix_with_short_descriptions() {
             "Search the web. Returns titles & links.\nArgs: query.",
         ),
         tool("astrbot__send_file", "astrbot__", "Send a file to the user"),
+        tool(
+            "astrbot__harness__harness_weather",
+            "astrbot__harness__",
+            "Get the weather.",
+        ),
+        tool(
+            "astrbot__mcp_time__now",
+            "astrbot__mcp_time__",
+            "Current time.",
+        ),
+        tool("mcp__docs__search", "mcp__docs__", "Search the docs."),
         tool("memories__read", "memories__", "读取一条记忆。支持分页。"),
         tool("lookup", "", ""),
     ]);
@@ -44,12 +56,19 @@ fn lists_tools_by_prefix_with_short_descriptions() {
     assert_eq!(
         render(&state, PreviousSectionState::Absent).as_deref(),
         Some(
-            "<tools>\nTools callable in `exec` besides those in its description, as `await tools.<prefix><name>(args)`. Each `ALL_TOOLS` entry's description shows a tool's arguments.\n\
+            "<tools>\nTools callable in `exec` besides those in its description. Call one as `await tools.<prefix><name>(args)`, the prefix joining its headings: `a__` then `b__` gives `tools.a__b__<name>`. Each `ALL_TOOLS` entry's description shows a tool's arguments.\n\
 (no prefix)\n\
 - lookup\n\
-astrbot__ — AstrBot plugin tools for the current chat session.\n\
+astrbot__ — AstrBot tools for the current chat session.\n\
 - send_file: Send a file to the user\n\
-- web_search: Search the web.\n\
+- web_search: Search the web.\n  \
+harness__ — Plugin harness: test tools.\n  \
+- harness_weather: Get the weather.\n  \
+mcp_time__\n  \
+- now: Current time.\n\
+mcp__\n  \
+docs__\n  \
+- search: Search the docs.\n\
 memories__\n\
 - read: 读取一条记忆。\n\
 </tools>"
@@ -71,6 +90,11 @@ fn appends_only_what_changed() {
             "Search the web or news.",
         ),
         tool("astrbot__draw", "astrbot__", "Draw a picture."),
+        tool(
+            "astrbot__harness__harness_weather",
+            "astrbot__harness__",
+            "Get the weather.",
+        ),
         tool("mcp__time__now", "mcp__time__", "Current time."),
     ]);
     let previous = before.snapshot();
@@ -84,12 +108,15 @@ fn appends_only_what_changed() {
         Some(
             "<tools>\nThe tools callable in `exec` changed.\n\
 Loaded:\n\
-astrbot__ — AstrBot plugin tools for the current chat session.\n\
-- draw: Draw a picture.\n\
-mcp__time__\n\
+astrbot__ — AstrBot tools for the current chat session.\n\
+- draw: Draw a picture.\n  \
+harness__ — Plugin harness: test tools.\n  \
+- harness_weather: Get the weather.\n\
+mcp__\n  \
+time__\n  \
 - now: Current time.\n\
 Updated:\n\
-astrbot__ — AstrBot plugin tools for the current chat session.\n\
+astrbot__ — AstrBot tools for the current chat session.\n\
 - web_search: Search the web or news.\n\
 Unloaded:\n\
 - astrbot__: weather\n\

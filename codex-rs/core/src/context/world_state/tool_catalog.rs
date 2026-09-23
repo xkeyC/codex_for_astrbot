@@ -1,7 +1,8 @@
 //! Fork addition: a catalog of the deferred tools code mode can call.
 //!
 //! Lists each deferred nested tool with a short description, grouped by its
-//! `namespace__` prefix, as a developer message in history rather than in the
+//! `namespace__` prefix (a `top__sub__` prefix nests under `top__`), as a
+//! developer message in history rather than in the
 //! instructions or the `exec` description, so the cached prefix stays the
 //! same. Later steps only append what changed: tools loaded, unloaded, or
 //! described differently.
@@ -24,9 +25,9 @@ const MAX_LISTED_BYTES: usize = 12 * 1024;
 const MAX_TOOL_DESCRIPTION_CHARS: usize = 100;
 const MAX_GROUP_DESCRIPTION_CHARS: usize = 160;
 
-const FULL_INTRO: &str = "Tools callable in `exec` besides those in its description, as \
-`await tools.<prefix><name>(args)`. Each `ALL_TOOLS` entry's description shows a tool's \
-arguments.\n";
+const FULL_INTRO: &str = "Tools callable in `exec` besides those in its description. Call \
+one as `await tools.<prefix><name>(args)`, the prefix joining its headings: `a__` then `b__` \
+gives `tools.a__b__<name>`. Each `ALL_TOOLS` entry's description shows a tool's arguments.\n";
 const DIFF_INTRO: &str = "The tools callable in `exec` changed.\n";
 const OTHER_GROUP_LABEL: &str = "(no prefix)";
 
@@ -149,20 +150,20 @@ impl WorldStateSection for ToolCatalogState {
 
 fn render_full(current: &ToolCatalogSnapshot) -> String {
     let mut rendered = format!("\n{FULL_INTRO}");
-    for (prefix, group) in &current.groups {
-        push_group_header(&mut rendered, prefix, &group.description);
-        for (name, description) in &group.tools {
-            push_tool(&mut rendered, name, description);
-        }
-    }
+    let groups = current
+        .groups
+        .iter()
+        .map(|(prefix, group)| (prefix.as_str(), group, group.tools.iter().collect()))
+        .collect::<Vec<_>>();
+    push_groups(&mut rendered, &groups, current);
     push_omitted(&mut rendered, current.omitted);
     rendered
 }
 
 fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot) -> String {
     let empty = CatalogGroup::default();
-    let mut loaded = String::new();
-    let mut updated = String::new();
+    let mut loaded = Vec::new();
+    let mut updated = Vec::new();
     let mut unloaded = String::new();
     let prefixes = previous
         .groups
@@ -179,10 +180,7 @@ fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot)
             .filter(|(name, _)| !before.tools.contains_key(*name))
             .collect::<Vec<_>>();
         if !added.is_empty() {
-            push_group_header(&mut loaded, prefix, &after.description);
-            for (name, description) in added {
-                push_tool(&mut loaded, name, description);
-            }
+            loaded.push((prefix.as_str(), after, added));
         }
 
         let changed = after
@@ -201,10 +199,7 @@ fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot)
             .any(|name| after.tools.contains_key(name))
             && before.description != after.description;
         if !changed.is_empty() || group_redescribed {
-            push_group_header(&mut updated, prefix, &after.description);
-            for (name, description) in changed {
-                push_tool(&mut updated, name, description);
-            }
+            updated.push((prefix.as_str(), after, changed));
         }
 
         let removed = before
@@ -223,16 +218,16 @@ fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot)
     }
 
     let mut rendered = format!("\n{DIFF_INTRO}");
-    for (label, section) in [
-        ("Loaded", loaded),
-        ("Updated", updated),
-        ("Unloaded", unloaded),
-    ] {
-        if !section.is_empty() {
+    for (label, groups) in [("Loaded", loaded), ("Updated", updated)] {
+        if !groups.is_empty() {
             rendered.push_str(label);
             rendered.push_str(":\n");
-            rendered.push_str(&section);
+            push_groups(&mut rendered, &groups, current);
         }
+    }
+    if !unloaded.is_empty() {
+        rendered.push_str("Unloaded:\n");
+        rendered.push_str(&unloaded);
     }
     if current.omitted != previous.omitted {
         push_omitted(&mut rendered, current.omitted);
@@ -251,8 +246,45 @@ fn group_label(prefix: &str) -> &str {
     }
 }
 
-fn push_group_header(rendered: &mut String, prefix: &str, description: &str) {
-    push_escaped(rendered, group_label(prefix));
+/// One group to print: its prefix, the group, and the tools to list.
+type GroupListing<'a> = (&'a str, &'a CatalogGroup, Vec<(&'a String, &'a String)>);
+
+/// Prints groups in prefix order, nesting `top__sub__` under a `top__`
+/// heading; a heading takes the description of the `top__` group itself.
+fn push_groups(rendered: &mut String, groups: &[GroupListing<'_>], current: &ToolCatalogSnapshot) {
+    let mut current_top = None;
+    for (prefix, group, tools) in groups {
+        let (top, sub) = split_prefix(prefix);
+        if current_top != Some(top) {
+            current_top = Some(top);
+            let description = current
+                .groups
+                .get(top)
+                .map_or("", |group| group.description.as_str());
+            push_heading(rendered, "", group_label(top), description);
+        }
+        let indent = if sub.is_empty() {
+            ""
+        } else {
+            push_heading(rendered, "  ", sub, &group.description);
+            "  "
+        };
+        for (name, description) in tools {
+            push_tool(rendered, indent, name, description);
+        }
+    }
+}
+
+/// Splits `top__rest` after the first `__`; a prefix without one is all top.
+fn split_prefix(prefix: &str) -> (&str, &str) {
+    prefix
+        .find("__")
+        .map_or((prefix, ""), |index| prefix.split_at(index + 2))
+}
+
+fn push_heading(rendered: &mut String, indent: &str, label: &str, description: &str) {
+    rendered.push_str(indent);
+    push_escaped(rendered, label);
     if !description.is_empty() {
         rendered.push_str(" — ");
         push_escaped(rendered, description);
@@ -260,7 +292,8 @@ fn push_group_header(rendered: &mut String, prefix: &str, description: &str) {
     rendered.push('\n');
 }
 
-fn push_tool(rendered: &mut String, name: &str, description: &str) {
+fn push_tool(rendered: &mut String, indent: &str, name: &str, description: &str) {
+    rendered.push_str(indent);
     rendered.push_str("- ");
     push_escaped(rendered, name);
     if !description.is_empty() {

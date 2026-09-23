@@ -73,9 +73,10 @@ async fn code_mode_catalog_lists_deferred_tools_then_appends_changes() -> Result
     let first = responses::mount_sse_once(&server, responses::sse_completed("first")).await;
     test.submit_text_turn("hello").await?;
     let first = first.single_request();
-    let listing = "<tools>\nTools callable in `exec` besides those in its description, as \
-`await tools.<prefix><name>(args)`. Each `ALL_TOOLS` entry's description shows a tool's \
-arguments.\nastrbot__ — Host tools.\n- tool_alpha: The tool_alpha tool.\n\
+    let listing = "<tools>\nTools callable in `exec` besides those in its description. Call \
+one as `await tools.<prefix><name>(args)`, the prefix joining its headings: `a__` then `b__` \
+gives `tools.a__b__<name>`. Each `ALL_TOOLS` entry's description shows a tool's arguments.\n\
+astrbot__ — Host tools.\n- tool_alpha: The tool_alpha tool.\n\
 - tool_beta: The tool_beta tool.\n</tools>";
     assert_eq!(catalogs(&first), vec![listing.to_string()]);
 
