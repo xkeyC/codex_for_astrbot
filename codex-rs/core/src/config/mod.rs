@@ -1141,6 +1141,8 @@ pub struct CodeModeConfig {
     pub exec_as_function_tool: bool,
     /// Use the compact generic `exec` description.
     pub compact_exec_description: bool,
+    /// List deferred nested tools in history as they load and unload.
+    pub tool_catalog: bool,
 }
 
 impl Default for CodeModeConfig {
@@ -1153,6 +1155,7 @@ impl Default for CodeModeConfig {
             structured_dynamic_tool_results: false,
             exec_as_function_tool: false,
             compact_exec_description: false,
+            tool_catalog: false,
         }
     }
 }
@@ -2736,6 +2739,9 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
             .unwrap_or_default(),
         compact_exec_description: base
             .and_then(|config| config.compact_exec_description)
+            .unwrap_or_default(),
+        tool_catalog: base
+            .and_then(|config| config.tool_catalog)
             .unwrap_or_default(),
     }
 }

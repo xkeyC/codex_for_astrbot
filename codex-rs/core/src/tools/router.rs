@@ -210,6 +210,18 @@ impl ToolRouter {
         self.registry.deferred_tool_namespaces()
     }
 
+    /// Fork addition: deferred tools nested code mode can call, for the tool
+    /// catalog; empty outside code mode.
+    pub(crate) fn deferred_code_mode_tools(
+        &self,
+        excluded_namespaces: &[String],
+    ) -> Vec<crate::tools::tool_catalog::CatalogTool> {
+        if !matches!(self.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
+            return Vec::new();
+        }
+        crate::tools::tool_catalog::deferred_code_mode_tools(&self.registry, excluded_namespaces)
+    }
+
     #[cfg(test)]
     pub(crate) fn registered_tool_names_for_test(&self) -> Vec<ToolName> {
         self.registry.tool_names_for_test()

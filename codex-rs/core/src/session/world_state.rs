@@ -21,6 +21,7 @@ use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::PersonalityState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
+use crate::context::world_state::ToolCatalogState;
 use crate::context::world_state::ToolsState;
 use crate::context::world_state::WorldState;
 use codex_connectors::AppToolPolicyEvaluator;
@@ -281,6 +282,13 @@ impl Session {
         {
             world_state.add_section(ToolsState::new(
                 step_context.tool_router.deferred_tool_namespaces(),
+            ));
+        }
+        if turn_context.config.code_mode.tool_catalog {
+            world_state.add_section(ToolCatalogState::new(
+                step_context.tool_router.deferred_code_mode_tools(
+                    &turn_context.config.code_mode.excluded_tool_namespaces,
+                ),
             ));
         }
         let environments = step_context.environments.to_selections();

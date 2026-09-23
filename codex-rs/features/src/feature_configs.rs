@@ -45,6 +45,10 @@ pub struct CodeModeConfigToml {
     /// Replace the generic part of the `exec` description with a compact one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compact_exec_description: Option<bool>,
+    /// List deferred nested tools, with short descriptions, in a developer
+    /// message in history, appending changes as tools load and unload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_catalog: Option<bool>,
 }
 
 impl FeatureConfig for CodeModeConfigToml {

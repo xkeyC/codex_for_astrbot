@@ -531,6 +531,10 @@
         "structured_dynamic_tool_results": {
           "description": "Return dynamic tool results to code-mode scripts as MCP-shaped objects (`{content, isError, text}`) instead of one joined string.",
           "type": "boolean"
+        },
+        "tool_catalog": {
+          "description": "List deferred nested tools, with short descriptions, in a developer message in history, appending changes as tools load and unload.",
+          "type": "boolean"
         }
       },
       "type": "object"

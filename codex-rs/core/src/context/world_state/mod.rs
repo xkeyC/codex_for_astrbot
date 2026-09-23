@@ -16,6 +16,7 @@ mod plugins_instructions;
 mod realtime;
 #[cfg(test)]
 mod test_support;
+mod tool_catalog;
 mod tools;
 
 use crate::context::ContextualUserFragment;
@@ -54,6 +55,7 @@ pub(crate) use persistent_mode::PersistentModeState;
 pub(crate) use personality::PersonalityState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
 pub(crate) use realtime::RealtimeState;
+pub(crate) use tool_catalog::ToolCatalogState;
 pub(crate) use tools::ToolsState;
 
 trait ErasedWorldStateSection: Send + Sync {
