@@ -3914,21 +3914,29 @@ impl Session {
         metadata: CompactedHistoryMetadata,
     ) {
         // Fork addition: compaction drops the additional context, and values
-        // that do not change are never sent again, so put it back.
+        // that do not change are never sent again, so put back the ones
+        // history holds (a value submitted but not recorded yet brings its
+        // own fragment), replacing copies the compacted history kept.
         let additional_context = self.get_config().await.additional_context.clone();
         if additional_context.reinject_after_compaction {
-            let reinjected = self
-                .state
-                .lock()
-                .await
-                .additional_context
-                .render_all(additional_context.max_value_tokens);
+            let reinjected = {
+                let state = self.state.lock().await;
+                state.additional_context.render_recorded(
+                    additional_context.max_value_tokens,
+                    state.history.raw_items(),
+                )
+            };
             if !reinjected.is_empty() {
+                items.retain(|envelope| {
+                    !reinjected.iter().any(|(key, _)| {
+                        crate::state::is_additional_context_fragment_of(&envelope.item, key)
+                    })
+                });
                 items = crate::compact::insert_initial_context_before_last_real_user_or_summary(
                     items,
                     reinjected
                         .into_iter()
-                        .map(|item| self.annotate_client_response_item(item))
+                        .map(|(_, item)| self.annotate_client_response_item(item))
                         .collect(),
                 );
             }

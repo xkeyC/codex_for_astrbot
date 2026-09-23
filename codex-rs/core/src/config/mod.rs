@@ -3781,8 +3781,10 @@ impl Config {
             AdditionalContextConfig::default,
             |toml| AdditionalContextConfig {
                 reinject_after_compaction: toml.reinject_after_compaction.unwrap_or(false),
+                // Zero would leave every value empty.
                 max_value_tokens: toml
                     .max_value_tokens
+                    .filter(|tokens| *tokens > 0)
                     .unwrap_or(codex_context_fragments::MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS),
             },
         );

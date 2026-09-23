@@ -6,6 +6,7 @@ mod turn;
 
 pub(crate) use crate::tools::ExecutedToolCalls;
 pub(crate) use additional_context::AdditionalContextStore;
+pub(crate) use additional_context::is_fragment_of as is_additional_context_fragment_of;
 pub(crate) use auto_compact_window::AutoCompactWindowIds;
 pub(crate) use auto_compact_window::AutoCompactWindowSnapshot;
 pub(crate) use service::SessionServices;
