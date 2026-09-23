@@ -292,9 +292,10 @@ pub use codex_protocol::MemoryVersion;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct AdditionalContextToml {
-    /// Write the stored additional context back into history after
-    /// compaction, which drops it, since unchanged values are not sent again.
-    /// Defaults to `false`.
+    /// Keep the additional context in history: carry it across compaction,
+    /// which drops it, and send again what an aborted turn dropped before
+    /// recording it, since unchanged values are not sent again. Defaults to
+    /// `false`.
     pub reinject_after_compaction: Option<bool>,
     /// Token budget of one value; longer values lose their middle. Defaults
     /// to 1000.

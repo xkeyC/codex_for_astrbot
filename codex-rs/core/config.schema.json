@@ -17,7 +17,7 @@
           "type": "integer"
         },
         "reinject_after_compaction": {
-          "description": "Write the stored additional context back into history after compaction, which drops it, since unchanged values are not sent again. Defaults to `false`.",
+          "description": "Keep the additional context in history: carry it across compaction, which drops it, and send again what an aborted turn dropped before recording it, since unchanged values are not sent again. Defaults to `false`.",
           "type": "boolean"
         }
       },

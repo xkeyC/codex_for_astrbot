@@ -1132,7 +1132,8 @@ pub struct ToolRegistryConfig {
 /// Fork addition: how additional context sent with turns is kept.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AdditionalContextConfig {
-    /// Write the stored values back into history after compaction.
+    /// Carry the values across compaction and send again what an aborted
+    /// turn dropped.
     pub reinject_after_compaction: bool,
     /// Token budget of one value.
     pub max_value_tokens: usize,
