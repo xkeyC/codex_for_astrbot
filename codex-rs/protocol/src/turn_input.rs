@@ -49,6 +49,12 @@ pub struct TurnInputRequest {
     pub start: TurnStartOptions,
     pub additional_context: BTreeMap<String, AdditionalContextEntry>,
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
+    /// Fork addition: permission scopes the host grants the sender of this
+    /// input (e.g. `memory.write_global`), read by tools when they run.
+    /// `Some` sets them for the turn it starts; a steered input leaves the
+    /// running turn's scopes alone. Turns Codex starts on its own (retries,
+    /// pending work, subagent and review threads) have no scopes.
+    pub scopes: Option<Vec<String>>,
     pub trace: Option<W3cTraceContext>,
 }
 
@@ -74,6 +80,7 @@ impl TurnInputRequest {
             start: TurnStartOptions::default(),
             additional_context: BTreeMap::new(),
             responsesapi_client_metadata: None,
+            scopes: None,
             trace: None,
         }
     }
@@ -118,6 +125,12 @@ impl TurnInputRequest {
         responsesapi_client_metadata: Option<HashMap<String, String>>,
     ) -> Self {
         self.responsesapi_client_metadata = responsesapi_client_metadata;
+        self
+    }
+
+    /// Fork addition: permission scopes for the turn this input starts.
+    pub fn with_scopes(mut self, scopes: Option<Vec<String>>) -> Self {
+        self.scopes = scopes;
         self
     }
 

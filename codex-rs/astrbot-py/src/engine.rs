@@ -147,6 +147,11 @@ pub struct TurnRequest {
     pub model: Option<String>,
     #[serde(default)]
     pub effort: Option<ReasoningEffort>,
+    /// Permission scopes granted to the sender of this input, checked by tools
+    /// when they run (e.g. `memory.write_global`). Sets them for the turn this
+    /// input starts; a steered input keeps the running turn's scopes.
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
 fn default_turn_mode() -> TurnMode {
@@ -417,6 +422,7 @@ impl Engine {
                 )
             })
             .collect();
+        turn.scopes = request.scopes;
         turn.thread_settings = ThreadSettingsOverrides {
             dynamic_tools: request.dynamic_tools,
             model: request.model,

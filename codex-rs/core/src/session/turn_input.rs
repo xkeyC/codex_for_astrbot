@@ -250,6 +250,7 @@ async fn start_or_steer(
         start,
         additional_context,
         responsesapi_client_metadata,
+        scopes,
         ..
     } = request;
     let has_explicit_input = match &input {
@@ -314,6 +315,9 @@ async fn start_or_steer(
                     .turn_metadata_state
                     .set_responsesapi_client_metadata(responsesapi_client_metadata);
             }
+            if let Some(scopes) = scopes {
+                turn_context.turn_metadata_state.set_scopes(scopes);
+            }
             session
                 .maybe_emit_model_warnings_for_turn(turn_context.as_ref())
                 .await;
@@ -347,6 +351,7 @@ async fn start_if_idle(
         start,
         additional_context,
         responsesapi_client_metadata,
+        scopes,
         ..
     } = request;
     if session.input_queue.has_trigger_turn_mailbox_items().await {
@@ -431,6 +436,9 @@ async fn start_if_idle(
         turn_context
             .turn_metadata_state
             .set_responsesapi_client_metadata(responsesapi_client_metadata);
+    }
+    if let Some(scopes) = scopes {
+        turn_context.turn_metadata_state.set_scopes(scopes);
     }
     session
         .maybe_emit_model_warnings_for_turn(turn_context.as_ref())

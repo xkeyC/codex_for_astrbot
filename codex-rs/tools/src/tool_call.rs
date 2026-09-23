@@ -111,6 +111,8 @@ pub struct ToolCall<'call> {
     pub tool_name: ToolName,
     pub model: String,
     pub codex_turn_metadata: Option<String>,
+    /// Fork addition: permission scopes the host granted this turn's sender.
+    pub scopes: Vec<String>,
     pub truncation_policy: TruncationPolicy,
     pub source: ToolCallSource,
     pub conversation_history: ConversationHistory,
@@ -130,6 +132,7 @@ impl std::fmt::Debug for ToolCall<'_> {
                 "has_codex_turn_metadata",
                 &self.codex_turn_metadata.is_some(),
             )
+            .field("scopes", &self.scopes)
             .field("truncation_policy", &self.truncation_policy)
             .field("source", &self.source)
             .field("conversation_history", &self.conversation_history)

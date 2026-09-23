@@ -324,6 +324,7 @@ async fn call_ad_hoc(
         tool_name: name,
         model: "gpt-test".to_string(),
         codex_turn_metadata: None,
+        scopes: Vec::new(),
         truncation_policy: TruncationPolicy::Bytes(1024),
         source: ToolCallSource::Direct,
         conversation_history: ConversationHistory::default(),

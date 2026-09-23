@@ -207,6 +207,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall<'_>
         tool_name: invocation.tool_name.clone(),
         model: settings.model_info.slug.clone(),
         codex_turn_metadata,
+        scopes: invocation.turn.turn_metadata_state.scopes(),
         truncation_policy: settings.model_info.truncation_policy.into(),
         source: extension_tool_call_source(invocation.source.clone()),
         conversation_history,

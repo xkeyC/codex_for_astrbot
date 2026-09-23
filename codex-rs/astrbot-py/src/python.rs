@@ -157,7 +157,9 @@ impl Runtime {
     }
 
     /// `request_json`: `{"input": [UserInput], "mode", "expected_turn_id",
-    /// "additional_context": {key: {"value", "kind"}}, "dynamic_tools", "model", "effort"}`.
+    /// "additional_context": {key: {"value", "kind"}}, "dynamic_tools", "model", "effort",
+    /// "scopes": [str]}`. `scopes` are the permission scopes granted to the
+    /// sender of this input (e.g. `memory.write_global`); tools check them.
     fn submit_turn<'py>(
         &self,
         py: Python<'py>,

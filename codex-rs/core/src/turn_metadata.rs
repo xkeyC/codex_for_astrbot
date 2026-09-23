@@ -140,6 +140,9 @@ pub(crate) struct TurnMetadataState {
     turn_started_at_unix_ms: RwLock<Option<i64>>,
     responses_api_metadata: RwLock<BTreeMap<String, String>>,
     responsesapi_client_metadata: RwLock<BTreeMap<String, String>>,
+    /// Fork addition: host-granted permission scopes of this turn. Handed to
+    /// tools only; never sent to the model provider or MCP servers.
+    scopes: RwLock<Vec<String>>,
     user_input_requested_during_turn: AtomicBool,
     enrichment_task: Mutex<Option<AbortOnDropHandle<()>>>,
     git_enrichment_complete: watch::Sender<bool>,
@@ -226,6 +229,7 @@ impl TurnMetadataState {
             turn_started_at_unix_ms: RwLock::new(None),
             responses_api_metadata: RwLock::new(BTreeMap::new()),
             responsesapi_client_metadata: RwLock::new(BTreeMap::new()),
+            scopes: RwLock::new(Vec::new()),
             user_input_requested_during_turn: AtomicBool::new(false),
             enrichment_task: Mutex::new(None),
             git_enrichment_complete: watch::channel(/*init*/ true).0,
@@ -353,6 +357,20 @@ impl TurnMetadataState {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) =
             filter_extra_metadata(responsesapi_client_metadata);
+    }
+
+    pub(crate) fn set_scopes(&self, scopes: Vec<String>) {
+        *self
+            .scopes
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = scopes;
+    }
+
+    pub(crate) fn scopes(&self) -> Vec<String> {
+        self.scopes
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     pub(crate) fn set_responses_api_metadata(
