@@ -3914,17 +3914,19 @@ impl Session {
         metadata: CompactedHistoryMetadata,
     ) {
         // Fork addition: compaction drops the additional context, and values
-        // that do not change are never sent again, so put back the ones
-        // history holds (a value submitted but not recorded yet brings its
-        // own fragment), replacing copies the compacted history kept.
-        let additional_context = self.get_config().await.additional_context.clone();
-        if additional_context.reinject_after_compaction {
+        // that do not change are never sent again, so carry each stored key's
+        // last fragment over, replacing copies the compacted history kept.
+        if self
+            .get_config()
+            .await
+            .additional_context
+            .reinject_after_compaction
+        {
             let reinjected = {
                 let state = self.state.lock().await;
-                state.additional_context.render_recorded(
-                    additional_context.max_value_tokens,
-                    state.history.raw_items(),
-                )
+                state
+                    .additional_context
+                    .last_fragments(state.history.raw_items())
             };
             if !reinjected.is_empty() {
                 items.retain(|envelope| {

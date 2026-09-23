@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
 use pretty_assertions::assert_eq;
@@ -24,36 +25,53 @@ fn values(
         .collect()
 }
 
+fn keys(fragments: &[(String, ResponseItem)]) -> Vec<&str> {
+    fragments.iter().map(|(key, _)| key.as_str()).collect()
+}
+
 #[test]
-fn only_values_history_holds_are_rendered_again() {
+fn each_key_carries_the_last_fragment_history_holds() {
     let mut store = AdditionalContextStore::default();
-    let recorded = store.merge(
+    let mut history = store.merge(
         values(&[
             ("persona", "be a cat", AdditionalContextKind::Application),
             ("tab", "one", AdditionalContextKind::Untrusted),
         ]),
         /*max_tokens*/ 1_000,
     );
-    // The persona changes; its new fragment is submitted but not recorded.
-    let pending = store.merge(
+    // The persona changes and is recorded; then it changes again, but that
+    // fragment is submitted and not recorded yet.
+    history.extend(store.merge(
         values(&[
             ("persona", "be a dog", AdditionalContextKind::Application),
             ("tab", "one", AdditionalContextKind::Untrusted),
         ]),
         /*max_tokens*/ 1_000,
+    ));
+    let pending = store.merge(
+        values(&[
+            ("persona", "be a fox", AdditionalContextKind::Application),
+            ("tab", "one", AdditionalContextKind::Untrusted),
+        ]),
+        /*max_tokens*/ 1_000,
     );
-    assert_eq!(pending.len(), 1);
 
-    let again = store.render_recorded(/*max_tokens*/ 1_000, &recorded);
-    assert_eq!(
-        again
-            .iter()
-            .map(|(key, _)| key.as_str())
-            .collect::<Vec<_>>(),
-        vec!["tab"]
-    );
-    assert!(is_fragment_of(&again[0].1, "tab"));
-    assert!(is_fragment_of(&recorded[0], "persona"));
+    let carried = store.last_fragments(history.iter());
+    assert_eq!(keys(&carried), vec!["persona", "tab"]);
+    // The dog the model saw last, not the fox still on the way.
+    assert_eq!(carried[0].1, history[2]);
+    assert_eq!(carried[1].1, history[1]);
     assert!(is_fragment_of(&pending[0], "persona"));
     assert!(!is_fragment_of(&pending[0], "persona_examples"));
+    assert!(!is_fragment_of(&pending[0], "tab"));
+}
+
+#[test]
+fn a_key_history_never_held_is_not_carried() {
+    let mut store = AdditionalContextStore::default();
+    store.merge(
+        values(&[("persona", "be a cat", AdditionalContextKind::Application)]),
+        /*max_tokens*/ 1_000,
+    );
+    assert!(store.last_fragments(std::iter::empty()).is_empty());
 }

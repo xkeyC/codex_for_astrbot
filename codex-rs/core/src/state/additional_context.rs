@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::HashSet;
 
 use crate::context::AdditionalContextDeveloperFragment;
 use crate::context::AdditionalContextUserFragment;
@@ -29,33 +28,48 @@ impl AdditionalContextStore {
         fragments
     }
 
-    /// Fork addition: the stored values `history` holds, rendered again for a
-    /// history that will not (compaction), with their keys. A value submitted
-    /// but not recorded yet is left out: its own fragment is on the way.
-    pub(crate) fn render_recorded<'a>(
+    /// Fork addition: for each stored key, the last fragment `history`
+    /// holds for it, to carry into a history that will not (compaction). What
+    /// the model saw stays as it was: a value submitted but not recorded yet
+    /// follows as its own fragment, and a key history lost stays lost.
+    pub(crate) fn last_fragments<'a>(
         &self,
-        max_tokens: usize,
-        history: impl IntoIterator<Item = &'a ResponseItem>,
+        history: impl Clone + DoubleEndedIterator<Item = &'a ResponseItem>,
     ) -> Vec<(String, ResponseItem)> {
-        let recorded = history
-            .into_iter()
-            .filter_map(message_text)
-            .collect::<HashSet<_>>();
         self.values
-            .iter()
-            .map(|(key, entry)| (key.clone(), fragment(key, entry, max_tokens)))
-            .filter(|(_, item)| message_text(item).is_some_and(|text| recorded.contains(&text)))
+            .keys()
+            .filter_map(|key| {
+                history
+                    .clone()
+                    .rev()
+                    .find(|item| is_fragment_of(item, key))
+                    .map(|item| (key.clone(), item.clone()))
+            })
             .collect()
     }
 }
 
 /// Fork addition: whether `item` is a fragment for `key`, whatever its value.
 pub(crate) fn is_fragment_of(item: &ResponseItem, key: &str) -> bool {
+    if let ResponseItem::Message {
+        internal_chat_message_metadata_passthrough: Some(metadata),
+        ..
+    } = item
+        && let Some(kinds) = &metadata.content_item_kinds
+        && !kinds
+            .iter()
+            .any(|kind| kind.0 == format!("additional_content.{key}"))
+    {
+        return false;
+    }
     match message_text(item) {
         Some(("developer", text)) => {
             text.starts_with(&format!("<{key}>")) && text.ends_with(&format!("</{key}>"))
         }
-        Some(("user", text)) => text.starts_with(&format!("<external_{key}>")),
+        Some(("user", text)) => {
+            text.starts_with(&format!("<external_{key}>"))
+                && text.ends_with(&format!("</external_{key}>"))
+        }
         Some(_) | None => false,
     }
 }
