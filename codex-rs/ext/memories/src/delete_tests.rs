@@ -94,6 +94,7 @@ fn note_relative_path(filename: &str) -> String {
 
 fn scope(may_write_global: bool, may_delete: bool) -> ScopedMemoriesConfig {
     ScopedMemoriesConfig {
+        turn_scopes: false,
         scope_key: Some("chat-1".to_string()),
         may_write_global,
         may_delete,
@@ -313,6 +314,7 @@ async fn delete_tool_is_absent_unless_may_delete_is_set() {
             &fixture.codex_home,
             MemoryVersion::V1,
             &ScopedMemoriesConfig {
+                turn_scopes: false,
                 scope_key: None,
                 may_write_global: true,
                 may_delete: false,
@@ -327,6 +329,7 @@ async fn delete_tool_is_absent_unless_may_delete_is_set() {
         &fixture.codex_home,
         MemoryVersion::V1,
         &ScopedMemoriesConfig {
+            turn_scopes: false,
             scope_key: None,
             may_write_global: false,
             may_delete: true,
@@ -340,6 +343,7 @@ async fn delete_tool_is_absent_unless_may_delete_is_set() {
         scope(/*may_write_global*/ true, /*may_delete*/ true),
         scope(/*may_write_global*/ false, /*may_delete*/ true),
         ScopedMemoriesConfig {
+            turn_scopes: false,
             scope_key: None,
             may_write_global: true,
             may_delete: true,
@@ -359,6 +363,7 @@ async fn delete_tool_spec_matches_expected_schema() {
         &fixture.codex_home,
         MemoryVersion::V1,
         &ScopedMemoriesConfig {
+            turn_scopes: false,
             scope_key: None,
             may_write_global: true,
             may_delete: true,
@@ -459,6 +464,7 @@ async fn unscoped_delete_tool_uses_the_single_root() {
         &fixture.codex_home,
         MemoryVersion::V1,
         &ScopedMemoriesConfig {
+            turn_scopes: false,
             scope_key: None,
             may_write_global: true,
             may_delete: true,
@@ -485,6 +491,8 @@ async fn delete_tool_without_scope_prefix_support_ignores_global_guard() {
         .await
         .expect("write");
     let tool = DeleteMemoryTool {
+        permission: crate::permission::Permission::Fixed(true),
+        global_permission: crate::permission::Permission::Fixed(true),
         backend: LocalMemoriesBackend::from_memory_root(fixture.global_root.clone()),
         may_delete_global: true,
         metrics_client: None,
@@ -506,6 +514,7 @@ async fn prompts_mention_the_tool_only_when_it_is_registered() {
     // Switch off: byte-identical to upstream.
     for scope in [
         ScopedMemoriesConfig {
+            turn_scopes: false,
             scope_key: None,
             may_write_global: true,
             may_delete: false,
@@ -531,6 +540,7 @@ async fn prompts_mention_the_tool_only_when_it_is_registered() {
         &fixture.codex_home,
         MemoryVersion::V1,
         Some(&ScopedMemoriesConfig {
+            turn_scopes: false,
             scope_key: None,
             may_write_global: true,
             may_delete: true,
@@ -544,6 +554,7 @@ async fn prompts_mention_the_tool_only_when_it_is_registered() {
         &fixture.codex_home,
         MemoryVersion::V1,
         Some(&ScopedMemoriesConfig {
+            turn_scopes: false,
             scope_key: None,
             may_write_global: true,
             may_delete: true,
@@ -639,4 +650,119 @@ async fn ad_hoc_notes_can_be_added_and_deleted_again() {
         .await
         .expect("delete note");
     assert!(!note_path(&fixture.local_root, filename).exists());
+}
+
+async fn call_with_scopes(
+    tools: &[MemoryTool],
+    tool: &str,
+    arguments: serde_json::Value,
+    scopes: &[&str],
+) -> Result<(), String> {
+    let name = ToolName::namespaced(MEMORY_TOOLS_NAMESPACE, tool);
+    let tool = tools
+        .iter()
+        .find(|candidate| candidate.tool_name() == name)
+        .expect("memory tool");
+    tool.handle(ToolCall {
+        turn_id: "turn-1".to_string(),
+        call_id: "call-1".to_string(),
+        tool_name: name,
+        model: "gpt-test".to_string(),
+        codex_turn_metadata: None,
+        scopes: scopes.iter().map(ToString::to_string).collect(),
+        truncation_policy: TruncationPolicy::Bytes(1024),
+        source: ToolCallSource::Direct,
+        conversation_history: ConversationHistory::default(),
+        turn_item_emitter: Arc::new(NoopTurnItemEmitter),
+        environments: Vec::new(),
+        payload: ToolPayload::Function {
+            arguments: arguments.to_string(),
+        },
+    })
+    .await
+    .map(|_| ())
+    .map_err(|err| err.to_string())
+}
+
+async fn note(tools: &[MemoryTool], filename: &str, scopes: &[&str]) -> Result<(), String> {
+    let arguments = json!({ "filename": filename, "note": "fact
+", "scope": "global" });
+    call_with_scopes(tools, ADD_AD_HOC_NOTE_TOOL_NAME, arguments, scopes).await
+}
+
+async fn delete(tools: &[MemoryTool], path: &str, scopes: &[&str]) -> Result<(), String> {
+    call_with_scopes(tools, DELETE_TOOL_NAME, json!({ "path": path }), scopes).await
+}
+
+#[tokio::test]
+async fn turn_scopes_decide_what_the_current_sender_may_curate() {
+    let fixture = fixture().await;
+    let config = ScopedMemoriesConfig {
+        scope_key: Some("chat-1".to_string()),
+        // Consolidation stays private; each turn's scopes decide the rest.
+        may_write_global: false,
+        may_delete: false,
+        turn_scopes: true,
+    };
+    let tools =
+        scoped_memory_tools(&fixture.codex_home, MemoryVersion::V1, &config, None).expect("tools");
+    // Registered for everyone: the tool set is the same whoever speaks.
+    assert!(has_delete_tool(&tools));
+
+    // A turn without scopes: private notes only, nothing deleted.
+    let local = json!({
+        "filename": "2026-05-26T13-50-00-private.md",
+        "note": "fact
+    ",
+        "scope": "local",
+    });
+    call_with_scopes(&tools, ADD_AD_HOC_NOTE_TOOL_NAME, local, &[])
+        .await
+        .expect("private note");
+    let refused = note(&tools, "2026-05-26T13-50-01-no.md", &[])
+        .await
+        .expect_err("shared note refused");
+    assert!(
+        refused.contains("may not write shared memories"),
+        "{refused}"
+    );
+    assert!(!note_path(&fixture.global_root, "2026-05-26T13-50-01-no.md").exists());
+    let local_note = format!("local/{}", note_relative_path(NOTE));
+    assert!(delete(&tools, &local_note, &[]).await.is_err());
+    assert!(note_path(&fixture.local_root, NOTE).exists());
+
+    // Deleting needs its own scope; shared memories also need write_global.
+    let global_note = format!("global/{}", note_relative_path(NOTE));
+    assert!(
+        delete(&tools, &global_note, &["memory.delete"])
+            .await
+            .is_err()
+    );
+    assert!(note_path(&fixture.global_root, NOTE).exists());
+    delete(&tools, &local_note, &["memory.delete"])
+        .await
+        .expect("delete private");
+    assert!(!note_path(&fixture.local_root, NOTE).exists());
+
+    // A sender granted both, in a group or not, curates the shared store.
+    let all = ["memory.write_global", "memory.delete"];
+    note(&tools, "2026-05-26T13-50-02-yes.md", &all)
+        .await
+        .expect("shared note");
+    assert!(note_path(&fixture.global_root, "2026-05-26T13-50-02-yes.md").exists());
+    delete(&tools, &global_note, &all)
+        .await
+        .expect("delete shared");
+    assert!(!note_path(&fixture.global_root, NOTE).exists());
+
+    let text = build_scoped_developer_instructions(
+        &fixture.codex_home,
+        MemoryVersion::V1,
+        &config,
+        /*dedicated_tools*/ true,
+    )
+    .await
+    .expect("instructions");
+    assert!(text.contains("message metadata says they may manage shared memories"));
+    assert!(!text.contains("may not write to the shared folder at all"));
 }

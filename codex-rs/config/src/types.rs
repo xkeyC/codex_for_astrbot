@@ -339,6 +339,14 @@ pub struct MemoriesToml {
     /// files in this thread. Defaults to `false`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub may_delete: Option<bool>,
+    /// Fork addition: writing shared memories and deleting memories need
+    /// the current turn's permission scopes (`memory.write_global`,
+    /// `memory.delete`) instead of `may_write_global` / `may_delete`, which
+    /// then only govern automatic consolidation. Turns Codex starts on its
+    /// own carry no scopes, so they cannot do either. Needs `scope_key`.
+    /// Defaults to `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_scopes: Option<bool>,
     /// Fork addition: `false` disables automatic extraction and consolidation
     /// (immediate writes through the memory tools keep working).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -376,6 +384,8 @@ pub struct MemoriesConfig {
     pub may_write_global: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub may_delete: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub turn_scopes: bool,
     #[serde(skip_serializing_if = "is_true")]
     pub auto_consolidate: bool,
     #[serde(skip_serializing_if = "is_false")]
@@ -413,6 +423,7 @@ impl Default for MemoriesConfig {
             scope_key: None,
             may_write_global: true,
             may_delete: false,
+            turn_scopes: false,
             auto_consolidate: true,
             maintenance_tools: false,
         }
@@ -467,6 +478,7 @@ impl From<MemoriesToml> for MemoriesConfig {
             scope_key: toml.scope_key.filter(|key| !key.trim().is_empty()),
             may_write_global: toml.may_write_global.unwrap_or(defaults.may_write_global),
             may_delete: toml.may_delete.unwrap_or(defaults.may_delete),
+            turn_scopes: toml.turn_scopes.unwrap_or(defaults.turn_scopes),
             maintenance_tools: toml.maintenance_tools.unwrap_or(defaults.maintenance_tools),
             auto_consolidate: toml.auto_consolidate.unwrap_or(defaults.auto_consolidate),
         }

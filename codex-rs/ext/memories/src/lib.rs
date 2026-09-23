@@ -1,6 +1,8 @@
 mod backend;
 mod extension;
+// Fork addition: memory permissions of the current turn's sender.
 mod local;
+mod permission;
 // Fork addition: memory-file maintenance for a consolidation agent.
 mod maintenance;
 mod metrics;

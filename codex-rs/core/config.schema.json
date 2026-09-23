@@ -2259,6 +2259,10 @@
           "description": "Fork addition: memory scope of this thread. Threads with a scope keep private memories in `memories_scopes/<scope_key>` next to the global store.",
           "type": "string"
         },
+        "turn_scopes": {
+          "description": "Fork addition: writing shared memories and deleting memories need the current turn's permission scopes (`memory.write_global`, `memory.delete`) instead of `may_write_global` / `may_delete`, which then only govern automatic consolidation. Needs `scope_key`. Defaults to `false`.",
+          "type": "boolean"
+        },
         "use_memories": {
           "description": "When `false`, skip injecting memory usage instructions into developer prompts.",
           "type": "boolean"

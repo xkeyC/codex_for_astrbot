@@ -23,6 +23,7 @@ use crate::backend::MemoriesBackend;
 use crate::backend::MemoriesBackendError;
 use crate::metrics::record_tool_call;
 use crate::metrics::scope_from_path;
+use crate::permission::Permission;
 use crate::scoped::addresses_global_store;
 
 use super::backend_error_to_function_call;
@@ -46,6 +47,11 @@ pub(crate) struct DeleteMemoryTool<B> {
     pub(crate) backend: B,
     /// When `false`, `global/...` paths are refused before reaching the backend.
     pub(crate) may_delete_global: bool,
+    /// Whether anything may be deleted in the current turn.
+    pub(crate) permission: Permission,
+    /// Whether a `global/...` path may be deleted in the current turn, on top
+    /// of `permission` and `may_delete_global`.
+    pub(crate) global_permission: Permission,
     pub(crate) metrics_client: Option<MetricsClient>,
 }
 
@@ -85,7 +91,18 @@ where
         let args: DeleteArgs = parse_args(&call)?;
         let path = args.path;
         let scope = scope_from_path(path.as_str());
-        let response = if self.may_delete_global || !addresses_global_store(path.as_str()) {
+        let global = addresses_global_store(path.as_str());
+        let response = if !self.permission.allowed(&call) {
+            Err(MemoriesBackendError::invalid_path(
+                path,
+                "the current sender may not delete memories",
+            ))
+        } else if global && self.may_delete_global && !self.global_permission.allowed(&call) {
+            Err(MemoriesBackendError::invalid_path(
+                path,
+                "is a shared memory; the current sender may not change shared memories",
+            ))
+        } else if self.may_delete_global || !global {
             self.backend
                 .delete(DeleteMemoryRequest { path: path.clone() })
                 .await

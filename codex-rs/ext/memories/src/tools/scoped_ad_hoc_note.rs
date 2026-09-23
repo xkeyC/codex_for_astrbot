@@ -17,7 +17,9 @@ use crate::ADD_AD_HOC_NOTE_TOOL_NAME;
 use crate::backend::AddAdHocMemoryNoteRequest;
 use crate::backend::AddAdHocMemoryNoteResponse;
 use crate::backend::MemoriesBackend;
+use crate::backend::MemoriesBackendError;
 use crate::metrics::record_tool_call;
+use crate::permission::Permission;
 
 use super::backend_error_to_function_call;
 use super::memory_function_tool;
@@ -59,6 +61,8 @@ struct ScopedAddAdHocNoteArgs {
 pub(crate) struct ScopedAddAdHocNoteTool<B> {
     pub(crate) local: B,
     pub(crate) global: B,
+    /// Whether a `global` note may be written in the current turn.
+    pub(crate) global_write: Permission,
     pub(crate) metrics_client: Option<MetricsClient>,
 }
 
@@ -94,16 +98,21 @@ where
         call: ToolCall<'_>,
     ) -> Result<Box<dyn codex_extension_api::ToolOutput>, FunctionCallError> {
         let args: ScopedAddAdHocNoteArgs = parse_args(&call)?;
-        let backend = match args.scope {
-            NoteScope::Local => self.local.clone(),
-            NoteScope::Global => self.global.clone(),
+        let request = AddAdHocMemoryNoteRequest {
+            filename: args.filename,
+            note: args.note,
         };
-        let response = backend
-            .add_ad_hoc_note(AddAdHocMemoryNoteRequest {
-                filename: args.filename,
-                note: args.note,
-            })
-            .await;
+        let response = match args.scope {
+            NoteScope::Local => self.local.add_ad_hoc_note(request).await,
+            NoteScope::Global if self.global_write.allowed(&call) => {
+                self.global.add_ad_hoc_note(request).await
+            }
+            NoteScope::Global => Err(MemoriesBackendError::invalid_path(
+                "global",
+                "the current sender may not write shared memories; write the note with \
+scope \"local\" instead",
+            )),
+        };
         record_tool_call(
             self.metrics_client.as_ref(),
             ADD_AD_HOC_NOTE_TOOL_NAME,

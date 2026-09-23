@@ -35,6 +35,9 @@ use crate::backend::SearchMemoriesResponse;
 use crate::backend::WriteMemoryRequest;
 use crate::backend::WriteMemoryResponse;
 use crate::local::LocalMemoriesBackend;
+use crate::permission::DELETE_SCOPE;
+use crate::permission::Permission;
+use crate::permission::WRITE_GLOBAL_SCOPE;
 use crate::prompts::build_memory_instructions_for_root;
 use crate::prompts::build_memory_tool_developer_instructions;
 use crate::prompts::read_memory_summary;
@@ -51,6 +54,8 @@ pub(crate) struct ScopedMemoriesConfig {
     pub(crate) scope_key: Option<String>,
     pub(crate) may_write_global: bool,
     pub(crate) may_delete: bool,
+    /// Shared writes and deletions need the turn's scopes (see `permission`).
+    pub(crate) turn_scopes: bool,
 }
 
 impl ScopedMemoriesConfig {
@@ -59,7 +64,14 @@ impl ScopedMemoriesConfig {
             scope_key: config.memories.scope_key.clone(),
             may_write_global: config.memories.may_write_global,
             may_delete: config.memories.may_delete,
+            turn_scopes: config.memories.turn_scopes,
         }
+    }
+
+    /// Whether the turn's scopes decide shared writes and deletions. Only
+    /// with a memory scope; without one the fixed flags apply.
+    pub(crate) fn uses_turn_scopes(&self) -> bool {
+        self.turn_scopes && self.scope_key.is_some()
     }
 }
 
@@ -159,7 +171,14 @@ locations, per-user preferences, group-internal matters) into shared memory.\n\
             .join("notes")
             .display(),
     ));
-    if !scope.may_write_global {
+    let gated = scope.uses_turn_scopes();
+    if gated {
+        text.push_str(
+            "- Only senders whose message metadata says they may manage shared memories may \
+have anything written to the shared folder or any memory deleted. For anyone else, keep what \
+they ask to remember in the private folder, and tell them if something needs such a sender.\n",
+        );
+    } else if !scope.may_write_global {
         text.push_str("- This chat may not write to the shared folder at all.\n");
     }
     if dedicated_tools {
@@ -167,7 +186,7 @@ locations, per-user preferences, group-internal matters) into shared memory.\n\
             "- With the `{MEMORY_TOOLS_NAMESPACE}` tools, paths starting with `{GLOBAL_PREFIX}/` \
 address the shared folder and paths starting with `{LOCAL_PREFIX}/` address the private folder.\n"
         ));
-        if scope.may_write_global {
+        if scope.may_write_global || gated {
             text.push_str(&format!(
                 "- `{ADD_AD_HOC_NOTE_TOOL_NAME}` writes to the private folder by default; pass \
 `scope: \"global\"` only for impersonal knowledge useful in every chat.\n"
@@ -178,8 +197,8 @@ address the shared folder and paths starting with `{LOCAL_PREFIX}/` address the 
 write shared memories.\n"
             ));
         }
-        if scope.may_delete {
-            if scope.may_write_global {
+        if scope.may_delete || gated {
+            if scope.may_write_global || gated {
                 text.push_str(&format!(
                     "- `{DELETE_TOOL_NAME}` permanently deletes one memory file at the given \
 `{GLOBAL_PREFIX}/` or `{LOCAL_PREFIX}/` path; use it only when the user asks to delete or forget \
@@ -226,6 +245,8 @@ pub(crate) fn scoped_memory_tools(
             memory_tools.push(Arc::new(tools::DeleteMemoryTool {
                 backend: global,
                 may_delete_global: true,
+                permission: Permission::Fixed(true),
+                global_permission: Permission::Fixed(true),
                 metrics_client,
             }));
             return Some(memory_tools);
@@ -243,21 +264,35 @@ pub(crate) fn scoped_memory_tools(
         local: local.clone(),
     };
     let mut memory_tools = tools::memory_tools(backend.clone(), metrics_client.clone());
-    if scope.may_write_global {
+    // With turn scopes the curating tools are registered for everyone and
+    // check the turn's scopes when they run, so the tool set never changes.
+    let gated = scope.uses_turn_scopes();
+    let (write_global, delete) = if gated {
+        (
+            Permission::Scope(WRITE_GLOBAL_SCOPE),
+            Permission::Scope(DELETE_SCOPE),
+        )
+    } else {
+        (Permission::Fixed(true), Permission::Fixed(true))
+    };
+    if scope.may_write_global || gated {
         memory_tools.retain(|tool| tool.tool_name() != ad_hoc_name);
         memory_tools.insert(
             0,
             Arc::new(tools::ScopedAddAdHocNoteTool {
                 local,
                 global,
+                global_write: write_global.clone(),
                 metrics_client: metrics_client.clone(),
             }),
         );
     }
-    if scope.may_delete {
+    if scope.may_delete || gated {
         memory_tools.push(Arc::new(tools::DeleteMemoryTool {
             backend,
-            may_delete_global: scope.may_write_global,
+            may_delete_global: scope.may_write_global || gated,
+            permission: delete,
+            global_permission: write_global,
             metrics_client,
         }));
     }
