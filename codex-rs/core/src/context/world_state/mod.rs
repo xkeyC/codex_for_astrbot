@@ -55,6 +55,8 @@ pub(crate) use persistent_mode::PersistentModeState;
 pub(crate) use personality::PersonalityState;
 pub(crate) use plugins_instructions::PluginsInstructionsState;
 pub(crate) use realtime::RealtimeState;
+pub(crate) use tool_catalog::TOOL_CATALOG_OPEN_TAG;
+pub(crate) use tool_catalog::ToolCatalogSnapshot;
 pub(crate) use tool_catalog::ToolCatalogState;
 pub(crate) use tools::ToolsState;
 
@@ -309,6 +311,11 @@ impl From<&Map<String, Value>> for WorldStateSnapshot {
 }
 
 impl WorldStateSnapshot {
+    /// Fork addition: one section's persisted comparison state.
+    pub(crate) fn section<T: DeserializeOwned>(&self, id: &str) -> Option<T> {
+        T::deserialize(self.sections.get(id)?).ok()
+    }
+
     pub(crate) fn into_object(self) -> Map<String, Value> {
         self.sections.into_iter().collect()
     }

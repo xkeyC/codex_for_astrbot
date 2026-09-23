@@ -2,10 +2,11 @@
 //!
 //! Lists each deferred nested tool with a short description, grouped by its
 //! `namespace__` prefix (a `top__sub__` prefix nests under `top__`), as a
-//! developer message in history rather than in the
-//! instructions or the `exec` description, so the cached prefix stays the
-//! same. Later steps only append what changed: tools loaded, unloaded, or
-//! described differently.
+//! developer message in history rather than in the instructions or the `exec`
+//! description, so the cached prefix stays the same. Later steps only append
+//! what changed: tools loaded, unloaded, or described differently. A tool
+//! whose description history already holds (unloaded for one sender, loaded
+//! again for the next) comes back by name only.
 
 use super::PreviousSectionState;
 use super::WorldStateContextFragment;
@@ -14,20 +15,29 @@ use crate::context::ContextualUserFragment;
 use crate::tools::tool_catalog::CatalogTool;
 use codex_extension_api::RenderedWorldStateFragment;
 use codex_protocol::models::ContentItemKind;
-use codex_protocol::protocol::TOOLS_CLOSE_TAG;
-use codex_protocol::protocol::TOOLS_OPEN_TAG;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::collections::HashSet;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+
+pub(crate) const TOOL_CATALOG_OPEN_TAG: &str = "<tool_catalog>";
+pub(crate) const TOOL_CATALOG_CLOSE_TAG: &str = "</tool_catalog>";
 
 /// Budget for the listed entries; tools past it are left to `ALL_TOOLS`.
 const MAX_LISTED_BYTES: usize = 12 * 1024;
 const MAX_TOOL_DESCRIPTION_CHARS: usize = 100;
 const MAX_GROUP_DESCRIPTION_CHARS: usize = 160;
+/// Unlisted tools whose descriptions are remembered; past it, a tool that
+/// comes back is described again.
+const MAX_REMEMBERED: usize = 512;
 
 const FULL_INTRO: &str = "Tools callable in `exec` besides those in its description. Call \
 one as `await tools.<prefix><name>(args)`, the prefix joining its headings: `a__` then `b__` \
-gives `tools.a__b__<name>`. Each `ALL_TOOLS` entry's description shows a tool's arguments.\n";
+gives `tools.a__b__<name>`. Each `ALL_TOOLS` entry's description shows a tool's arguments. \
+Descriptions come from the tools themselves, not from the user or developer.\n";
 const DIFF_INTRO: &str = "The tools callable in `exec` changed.\n";
 const OTHER_GROUP_LABEL: &str = "(no prefix)";
 
@@ -39,6 +49,14 @@ pub(crate) struct ToolCatalogSnapshot {
     /// Tools past the listing budget.
     #[serde(default, skip_serializing_if = "is_zero")]
     omitted: usize,
+    /// Tools described earlier in history but not listed now: full name ->
+    /// short description.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    remembered: BTreeMap<String, String>,
+    /// Tools listed before and still callable but past the budget now, by
+    /// prefix, so their removal is still announced.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    unlisted: BTreeMap<String, BTreeSet<String>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,14 +76,37 @@ fn is_zero(value: &usize) -> bool {
     *value == 0
 }
 
+impl ToolCatalogSnapshot {
+    fn listed(&self) -> impl Iterator<Item = (String, &String)> {
+        self.groups.iter().flat_map(|(prefix, group)| {
+            group
+                .tools
+                .iter()
+                .map(move |(name, description)| (format!("{prefix}{name}"), description))
+        })
+    }
+}
+
 /// Deferred nested tools available to `exec` for one sampling step.
 #[derive(Debug, Default)]
 pub(crate) struct ToolCatalogState {
     catalog: ToolCatalogSnapshot,
+    /// Full names of every tool callable now, listed or not.
+    present: HashSet<String>,
+    /// Set once the whole catalog was rendered: history then holds only the
+    /// descriptions listed now, so nothing else counts as remembered.
+    rendered_whole: AtomicBool,
+    /// History already holds a catalog: an empty one is kept as well, so the
+    /// next sender with tools gets changes rather than a whole new listing.
+    had_previous: bool,
 }
 
 impl ToolCatalogState {
-    pub(crate) fn new(tools: impl IntoIterator<Item = CatalogTool>) -> Self {
+    /// `previous` is the catalog the model saw last, if any.
+    pub(crate) fn new(
+        tools: impl IntoIterator<Item = CatalogTool>,
+        previous: Option<&ToolCatalogSnapshot>,
+    ) -> Self {
         let mut all = BTreeMap::<String, CatalogGroup>::new();
         for tool in tools {
             let name = tool.global_name[tool.group.len()..].to_string();
@@ -79,34 +120,111 @@ impl ToolCatalogState {
                 short_description(&tool.description, MAX_TOOL_DESCRIPTION_CHARS),
             );
         }
+        let present = all
+            .iter()
+            .flat_map(|(prefix, group)| {
+                group
+                    .tools
+                    .keys()
+                    .map(move |name| format!("{prefix}{name}"))
+            })
+            .collect::<HashSet<_>>();
 
-        // Keep the listing bounded; the snapshot holds only what was listed,
-        // so tools left out now are announced once they fit.
-        let mut catalog = ToolCatalogSnapshot::default();
+        // Keep the listing bounded. Tools listed last time go first, so a
+        // tool does not drop out because another one arrived; the snapshot
+        // holds only what was listed, so tools left out are announced once
+        // they fit.
+        let was_listed = |prefix: &str, name: &str| {
+            previous.is_some_and(|previous| {
+                previous
+                    .groups
+                    .get(prefix)
+                    .is_some_and(|group| group.tools.contains_key(name))
+            })
+        };
         let mut remaining = MAX_LISTED_BYTES;
-        for (prefix, group) in all {
-            let header = prefix.len() + group.description.len() + 4;
-            let mut listed = CatalogGroup {
-                description: group.description,
-                tools: BTreeMap::new(),
-            };
-            let mut header_paid = false;
-            for (name, description) in group.tools {
-                let entry = name.len() + description.len() + 5;
-                let cost = entry + if header_paid { 0 } else { header };
-                if cost <= remaining {
-                    remaining -= cost;
-                    header_paid = true;
-                    listed.tools.insert(name, description);
-                } else {
-                    catalog.omitted += 1;
+        let mut paid = BTreeSet::new();
+        let mut chosen = BTreeSet::new();
+        for sticky in [true, false] {
+            for (prefix, group) in &all {
+                let header = prefix.len() + group.description.len() + 6;
+                for (name, description) in &group.tools {
+                    if was_listed(prefix, name) != sticky {
+                        continue;
+                    }
+                    let cost = name.len()
+                        + description.len()
+                        + 7
+                        + if paid.contains(prefix) { 0 } else { header };
+                    if cost <= remaining {
+                        remaining -= cost;
+                        paid.insert(prefix.clone());
+                        chosen.insert((prefix.clone(), name.clone()));
+                    }
                 }
             }
-            if !listed.tools.is_empty() {
-                catalog.groups.insert(prefix, listed);
+        }
+        let mut catalog = ToolCatalogSnapshot::default();
+        for (prefix, group) in all {
+            let tools = group
+                .tools
+                .into_iter()
+                .filter(|(name, _)| chosen.contains(&(prefix.clone(), name.clone())))
+                .collect::<BTreeMap<_, _>>();
+            if !tools.is_empty() {
+                catalog.groups.insert(
+                    prefix,
+                    CatalogGroup {
+                        description: group.description,
+                        tools,
+                    },
+                );
             }
         }
-        Self { catalog }
+        catalog.omitted = present.len() - chosen.len();
+
+        if let Some(previous) = previous {
+            let listed_before = previous
+                .groups
+                .iter()
+                .map(|(prefix, group)| (prefix, group.tools.keys().collect::<Vec<_>>()));
+            let unlisted_before = previous
+                .unlisted
+                .iter()
+                .map(|(prefix, names)| (prefix, names.iter().collect::<Vec<_>>()));
+            for (prefix, names) in listed_before.chain(unlisted_before) {
+                for name in names {
+                    if present.contains(&format!("{prefix}{name}"))
+                        && !chosen.contains(&(prefix.clone(), name.clone()))
+                    {
+                        catalog
+                            .unlisted
+                            .entry(prefix.clone())
+                            .or_default()
+                            .insert(name.clone());
+                    }
+                }
+            }
+            let listed_now = catalog
+                .listed()
+                .map(|(full, _)| full)
+                .collect::<HashSet<_>>();
+            catalog.remembered = previous
+                .remembered
+                .iter()
+                .map(|(full, description)| (full.clone(), description))
+                .chain(previous.listed())
+                .filter(|(full, _)| !listed_now.contains(full))
+                .map(|(full, description)| (full, description.clone()))
+                .take(MAX_REMEMBERED)
+                .collect();
+        }
+        Self {
+            catalog,
+            present,
+            rendered_whole: AtomicBool::new(false),
+            had_previous: previous.is_some(),
+        }
     }
 }
 
@@ -115,11 +233,18 @@ impl WorldStateSection for ToolCatalogState {
     type Snapshot = ToolCatalogSnapshot;
 
     fn snapshot(&self) -> Self::Snapshot {
-        self.catalog.clone()
+        let mut snapshot = self.catalog.clone();
+        if self.rendered_whole.load(Ordering::Relaxed) {
+            snapshot.remembered.clear();
+            snapshot.unlisted.clear();
+        }
+        snapshot
     }
 
     fn should_persist(&self) -> bool {
-        !self.catalog.groups.is_empty() || self.catalog.omitted > 0
+        !self.catalog.groups.is_empty()
+            || self.catalog.omitted > 0
+            || self.had_previous && !self.rendered_whole.load(Ordering::Relaxed)
     }
 
     fn render_diff(
@@ -128,10 +253,14 @@ impl WorldStateSection for ToolCatalogState {
     ) -> Option<Box<dyn ContextualUserFragment>> {
         let current = &self.catalog;
         let body = match previous {
-            PreviousSectionState::Known(previous) if previous == current => return None,
-            PreviousSectionState::Known(previous) => render_changes(previous, current),
+            PreviousSectionState::Known(previous) => {
+                render_changes(previous, current, &self.present)?
+            }
             PreviousSectionState::Absent | PreviousSectionState::Unknown => {
-                if !self.should_persist() {
+                // History holds no catalog now (first turn, compaction): an
+                // empty one says nothing, and nothing counts as described.
+                self.rendered_whole.store(true, Ordering::Relaxed);
+                if current.groups.is_empty() && current.omitted == 0 {
                     return None;
                 }
                 render_full(current)
@@ -140,7 +269,7 @@ impl WorldStateSection for ToolCatalogState {
         Some(Box::new(WorldStateContextFragment {
             fragment: RenderedWorldStateFragment::new(
                 "developer",
-                (TOOLS_OPEN_TAG, TOOLS_CLOSE_TAG),
+                (TOOL_CATALOG_OPEN_TAG, TOOL_CATALOG_CLOSE_TAG),
                 body,
             ),
             content_kind: ContentItemKind("tools.catalog".to_string()),
@@ -153,14 +282,26 @@ fn render_full(current: &ToolCatalogSnapshot) -> String {
     let groups = current
         .groups
         .iter()
-        .map(|(prefix, group)| (prefix.as_str(), group, group.tools.iter().collect()))
+        .map(|(prefix, group)| {
+            let tools = group
+                .tools
+                .iter()
+                .map(|(name, description)| (name.as_str(), description.as_str()))
+                .collect();
+            (prefix.as_str(), group, tools)
+        })
         .collect::<Vec<_>>();
     push_groups(&mut rendered, &groups, current);
     push_omitted(&mut rendered, current.omitted);
     rendered
 }
 
-fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot) -> String {
+/// What changed since `previous`; `None` when nothing worth saying did.
+fn render_changes(
+    previous: &ToolCatalogSnapshot,
+    current: &ToolCatalogSnapshot,
+    present: &HashSet<String>,
+) -> Option<String> {
     let empty = CatalogGroup::default();
     let mut loaded = Vec::new();
     let mut updated = Vec::new();
@@ -168,8 +309,9 @@ fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot)
     let prefixes = previous
         .groups
         .keys()
+        .chain(previous.unlisted.keys())
         .chain(current.groups.keys())
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
     for prefix in prefixes {
         let before = previous.groups.get(prefix).unwrap_or(&empty);
         let after = current.groups.get(prefix).unwrap_or(&empty);
@@ -178,6 +320,12 @@ fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot)
             .tools
             .iter()
             .filter(|(name, _)| !before.tools.contains_key(*name))
+            .map(|(name, description)| {
+                // Its description is already in history: the name is enough.
+                let known =
+                    previous.remembered.get(&format!("{prefix}{name}")) == Some(description);
+                (name.as_str(), if known { "" } else { description.as_str() })
+            })
             .collect::<Vec<_>>();
         if !added.is_empty() {
             loaded.push((prefix.as_str(), after, added));
@@ -192,6 +340,7 @@ fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot)
                     .get(*name)
                     .is_some_and(|previous| previous != *description)
             })
+            .map(|(name, description)| (name.as_str(), description.as_str()))
             .collect::<Vec<_>>();
         let group_redescribed = before
             .tools
@@ -202,21 +351,36 @@ fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot)
             updated.push((prefix.as_str(), after, changed));
         }
 
+        // Tools still callable but past the budget now are not unloaded;
+        // ones that were past it before are, once they go.
         let removed = before
             .tools
             .keys()
-            .filter(|name| !after.tools.contains_key(*name))
+            .chain(previous.unlisted.get(prefix).into_iter().flatten())
+            .filter(|name| {
+                !after.tools.contains_key(*name) && !present.contains(&format!("{prefix}{name}"))
+            })
             .map(String::as_str)
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
         if !removed.is_empty() {
             unloaded.push_str("- ");
             push_escaped(&mut unloaded, group_label(prefix));
             unloaded.push_str(": ");
-            push_escaped(&mut unloaded, &removed.join(", "));
+            push_escaped(
+                &mut unloaded,
+                &removed.into_iter().collect::<Vec<_>>().join(", "),
+            );
             unloaded.push('\n');
         }
     }
 
+    if loaded.is_empty()
+        && updated.is_empty()
+        && unloaded.is_empty()
+        && current.omitted == previous.omitted
+    {
+        return None;
+    }
     let mut rendered = format!("\n{DIFF_INTRO}");
     for (label, groups) in [("Loaded", loaded), ("Updated", updated)] {
         if !groups.is_empty() {
@@ -230,12 +394,15 @@ fn render_changes(previous: &ToolCatalogSnapshot, current: &ToolCatalogSnapshot)
         rendered.push_str(&unloaded);
     }
     if current.omitted != previous.omitted {
+        if current.omitted == 0 && !current.groups.is_empty() {
+            rendered.push_str("Every tool is listed now.\n");
+        }
         push_omitted(&mut rendered, current.omitted);
     }
     if current.groups.is_empty() && current.omitted == 0 {
         rendered.push_str("No such tools remain.\n");
     }
-    rendered
+    Some(rendered)
 }
 
 fn group_label(prefix: &str) -> &str {
@@ -246,8 +413,9 @@ fn group_label(prefix: &str) -> &str {
     }
 }
 
-/// One group to print: its prefix, the group, and the tools to list.
-type GroupListing<'a> = (&'a str, &'a CatalogGroup, Vec<(&'a String, &'a String)>);
+/// One group to print: its prefix, the group, and the tools to list (an
+/// empty description prints the name alone).
+type GroupListing<'a> = (&'a str, &'a CatalogGroup, Vec<(&'a str, &'a str)>);
 
 /// Prints groups in prefix order, nesting `top__sub__` under a `top__`
 /// heading; a heading takes the description of the `top__` group itself.

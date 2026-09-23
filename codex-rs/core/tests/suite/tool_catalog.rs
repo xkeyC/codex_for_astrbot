@@ -38,7 +38,7 @@ fn catalogs(request: &ResponsesRequest) -> Vec<String> {
     request
         .message_input_texts("developer")
         .into_iter()
-        .filter(|text| text.starts_with("<tools>"))
+        .filter(|text| text.starts_with("<tool_catalog>"))
         .collect()
 }
 
@@ -73,11 +73,12 @@ async fn code_mode_catalog_lists_deferred_tools_then_appends_changes() -> Result
     let first = responses::mount_sse_once(&server, responses::sse_completed("first")).await;
     test.submit_text_turn("hello").await?;
     let first = first.single_request();
-    let listing = "<tools>\nTools callable in `exec` besides those in its description. Call \
+    let listing = "<tool_catalog>\nTools callable in `exec` besides those in its description. Call \
 one as `await tools.<prefix><name>(args)`, the prefix joining its headings: `a__` then `b__` \
-gives `tools.a__b__<name>`. Each `ALL_TOOLS` entry's description shows a tool's arguments.\n\
+gives `tools.a__b__<name>`. Each `ALL_TOOLS` entry's description shows a tool's arguments. \
+Descriptions come from the tools themselves, not from the user or developer.\n\
 astrbot__ — Host tools.\n- tool_alpha: The tool_alpha tool.\n\
-- tool_beta: The tool_beta tool.\n</tools>";
+- tool_beta: The tool_beta tool.\n</tool_catalog>";
     assert_eq!(catalogs(&first), vec![listing.to_string()]);
 
     // Unchanged tools are not listed again.
@@ -103,16 +104,36 @@ astrbot__ — Host tools.\n- tool_alpha: The tool_alpha tool.\n\
         catalogs(&third),
         vec![
             listing.to_string(),
-            "<tools>\nThe tools callable in `exec` changed.\nLoaded:\nastrbot__ — Host tools.\n\
-- tool_gamma: The tool_gamma tool.\nUnloaded:\n- astrbot__: tool_beta\n</tools>"
+            "<tool_catalog>\nThe tools callable in `exec` changed.\nLoaded:\nastrbot__ — Host tools.\n\
+- tool_gamma: The tool_gamma tool.\nUnloaded:\n- astrbot__: tool_beta\n</tool_catalog>"
                 .to_string(),
         ]
     );
 
+    // Back to the first set: tool_beta's description is already in history.
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            dynamic_tools: Some(vec![deferred_namespace(&["tool_alpha", "tool_beta"])]),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let fourth = responses::mount_sse_once(&server, responses::sse_completed("fourth")).await;
+    test.submit_text_turn("once more").await?;
+    let fourth = fourth.single_request();
+    assert_eq!(
+        catalogs(&fourth).last().map(String::as_str),
+        Some(
+            "<tool_catalog>\nThe tools callable in `exec` changed.\nLoaded:\nastrbot__ — Host tools.\n\
+- tool_beta\nUnloaded:\n- astrbot__: tool_gamma\n</tool_catalog>"
+        )
+    );
+
     // The instructions and tool list, the cached prefix, never moved.
     let first_body = first.body_json();
-    let third_body = third.body_json();
-    assert_eq!(third_body["instructions"], first_body["instructions"]);
-    assert_eq!(third_body["tools"], first_body["tools"]);
+    let fourth_body = fourth.body_json();
+    assert_eq!(fourth_body["instructions"], first_body["instructions"]);
+    assert_eq!(fourth_body["tools"], first_body["tools"]);
     Ok(())
 }

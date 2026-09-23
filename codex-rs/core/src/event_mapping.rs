@@ -53,6 +53,8 @@ const CONTEXTUAL_DEVELOPER_PREFIXES: &[&str] = &[
     REALTIME_CONVERSATION_OPEN_TAG,
     SKILLS_INSTRUCTIONS_OPEN_TAG,
     TOOLS_OPEN_TAG,
+    // Fork addition: the code-mode tool catalog.
+    crate::context::world_state::TOOL_CATALOG_OPEN_TAG,
     "<personality_spec>",
     // Keep recognizing token-budget wrappers persisted by older versions.
     "<token_budget>",

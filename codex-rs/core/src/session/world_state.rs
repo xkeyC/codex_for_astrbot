@@ -21,9 +21,11 @@ use crate::context::world_state::PersistentModeState;
 use crate::context::world_state::PersonalityState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
+use crate::context::world_state::ToolCatalogSnapshot;
 use crate::context::world_state::ToolCatalogState;
 use crate::context::world_state::ToolsState;
 use crate::context::world_state::WorldState;
+use crate::context::world_state::WorldStateSection;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
@@ -285,10 +287,18 @@ impl Session {
             ));
         }
         if turn_context.config.code_mode.tool_catalog {
+            let previous = self
+                .state
+                .lock()
+                .await
+                .history
+                .world_state_baseline()
+                .and_then(|baseline| baseline.section::<ToolCatalogSnapshot>(ToolCatalogState::ID));
             world_state.add_section(ToolCatalogState::new(
                 step_context.tool_router.deferred_code_mode_tools(
                     &turn_context.config.code_mode.excluded_tool_namespaces,
                 ),
+                previous.as_ref(),
             ));
         }
         let environments = step_context.environments.to_selections();

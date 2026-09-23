@@ -27,7 +27,8 @@ pub(crate) struct CatalogTool {
 }
 
 /// Deferred tools nested code mode exposes, in registry order, skipping the
-/// same ones `register_code_mode_executors` skips.
+/// same ones `register_code_mode_executors` skips. Names are claimed by every
+/// nested tool, deferred or not, the way the runtime claims them.
 pub(crate) fn deferred_code_mode_tools(
     registry: &ToolRegistry,
     excluded_namespaces: &[String],
@@ -36,7 +37,7 @@ pub(crate) fn deferred_code_mode_tools(
     let mut tools = Vec::new();
     for tool in registry.entries() {
         let tool_name = tool.runtime.tool_name();
-        if tool.exposure != ToolExposure::Deferred
+        if !tool.exposure.is_available_in_code_mode()
             || tool_name
                 .clone()
                 .with_default_namespace()
@@ -56,8 +57,8 @@ pub(crate) fn deferred_code_mode_tools(
         let (description, group_description) = match spec {
             ToolSpec::Function(function) => (function.description.as_str(), ""),
             ToolSpec::Freeform(freeform) => (freeform.description.as_str(), ""),
-            ToolSpec::Namespace(namespace) => {
-                let Some(description) = namespace.tools.iter().find_map(|nested| match nested {
+            ToolSpec::Namespace(namespace) if !namespace.tools.is_empty() => {
+                let description = namespace.tools.iter().find_map(|nested| match nested {
                     ResponsesApiNamespaceTool::Function(function)
                         if function.name == tool_name.name =>
                     {
@@ -67,12 +68,15 @@ pub(crate) fn deferred_code_mode_tools(
                         Some(custom.description.as_str())
                     }
                     _ => None,
-                }) else {
-                    continue;
-                };
-                (description, namespace.description.as_str())
+                });
+                (
+                    description.unwrap_or_default(),
+                    namespace.description.as_str(),
+                )
             }
-            ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => continue,
+            ToolSpec::Namespace(_) | ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {
+                continue;
+            }
         };
         let code_mode_name = codex_tools::code_mode_name_for_tool_name(&tool_name);
         if !codex_code_mode::is_code_mode_nested_tool(&code_mode_name) {
@@ -80,7 +84,7 @@ pub(crate) fn deferred_code_mode_tools(
         }
         let global_name = codex_code_mode::normalize_code_mode_identifier(&code_mode_name);
         // The code-mode runtime keeps the first tool of a normalized name.
-        if !taken.insert(global_name.clone()) {
+        if !taken.insert(global_name.clone()) || tool.exposure != ToolExposure::Deferred {
             continue;
         }
         tools.push(CatalogTool {
