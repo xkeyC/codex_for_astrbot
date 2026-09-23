@@ -3906,6 +3906,31 @@ impl Session {
         state.replace_history(items, reference_context_item);
     }
 
+    /// Fork addition: pending input dropped by an abort never reaches history,
+    /// so additional context it carried must be sent again.
+    pub(crate) async fn forget_unrecorded_additional_context(
+        &self,
+        dropped: &[input_queue::TurnInput],
+    ) {
+        if !self
+            .get_config()
+            .await
+            .additional_context
+            .reinject_after_compaction
+        {
+            return;
+        }
+        let items = dropped.iter().filter_map(|input| match input {
+            input_queue::TurnInput::ResponseItem(envelope) => Some(&envelope.item),
+            _ => None,
+        });
+        self.state
+            .lock()
+            .await
+            .additional_context
+            .forget_unrecorded(items);
+    }
+
     pub(crate) async fn replace_compacted_history(
         &self,
         mut items: Vec<ResponseItemEnvelope>,

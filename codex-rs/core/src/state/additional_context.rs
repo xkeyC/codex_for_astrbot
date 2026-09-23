@@ -28,6 +28,16 @@ impl AdditionalContextStore {
         fragments
     }
 
+    /// Fork addition: forgets the keys whose fragments are in `dropped`, input
+    /// that will never be recorded, so their values are sent again.
+    pub(crate) fn forget_unrecorded<'a>(
+        &mut self,
+        dropped: impl Clone + Iterator<Item = &'a ResponseItem>,
+    ) {
+        self.values
+            .retain(|key, _| !dropped.clone().any(|item| is_fragment_of(item, key)));
+    }
+
     /// Fork addition: for each stored key, the last fragment `history`
     /// holds for it, to carry into a history that will not (compaction). What
     /// the model saw stays as it was: a value submitted but not recorded yet

@@ -75,3 +75,17 @@ fn a_key_history_never_held_is_not_carried() {
     );
     assert!(store.last_fragments(std::iter::empty()).is_empty());
 }
+
+#[test]
+fn values_whose_fragments_were_dropped_are_sent_again() {
+    let persona = |value| values(&[("persona", value, AdditionalContextKind::Application)]);
+    let mut store = AdditionalContextStore::default();
+    store.merge(persona("be a cat"), /*max_tokens*/ 1_000);
+    let dropped = store.merge(persona("be a dog"), /*max_tokens*/ 1_000);
+
+    store.forget_unrecorded(dropped.iter());
+    assert_eq!(
+        store.merge(persona("be a dog"), /*max_tokens*/ 1_000),
+        dropped
+    );
+}

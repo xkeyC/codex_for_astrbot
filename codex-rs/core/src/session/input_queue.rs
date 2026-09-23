@@ -204,10 +204,11 @@ impl InputQueue {
     }
 
     /// Clear any pending waiters and input buffered for the current turn.
-    pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) {
+    /// Drops the pending input and waiters; returns the input it dropped.
+    pub(crate) async fn clear_pending(&self, active_turn: &ActiveTurn) -> Vec<TurnInput> {
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.clear_pending_waiters();
-        turn_state.pending_input.items.clear();
+        std::mem::take(&mut turn_state.pending_input.items)
     }
 
     pub(crate) async fn defer_mailbox_delivery_to_next_turn(
