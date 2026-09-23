@@ -681,9 +681,16 @@ async fn merge_additional_context_input(
     session: &Session,
     additional_context: BTreeMap<String, AdditionalContextEntry>,
 ) -> Vec<TurnInput> {
+    let max_tokens = session
+        .get_config()
+        .await
+        .additional_context
+        .max_value_tokens;
     let additional_context_input = {
         let mut state = session.state.lock().await;
-        state.additional_context.merge(additional_context)
+        state
+            .additional_context
+            .merge(additional_context, max_tokens)
     };
     additional_context_input
         .into_iter()

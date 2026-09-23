@@ -6,6 +6,23 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AdditionalContextToml": {
+      "additionalProperties": false,
+      "description": "Fork addition: how additional context sent with turns is kept.",
+      "properties": {
+        "max_value_tokens": {
+          "description": "Token budget of one value; longer values lose their middle. Defaults to 1000.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "reinject_after_compaction": {
+          "description": "Write the stored additional context back into history after compaction, which drops it, since unchanged values are not sent again. Defaults to `false`.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -6045,6 +6062,14 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "additional_context": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/AdditionalContextToml"
+        }
+      ],
+      "description": "Fork addition: how additional context sent with turns is kept."
+    },
     "agents": {
       "allOf": [
         {

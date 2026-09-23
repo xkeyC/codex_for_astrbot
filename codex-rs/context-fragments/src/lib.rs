@@ -6,6 +6,7 @@ mod fragment;
 
 pub use additional_context::AdditionalContextDeveloperFragment;
 pub use additional_context::AdditionalContextUserFragment;
+pub use additional_context::MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS;
 pub use annotated_content::AnnotatedContent;
 pub use annotated_content::set_annotated_content;
 pub use annotated_content::to_annotated_content;

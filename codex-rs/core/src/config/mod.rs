@@ -1055,6 +1055,9 @@ pub struct Config {
     /// Configuration for the experimental code-mode tool surface.
     pub code_mode: CodeModeConfig,
 
+    /// Fork addition: how additional context sent with turns is kept.
+    pub additional_context: AdditionalContextConfig,
+
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: u64,
@@ -1124,6 +1127,24 @@ pub struct ToolRegistryConfig {
     pub error_on_tool_collisions: bool,
     /// Include authoritative tool information in per-turn request metadata.
     pub turn_metadata_includes_tool_info: bool,
+}
+
+/// Fork addition: how additional context sent with turns is kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdditionalContextConfig {
+    /// Write the stored values back into history after compaction.
+    pub reinject_after_compaction: bool,
+    /// Token budget of one value.
+    pub max_value_tokens: usize,
+}
+
+impl Default for AdditionalContextConfig {
+    fn default() -> Self {
+        Self {
+            reinject_after_compaction: false,
+            max_value_tokens: codex_context_fragments::MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS,
+        }
+    }
 }
 
 const DEFAULT_CODE_MODE_EXEC_YIELD_TIME_MS: u64 = 30_000;
@@ -3756,6 +3777,15 @@ impl Config {
                 .unwrap_or_default(),
         };
         let code_mode = resolve_code_mode_config(&cfg);
+        let additional_context = cfg.additional_context.as_ref().map_or_else(
+            AdditionalContextConfig::default,
+            |toml| AdditionalContextConfig {
+                reinject_after_compaction: toml.reinject_after_compaction.unwrap_or(false),
+                max_value_tokens: toml
+                    .max_value_tokens
+                    .unwrap_or(codex_context_fragments::MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS),
+            },
+        );
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
         let rollout_budget = resolve_rollout_budget_config(&cfg, &features)?;
@@ -4399,6 +4429,7 @@ impl Config {
             update_plan_enabled,
             tool_registry,
             code_mode,
+            additional_context,
             background_terminal_max_timeout,
             thread_unload_delay,
             ghost_snapshot,

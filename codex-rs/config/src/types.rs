@@ -288,6 +288,19 @@ pub struct ToolSuggestConfig {
 
 pub use codex_protocol::MemoryVersion;
 
+/// Fork addition: how additional context sent with turns is kept.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct AdditionalContextToml {
+    /// Write the stored additional context back into history after
+    /// compaction, which drops it, since unchanged values are not sent again.
+    /// Defaults to `false`.
+    pub reinject_after_compaction: Option<bool>,
+    /// Token budget of one value; longer values lose their middle. Defaults
+    /// to 1000.
+    pub max_value_tokens: Option<usize>,
+}
+
 /// Memories settings loaded from config.toml.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]

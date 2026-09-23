@@ -3913,6 +3913,26 @@ impl Session {
         world_state_baseline: Option<Arc<WorldState>>,
         metadata: CompactedHistoryMetadata,
     ) {
+        // Fork addition: compaction drops the additional context, and values
+        // that do not change are never sent again, so put it back.
+        let additional_context = self.get_config().await.additional_context.clone();
+        if additional_context.reinject_after_compaction {
+            let reinjected = self
+                .state
+                .lock()
+                .await
+                .additional_context
+                .render_all(additional_context.max_value_tokens);
+            if !reinjected.is_empty() {
+                items = crate::compact::insert_initial_context_before_last_real_user_or_summary(
+                    items,
+                    reinjected
+                        .into_iter()
+                        .map(|item| self.annotate_client_response_item(item))
+                        .collect(),
+                );
+            }
+        }
         for envelope in &mut items {
             Self::assign_missing_response_item_id(&mut envelope.item);
         }

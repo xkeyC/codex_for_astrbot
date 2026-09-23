@@ -3,7 +3,7 @@ use codex_utils_string::truncate_middle_with_token_budget;
 
 use crate::ContextualUserFragment;
 
-const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 1_000;
+pub const MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS: usize = 1_000;
 const ADDITIONAL_CONTEXT_END_MARKER_SUFFIX: &str = ">";
 const ADDITIONAL_CONTEXT_START_MARKER_PREFIX: &str = "<external_";
 
@@ -11,11 +11,22 @@ const ADDITIONAL_CONTEXT_START_MARKER_PREFIX: &str = "<external_";
 pub struct AdditionalContextUserFragment {
     key: String,
     value: String,
+    max_tokens: usize,
 }
 
 impl AdditionalContextUserFragment {
     pub fn new(key: String, value: String) -> Self {
-        Self { key, value }
+        Self {
+            key,
+            value,
+            max_tokens: MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS,
+        }
+    }
+
+    /// Fork addition: a token budget other than the default for the value.
+    pub fn with_max_tokens(mut self, max_tokens: usize) -> Self {
+        self.max_tokens = max_tokens;
+        self
     }
 }
 
@@ -53,7 +64,7 @@ impl ContextualUserFragment for AdditionalContextUserFragment {
     }
 
     fn body(&self) -> String {
-        additional_context_body(&self.key, &self.value)
+        additional_context_body(&self.key, &self.value, self.max_tokens)
     }
 }
 
@@ -61,11 +72,22 @@ impl ContextualUserFragment for AdditionalContextUserFragment {
 pub struct AdditionalContextDeveloperFragment {
     key: String,
     value: String,
+    max_tokens: usize,
 }
 
 impl AdditionalContextDeveloperFragment {
     pub fn new(key: String, value: String) -> Self {
-        Self { key, value }
+        Self {
+            key,
+            value,
+            max_tokens: MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS,
+        }
+    }
+
+    /// Fork addition: a token budget other than the default for the value.
+    pub fn with_max_tokens(mut self, max_tokens: usize) -> Self {
+        self.max_tokens = max_tokens;
+        self
     }
 }
 
@@ -87,16 +109,16 @@ impl ContextualUserFragment for AdditionalContextDeveloperFragment {
     }
 
     fn body(&self) -> String {
-        additional_context_developer_body(&self.key, &self.value)
+        additional_context_developer_body(&self.key, &self.value, self.max_tokens)
     }
 }
 
-fn additional_context_body(key: &str, value: &str) -> String {
-    let value = truncate_middle_with_token_budget(value, MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS).0;
+fn additional_context_body(key: &str, value: &str, max_tokens: usize) -> String {
+    let value = truncate_middle_with_token_budget(value, max_tokens).0;
     format!("{key}>{value}</external_{key}")
 }
 
-fn additional_context_developer_body(key: &str, value: &str) -> String {
-    let value = truncate_middle_with_token_budget(value, MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS).0;
+fn additional_context_developer_body(key: &str, value: &str, max_tokens: usize) -> String {
+    let value = truncate_middle_with_token_budget(value, max_tokens).0;
     format!("<{key}>{value}</{key}>")
 }
