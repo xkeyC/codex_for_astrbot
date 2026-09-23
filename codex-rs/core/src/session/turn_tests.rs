@@ -46,16 +46,22 @@ fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
         .with(feedback.logger_layer())
         .with(tracing_subscriber::fmt::layer().with_filter(codex_state::log_db::default_filter()));
 
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        assert!(!tracing::event_enabled!(
-            target: POST_SAMPLING_TOKEN_ESTIMATE_TARGET,
-            tracing::Level::TRACE,
-            turn_id,
-            estimated_token_count,
-            message
-        ));
-    });
+    // Fork change: ask this subscriber directly. `event_enabled!` goes through
+    // the process-wide callsite interest cache, which subscribers of tests
+    // running in parallel can flip to "always".
+    let callsite = tracing::callsite! {
+        name: "post_sampling_token_estimate",
+        kind: tracing::metadata::Kind::EVENT,
+        target: POST_SAMPLING_TOKEN_ESTIMATE_TARGET,
+        level: tracing::Level::TRACE,
+        fields: turn_id, estimated_token_count, message
+    };
+    let dispatch = tracing::Dispatch::new(subscriber);
+    let metadata = tracing::Callsite::metadata(callsite);
+    let interest = dispatch.register_callsite(metadata);
+    // The same decision `event_enabled!` makes, from this subscriber alone.
+    let enabled = !interest.is_never() && (interest.is_always() || dispatch.enabled(metadata));
+    assert!(!enabled);
 }
 
 #[tokio::test]

@@ -1121,6 +1121,56 @@ async fn start_managed_network_proxy_ignores_invalid_execpolicy_network_rules() 
 
 #[tokio::test]
 async fn managed_network_proxy_decider_survives_full_access_start() -> anyhow::Result<()> {
+    // Fork addition: behind a fake-IP DNS (198.18.0.0/15 and the like)
+    // example.com resolves to a non-public address, which the proxy's baseline
+    // policy blocks before the decider is asked. Mirrors the proxy's
+    // `is_non_public_ip`, which its crate does not export.
+    fn non_public(ip: std::net::IpAddr) -> bool {
+        fn v4(ip: std::net::Ipv4Addr) -> bool {
+            let in_cidr = |base: [u8; 4], prefix: u32| {
+                let mask = u32::MAX << (32 - prefix);
+                u32::from(ip) & mask == u32::from(std::net::Ipv4Addr::from(base)) & mask
+            };
+            ip.is_loopback()
+                || ip.is_private()
+                || ip.is_link_local()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_broadcast()
+                || in_cidr([0, 0, 0, 0], 8)
+                || in_cidr([100, 64, 0, 0], 10)
+                || in_cidr([192, 0, 0, 0], 24)
+                || in_cidr([192, 0, 2, 0], 24)
+                || in_cidr([198, 18, 0, 0], 15)
+                || in_cidr([198, 51, 100, 0], 24)
+                || in_cidr([203, 0, 113, 0], 24)
+                || in_cidr([240, 0, 0, 0], 4)
+        }
+        match ip {
+            std::net::IpAddr::V4(ip) => v4(ip),
+            std::net::IpAddr::V6(ip) => ip.to_ipv4().map_or_else(
+                || {
+                    ip.is_loopback()
+                        || ip.is_unspecified()
+                        || ip.is_multicast()
+                        || ip.is_unique_local()
+                        || ip.is_unicast_link_local()
+                },
+                |mapped| v4(mapped) || ip.is_loopback(),
+            ),
+        }
+    }
+    let resolves_publicly = tokio::net::lookup_host("example.com:80")
+        .await
+        .map(|addrs| {
+            let addrs = addrs.collect::<Vec<_>>();
+            !addrs.is_empty() && addrs.iter().all(|addr| !non_public(addr.ip()))
+        })
+        .unwrap_or(false);
+    if !resolves_publicly {
+        eprintln!("skipping: example.com does not resolve to a public address here");
+        return Ok(());
+    }
     let full_access_permission_profile = PermissionProfile::Disabled;
     let spec = crate::config::NetworkProxySpec::from_config_and_constraints(
         NetworkProxyConfig::default(),
