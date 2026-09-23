@@ -2260,7 +2260,7 @@
           "type": "string"
         },
         "turn_scopes": {
-          "description": "Fork addition: writing shared memories and deleting memories need the current turn's permission scopes (`memory.write_global`, `memory.delete`) instead of `may_write_global` / `may_delete`, which then only govern automatic consolidation. Needs `scope_key`. Defaults to `false`.",
+          "description": "Fork addition: writing shared memories and deleting memories need the current turn's permission scopes (`memory.write_global`, `memory.delete`) instead of `may_write_global` / `may_delete`, which then only govern automatic consolidation. Turns Codex starts on its own carry no scopes, so they cannot do either. Needs `scope_key`. Defaults to `false`.",
           "type": "boolean"
         },
         "use_memories": {
