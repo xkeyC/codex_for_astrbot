@@ -274,6 +274,7 @@ async fn start_or_steer(
             /*expected_turn_id*/ None,
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata.clone(),
+            scopes.as_deref(),
         )
         .await
     {
@@ -489,6 +490,7 @@ async fn steer(
         start,
         additional_context,
         responsesapi_client_metadata,
+        scopes,
         ..
     } = request;
     if !matches!(&input, SubmittedTurnInput::UserInput { .. }) {
@@ -504,6 +506,7 @@ async fn steer(
             Some(expected_turn_id.as_str()),
             settings.required_active_final_output_json_schema(),
             responsesapi_client_metadata,
+            scopes.as_deref(),
         )
         .await
     {
@@ -588,6 +591,7 @@ impl Session {
         expected_turn_id: Option<&str>,
         required_final_output_json_schema: Option<&Value>,
         responsesapi_client_metadata: Option<HashMap<String, String>>,
+        required_scopes: Option<&[String]>,
     ) -> Result<String, NotSubmittedReason> {
         let mut active = self.active_turn.lock().await;
         let Some(active_turn) = active.as_mut() else {
@@ -632,6 +636,12 @@ impl Session {
             && active_task.turn_context.final_output_json_schema.as_ref() != Some(required_schema)
         {
             return Err(NotSubmittedReason::ActiveTurnOutputSchemaMismatch);
+        }
+        // Fork addition: another sender's rights must not join this turn.
+        if let Some(required_scopes) = required_scopes
+            && active_task.turn_context.turn_metadata_state.scopes() != required_scopes
+        {
+            return Err(NotSubmittedReason::ActiveTurnScopesMismatch);
         }
         let mut pending_input = merge_additional_context_input(self, additional_context).await;
 

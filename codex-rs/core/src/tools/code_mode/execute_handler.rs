@@ -108,7 +108,11 @@ impl CodeModeExecuteHandler {
         exec.session
             .services
             .code_mode_service
-            .mark_cell_ready_for_dispatch(&cell_id, originating_item_id);
+            .mark_cell_ready_for_dispatch(
+                &cell_id,
+                originating_item_id,
+                exec.turn.turn_metadata_state.scopes(),
+            );
         let response = started_cell
             .initial_response()
             .await

@@ -181,9 +181,15 @@ impl CodeModeService {
         &self,
         cell_id: &codex_code_mode::CellId,
         originating_item_id: Option<codex_protocol::ResponseItemId>,
+        scopes: Vec<String>,
     ) {
         self.dispatch_broker
-            .mark_cell_ready_for_dispatch(cell_id, originating_item_id);
+            .mark_cell_ready_for_dispatch(cell_id, originating_item_id, scopes);
+    }
+
+    /// Fork addition: permission scopes of the turn that started the cell.
+    pub(crate) fn cell_scopes(&self, cell_id: &codex_code_mode::CellId) -> Vec<String> {
+        self.dispatch_broker.cell_scopes(cell_id)
     }
 
     pub(crate) fn cell_originating_item_id(

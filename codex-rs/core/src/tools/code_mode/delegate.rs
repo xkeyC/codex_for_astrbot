@@ -35,6 +35,10 @@ struct CellDispatchGate {
     ready: watch::Sender<bool>,
     // Keep the original exec item when later waits resume this cell.
     originating_item_id: Option<ResponseItemId>,
+    // Fork addition: permission scopes of the turn that started the cell. A
+    // cell can outlive its turn, and its nested calls are dispatched by
+    // whichever turn is running then; they keep acting with these.
+    scopes: Vec<String>,
 }
 
 impl CodeModeDispatchBroker {
@@ -52,6 +56,7 @@ impl CodeModeDispatchBroker {
         &self,
         cell_id: &CellId,
         originating_item_id: Option<ResponseItemId>,
+        scopes: Vec<String>,
     ) {
         let ready = {
             let mut dispatch_gates = self
@@ -63,8 +68,10 @@ impl CodeModeDispatchBroker {
                 .or_insert_with(|| CellDispatchGate {
                     ready: watch::channel(false).0,
                     originating_item_id: None,
+                    scopes: Vec::new(),
                 });
             gate.originating_item_id = originating_item_id;
+            gate.scopes = scopes;
             gate.ready.clone()
         };
         ready.send_replace(true);
@@ -76,6 +83,16 @@ impl CodeModeDispatchBroker {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(cell_id)
             .and_then(|gate| gate.originating_item_id.clone())
+    }
+
+    /// Scopes of the turn that started the cell; none for an unknown cell.
+    pub(super) fn cell_scopes(&self, cell_id: &CellId) -> Vec<String> {
+        self.dispatch_gates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(cell_id)
+            .map(|gate| gate.scopes.clone())
+            .unwrap_or_default()
     }
 
     pub(super) fn close_cell(&self, cell_id: &CellId) {
@@ -156,6 +173,23 @@ impl CodeModeDispatchBroker {
                             remove_dispatch_gate(&dispatch_gates, &cell_id);
                             continue;
                         }
+                        // Fork addition: a cell outliving its turn must not act
+                        // with the rights of whoever's turn dispatches it now --
+                        // not Codex's own tools, nor the host's tools and
+                        // approvals, which judge by the current turn's sender.
+                        let cell_scopes = dispatch_gates
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .get(&cell_id)
+                            .map(|gate| gate.scopes.clone())
+                            .unwrap_or_default();
+                        if cell_scopes != host.exec.turn.turn_metadata_state.scopes() {
+                            let _ = response_tx.send(Err(
+                                "this code cell was started in an earlier turn with other permission scopes; its tool calls are refused in this turn"
+                                    .to_string(),
+                            ));
+                            continue;
+                        }
                         let host = Arc::clone(&host);
                         let dispatch_gates = Arc::clone(&dispatch_gates);
                         tokio::spawn(async move {
@@ -208,6 +242,7 @@ fn dispatch_gate(
         .or_insert_with(|| CellDispatchGate {
             ready: watch::channel(false).0,
             originating_item_id: None,
+            scopes: Vec::new(),
         })
         .ready
         .clone()

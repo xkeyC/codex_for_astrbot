@@ -20,6 +20,7 @@ use codex_utils_string::to_ascii_json_string;
 use crate::sandboxing::SandboxPermissions;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::tools::context::ToolCallSource;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::apply_granted_turn_permissions;
@@ -163,6 +164,20 @@ impl TurnItemEmitter for CoreTurnItemEmitter {
     }
 }
 
+/// Fork addition: permission scopes a tool call acts with. A call from a
+/// code-mode cell uses the scopes of the turn that started the cell, which may
+/// not be the turn dispatching it.
+fn invocation_scopes(invocation: &ToolInvocation) -> Vec<String> {
+    match &invocation.source {
+        ToolCallSource::CodeMode { cell_id, .. } => invocation
+            .session
+            .services
+            .code_mode_service
+            .cell_scopes(&codex_code_mode::CellId::new(cell_id.clone())),
+        _ => invocation.turn.turn_metadata_state.scopes(),
+    }
+}
+
 async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall<'_> {
     let conversation_history =
         ConversationHistory::new(invocation.session.clone_history().await.into_raw_items());
@@ -207,7 +222,7 @@ async fn to_extension_call(invocation: &ToolInvocation) -> ExtensionToolCall<'_>
         tool_name: invocation.tool_name.clone(),
         model: settings.model_info.slug.clone(),
         codex_turn_metadata,
-        scopes: invocation.turn.turn_metadata_state.scopes(),
+        scopes: invocation_scopes(invocation),
         truncation_policy: settings.model_info.truncation_policy.into(),
         source: extension_tool_call_source(invocation.source.clone()),
         conversation_history,

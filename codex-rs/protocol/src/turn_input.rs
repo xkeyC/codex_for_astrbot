@@ -51,8 +51,9 @@ pub struct TurnInputRequest {
     pub responsesapi_client_metadata: Option<HashMap<String, String>>,
     /// Fork addition: permission scopes the host grants the sender of this
     /// input (e.g. `memory.write_global`), read by tools when they run.
-    /// `Some` sets them for the turn it starts; a steered input leaves the
-    /// running turn's scopes alone. Turns Codex starts on its own (retries,
+    /// `Some` sets them for the turn it starts, and an input whose scopes
+    /// differ from a running turn's is not steered into it; `None` steers
+    /// into a running turn as is. Turns Codex starts on its own (retries,
     /// pending work, subagent and review threads) have no scopes.
     pub scopes: Option<Vec<String>>,
     pub trace: Option<W3cTraceContext>,
@@ -256,4 +257,8 @@ pub enum NotSubmittedReason {
 
     /// `start_or_steer_turn` or `steer_turn` reached a steering path with empty user input.
     EmptyInput,
+
+    /// Fork addition: `start_or_steer_turn` or `steer_turn` carried permission
+    /// scopes that differ from the active turn's, so it may not join that turn.
+    ActiveTurnScopesMismatch,
 }

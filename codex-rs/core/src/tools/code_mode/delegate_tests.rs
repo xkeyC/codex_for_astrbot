@@ -119,7 +119,11 @@ async fn detached_code_mode_callback_keeps_thread_id_on_dispatch_span() -> anyho
         /*executed_tool_calls*/ Default::default(),
     ));
     let cell_id = CellId::new("audit-cell".to_string());
-    broker.mark_cell_ready_for_dispatch(&cell_id, /*originating_item_id*/ None);
+    broker.mark_cell_ready_for_dispatch(
+        &cell_id,
+        /*originating_item_id*/ None,
+        /*scopes*/ Vec::new(),
+    );
     let records = DispatchRecords::default();
     let subscriber = tracing_subscriber::registry().with(DispatchCapture(Arc::clone(&records)));
     let _untraced = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
@@ -167,5 +171,91 @@ async fn detached_code_mode_callback_keeps_thread_id_on_dispatch_span() -> anyho
         .strip_prefix("exec-")
         .expect("nested call ID must belong to code mode");
     uuid::Uuid::parse_str(uuid)?;
+    Ok(())
+}
+
+// Fork addition: a cell keeps the scopes of the turn that started it.
+#[test]
+fn a_cell_keeps_the_scopes_of_its_turn() {
+    let broker = CodeModeDispatchBroker::new(/*executed_tool_calls*/ Default::default());
+    let cell_id = CellId::new("scoped-cell".to_string());
+    broker.mark_cell_ready_for_dispatch(
+        &cell_id,
+        /*originating_item_id*/ None,
+        vec!["memory.write_global".to_string()],
+    );
+
+    assert_eq!(broker.cell_scopes(&cell_id), vec!["memory.write_global"]);
+    // An unknown or closed cell has none.
+    assert!(
+        broker
+            .cell_scopes(&CellId::new("other".to_string()))
+            .is_empty()
+    );
+    broker.close_cell(&cell_id);
+    assert!(broker.cell_scopes(&cell_id).is_empty());
+}
+
+// Fork addition: a cell started under other scopes cannot call tools in a
+// later turn, whoever's rights that turn has.
+#[tokio::test]
+async fn a_cell_from_a_turn_with_other_scopes_cannot_call_tools() -> anyhow::Result<()> {
+    let (session, turn) = make_session_and_context().await;
+    let turn = Arc::new(turn);
+    turn.turn_metadata_state
+        .set_scopes(vec!["memory.write_global".to_string()]);
+    let registry = ToolRegistry::with_handler_for_test(Arc::new(TestHandler));
+    let router = Arc::new(ToolRouter::from_registry(
+        &turn,
+        turn.model_info(),
+        registry,
+        /*hosted_specs*/ Vec::new(),
+        &Default::default(),
+    ));
+    let step = StepContext::for_test(Arc::clone(&turn)).with_tool_router_for_test(router);
+    let broker = Arc::new(CodeModeDispatchBroker::new(
+        /*executed_tool_calls*/ Default::default(),
+    ));
+    let own = CellId::new("own-cell".to_string());
+    let stranger = CellId::new("stranger-cell".to_string());
+    broker.mark_cell_ready_for_dispatch(
+        &own,
+        /*originating_item_id*/ None,
+        vec!["memory.write_global".to_string()],
+    );
+    broker.mark_cell_ready_for_dispatch(
+        &stranger,
+        /*originating_item_id*/ None,
+        /*scopes*/ Vec::new(),
+    );
+    let _worker = broker.start_turn_worker(
+        ExecContext {
+            session: Arc::new(session),
+            turn,
+        },
+        step,
+        Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+    );
+    let call = |cell_id: CellId| {
+        let broker = Arc::clone(&broker);
+        async move {
+            broker
+                .invoke_tool(
+                    CodeModeNestedToolCall {
+                        cell_id,
+                        runtime_tool_call_id: "runtime-call".to_string(),
+                        tool_name: ToolName::plain("audit_probe"),
+                        tool_kind: CodeModeToolKind::Function,
+                        input: Some(serde_json::json!({})),
+                    },
+                    CancellationToken::new(),
+                )
+                .await
+        }
+    };
+
+    assert_eq!(call(own).await, Ok(serde_json::json!("audit-probe-ok")));
+    let refused = call(stranger).await.expect_err("stranger refused");
+    assert!(refused.contains("earlier turn"), "{refused}");
     Ok(())
 }

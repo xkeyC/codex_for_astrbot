@@ -999,3 +999,66 @@ async fn rejects_non_regular_turns() {
         session.abort_all_tasks(TurnAbortReason::Interrupted).await;
     }
 }
+
+// Fork addition: an input carrying other permission scopes than the running
+// turn's may not join it; one carrying the same scopes, or none, may.
+#[tokio::test]
+async fn steering_requires_the_running_turns_scopes() {
+    let (session, turn_context, _rx) = make_session_and_context_with_rx().await;
+    turn_context
+        .turn_metadata_state
+        .set_scopes(vec!["memory.write_global".to_string()]);
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            vec![TurnInput::UserInput {
+                acceptance_order: None,
+                content: vec![UserInput::Text {
+                    text: "hello".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                client_id: None,
+            }],
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: false,
+            },
+        )
+        .await;
+    let steer = |scopes: Option<Vec<String>>| {
+        let session = Arc::clone(&session);
+        let expected_turn_id = turn_context.sub_id.clone();
+        async move {
+            handle(
+                &session,
+                TurnInputRequest::new(SubmittedTurnInput::UserInput {
+                    content: vec![UserInput::Text {
+                        text: "steer".to_string(),
+                        text_elements: Vec::new(),
+                    }],
+                    client_id: None,
+                })
+                .with_scopes(scopes),
+                TurnInputMode::Steer { expected_turn_id },
+                "test-submission".to_string(),
+            )
+            .await
+            .expect("steer submission should be valid")
+        }
+    };
+
+    assert_eq!(
+        TurnInputSubmission::NotSubmitted {
+            reason: NotSubmittedReason::ActiveTurnScopesMismatch,
+        },
+        steer(Some(Vec::new())).await
+    );
+    assert!(matches!(
+        steer(Some(vec!["memory.write_global".to_string()])).await,
+        TurnInputSubmission::Steered { .. }
+    ));
+    assert!(matches!(
+        steer(None).await,
+        TurnInputSubmission::Steered { .. }
+    ));
+}

@@ -1137,6 +1137,11 @@ impl TurnRequestProcessor {
                         None,
                         None,
                     ),
+                    NotSubmittedReason::ActiveTurnScopesMismatch => (
+                        "active turn has different permission scopes".to_string(),
+                        None,
+                        None,
+                    ),
                     NotSubmittedReason::PendingTriggerTurn | NotSubmittedReason::PlanMode => (
                         "no active turn to steer".to_string(),
                         None,
