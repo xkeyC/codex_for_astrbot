@@ -190,6 +190,9 @@ struct RealtimeHandoffState {
     last_output: Arc<Mutex<Option<RealtimeHandoffOutput>>>,
     stream: Arc<Mutex<RealtimeHandoffStreamState>>,
     client_managed_handoffs: bool,
+    /// AstrBot: `realtime.host_routes_handoffs`; host speech answers the
+    /// pending handoff (see `append_speech`).
+    host_routes_handoffs: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
     codex_response_handoff_mode: CodexResponseHandoffMode,
@@ -515,6 +518,7 @@ struct RealtimeStart {
     realtime_sideband_base_url: Option<String>,
     extra_headers: Option<HeaderMap>,
     client_managed_handoffs: bool,
+    host_routes_handoffs: bool,
     flush_transcript_tail_on_session_end: bool,
     codex_responses_as_items: bool,
     codex_response_item_prefix: Option<String>,
@@ -609,6 +613,7 @@ impl RealtimeConversationManager {
             realtime_sideband_base_url,
             extra_headers,
             client_managed_handoffs,
+            host_routes_handoffs,
             flush_transcript_tail_on_session_end,
             codex_responses_as_items,
             codex_response_item_prefix,
@@ -645,6 +650,7 @@ impl RealtimeConversationManager {
             last_output: Arc::new(Mutex::new(None)),
             stream: Arc::new(Mutex::new(RealtimeHandoffStreamState::default())),
             client_managed_handoffs,
+            host_routes_handoffs,
             codex_responses_as_items,
             codex_response_item_prefix,
             codex_response_handoff_mode,
@@ -1079,11 +1085,26 @@ impl RealtimeConversationManager {
             state.handoff.clone()
         };
 
+        let text = realtime_backend_output(text, handoff.session_kind);
+        // AstrBot: with host-routed handoffs the host's speech is the answer
+        // to the handoff the model is waiting on, so it goes to that handoff
+        // (a standalone item would not be spoken while one is pending).
+        let active_handoff = if handoff.host_routes_handoffs {
+            handoff.stream.lock().await.active_handoff.clone()
+        } else {
+            None
+        };
+        let output = match active_handoff {
+            Some(handoff_id) => RealtimeOutbound::HandoffUpdate {
+                handoff_id,
+                text,
+                phase: Some(MessagePhase::FinalAnswer),
+            },
+            None => RealtimeOutbound::StandaloneSpeech { text },
+        };
         handoff
             .output_tx
-            .send(RealtimeOutbound::StandaloneSpeech {
-                text: realtime_backend_output(text, handoff.session_kind),
-            })
+            .send(output)
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
@@ -1606,6 +1627,7 @@ async fn handle_start_inner(
         realtime_sideband_base_url,
         extra_headers,
         client_managed_handoffs,
+        host_routes_handoffs: sess.get_config().await.realtime.host_routes_handoffs,
         flush_transcript_tail_on_session_end,
         codex_responses_as_items,
         codex_response_item_prefix,

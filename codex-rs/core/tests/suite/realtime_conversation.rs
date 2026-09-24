@@ -20,6 +20,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::ConversationSpeechParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationStartTransport;
 use codex_protocol::protocol::ConversationTextParams;
@@ -4612,18 +4613,22 @@ async fn host_routed_handoff_is_reported_without_starting_a_turn() -> Result<()>
     )
     .await;
 
-    let realtime_server = start_websocket_server(vec![vec![vec![
-        json!({
-            "type": "session.updated",
-            "session": { "id": "sess_host_routed", "instructions": "backend prompt" }
-        }),
-        json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_host_routed",
-            "item_id": "item_host_routed",
-            "input_transcript": "what time is it"
-        }),
-    ]]])
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_host_routed", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "conversation.handoff.requested",
+                "handoff_id": "handoff_host_routed",
+                "item_id": "item_host_routed",
+                "input_transcript": "what time is it"
+            }),
+        ],
+        // Kept open until the host's answer arrives.
+        vec![],
+    ]])
     .await;
 
     let mut builder = test_codex().with_config({
@@ -4679,6 +4684,28 @@ async fn host_routed_handoff_is_reported_without_starting_a_turn() -> Result<()>
         );
     }
     assert!(response_mock.requests().is_empty());
+
+    // The host's answer goes to the handoff the model waits on.
+    test.codex
+        .submit(Op::RealtimeConversationSpeech(ConversationSpeechParams {
+            text: "It is three.".to_string(),
+        }))
+        .await?;
+    let answer = wait_for_matching_websocket_request(
+        &realtime_server,
+        "the host's answer to the handoff",
+        |request| {
+            let body = request.body_json().to_string();
+            body.contains("handoff_host_routed") && body.contains("It is three.")
+        },
+    )
+    .await;
+    assert!(
+        answer
+            .body_json()
+            .to_string()
+            .contains("handoff_host_routed")
+    );
 
     realtime_server.shutdown().await;
     Ok(())

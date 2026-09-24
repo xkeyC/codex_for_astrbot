@@ -212,6 +212,7 @@ async fn clears_active_handoff_explicitly() {
         last_output: Arc::new(Mutex::new(None)),
         stream: Arc::new(Mutex::new(Default::default())),
         client_managed_handoffs: false,
+        host_routes_handoffs: false,
         codex_responses_as_items: false,
         codex_response_item_prefix: None,
         codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
