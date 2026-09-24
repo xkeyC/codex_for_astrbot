@@ -1089,11 +1089,14 @@ impl RealtimeConversationManager {
         // AstrBot: with host-routed handoffs the host's speech is the answer
         // to the handoff the model is waiting on, so it goes to that handoff
         // (a standalone item would not be spoken while one is pending).
-        let active_handoff = if handoff.host_routes_handoffs {
-            handoff.stream.lock().await.active_handoff.clone()
-        } else {
-            None
-        };
+        // (Realtime V2 answers handoffs by function output and a response it
+        // creates for standalone speech: kept as it was.)
+        let active_handoff =
+            if handoff.host_routes_handoffs && handoff.session_kind == RealtimeSessionKind::V1 {
+                handoff.stream.lock().await.active_handoff.clone()
+            } else {
+                None
+            };
         let output = match active_handoff {
             Some(handoff_id) => RealtimeOutbound::HandoffUpdate {
                 handoff_id,
