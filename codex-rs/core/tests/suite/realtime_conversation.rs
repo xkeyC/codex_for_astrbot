@@ -4598,6 +4598,93 @@ async fn inbound_handoff_request_starts_turn_and_promotes_its_artifact() -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn host_routed_handoff_is_reported_without_starting_a_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "ok"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![vec![
+        json!({
+            "type": "session.updated",
+            "session": { "id": "sess_host_routed", "instructions": "backend prompt" }
+        }),
+        json!({
+            "type": "conversation.handoff.requested",
+            "handoff_id": "handoff_host_routed",
+            "item_id": "item_host_routed",
+            "input_transcript": "what time is it"
+        }),
+    ]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.realtime.version = RealtimeWsVersion::V1;
+            config.realtime.host_routes_handoffs = true;
+        }
+    });
+    let test = builder.build(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            client_managed_handoffs: true,
+            delegation_ack_filler: None,
+            flush_transcript_tail_on_session_end: false,
+            codex_responses_as_items: false,
+            codex_response_item_prefix: None,
+            codex_response_handoff_mode:
+                codex_protocol::protocol::CodexResponseHandoffMode::Thinking,
+            codex_response_handoff_channel_prefixes: None,
+            model: None,
+            output_modality: RealtimeOutputModality::Audio,
+            include_startup_context: false,
+            initial_items: Vec::new(),
+            realtime_start_instructions: None,
+            realtime_end_instructions: None,
+            prompt: Some(Some("backend prompt".to_string())),
+            realtime_session_id: None,
+            transport: None,
+            version: None,
+            voice: None,
+        }))
+        .await?;
+
+    // The host is told about the handoff...
+    let transcript = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(handoff),
+        }) => Some(handoff.input_transcript.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(transcript, "what time is it");
+
+    // ...and Codex starts no turn for it.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(1500);
+    while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, test.codex.next_event()).await {
+        assert!(
+            !matches!(event.msg, EventMsg::TurnStarted(_)),
+            "a host-routed handoff started a turn"
+        );
+    }
+    assert!(response_mock.requests().is_empty());
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inbound_handoff_request_uses_active_transcript() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

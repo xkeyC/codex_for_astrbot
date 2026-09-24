@@ -149,7 +149,11 @@ impl RealtimeHandoffAdmission {
         let Ok(_permit) = self.gate.acquire().await else {
             return Ok(());
         };
-        if !self.retired.load(Ordering::Acquire) {
+        // AstrBot: with `realtime.host_routes_handoffs` the host runs the
+        // handoff itself (it gets `HandoffRequested`); no turn starts here.
+        if !self.retired.load(Ordering::Acquire)
+            && !session.get_config().await.realtime.host_routes_handoffs
+        {
             session.route_realtime_text_input(text).await?;
         }
         Ok(())

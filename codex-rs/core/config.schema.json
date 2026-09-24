@@ -3479,6 +3479,10 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "host_routes_handoffs": {
+          "description": "AstrBot: see `RealtimeConfig::host_routes_handoffs`.",
+          "type": "boolean"
+        },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
         },

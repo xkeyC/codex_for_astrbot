@@ -12706,6 +12706,7 @@ voice = "cedar"
             session_type: Some(RealtimeWsMode::Transcription),
             transport: Some(RealtimeTransport::WebRtc),
             voice: Some(RealtimeVoice::Cedar),
+            host_routes_handoffs: None,
         })
     );
 
@@ -12724,8 +12725,29 @@ voice = "cedar"
             session_type: RealtimeWsMode::Transcription,
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
+            host_routes_handoffs: false,
         }
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn realtime_host_routes_handoffs_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[realtime]
+host_routes_handoffs = true
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+    assert!(config.realtime.host_routes_handoffs);
     Ok(())
 }
 

@@ -613,6 +613,11 @@ pub struct RealtimeConfig {
     pub session_type: RealtimeWsMode,
     pub transport: RealtimeTransport,
     pub voice: Option<RealtimeVoice>,
+    /// AstrBot: the host runs realtime handoffs on its own agent, so Codex
+    /// only reports them (`HandoffRequested`) and starts no turn for them on
+    /// the realtime thread. Off by default (upstream behavior).
+    #[serde(default)]
+    pub host_routes_handoffs: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -623,6 +628,8 @@ pub struct RealtimeToml {
     pub session_type: Option<RealtimeWsMode>,
     pub transport: Option<RealtimeTransport>,
     pub voice: Option<RealtimeVoice>,
+    /// AstrBot: see `RealtimeConfig::host_routes_handoffs`.
+    pub host_routes_handoffs: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

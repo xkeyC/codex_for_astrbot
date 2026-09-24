@@ -4418,6 +4418,9 @@ impl Config {
                         session_type: realtime.session_type.unwrap_or(defaults.session_type),
                         transport: realtime.transport.unwrap_or(defaults.transport),
                         voice: realtime.voice,
+                        host_routes_handoffs: realtime
+                            .host_routes_handoffs
+                            .unwrap_or(defaults.host_routes_handoffs),
                     }
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
