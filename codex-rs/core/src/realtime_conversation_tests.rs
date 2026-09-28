@@ -215,6 +215,7 @@ async fn clears_active_handoff_explicitly() {
         host_routes_handoffs: false,
         codex_responses_as_items: false,
         codex_response_item_prefix: None,
+        backend_reasoning_status: false,
         codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
         codex_response_handoff_channel_prefixes: Arc::new(BTreeMap::new()),
         session_kind: RealtimeSessionKind::V1,

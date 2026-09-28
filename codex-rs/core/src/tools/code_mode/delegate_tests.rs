@@ -1,4 +1,4 @@
-//! Tracing identity coverage for code-mode callbacks outside local turn spans.
+//! Callback tracing identity and originating-step lifetime coverage.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -20,8 +20,9 @@ use tracing_subscriber::layer::Context;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::Registry;
 
+use super::CodeModeCellDelegate;
 use super::CodeModeDispatchBroker;
-use super::ExecContext;
+use super::DispatchMessage;
 use crate::session::step_context::StepContext;
 use crate::session::tests::make_session_and_context;
 use crate::tools::context::FunctionToolOutput;
@@ -31,6 +32,7 @@ use crate::tools::registry::ToolExecutor;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router::ToolRouter;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use tokio::sync::oneshot;
 
 #[derive(Default)]
 struct DispatchFields(BTreeMap<String, String>);
@@ -116,29 +118,31 @@ async fn detached_code_mode_callback_keeps_thread_id_on_dispatch_span() -> anyho
     ));
     let step = StepContext::for_test(Arc::clone(&turn)).with_tool_router_for_test(router);
     let broker = Arc::new(CodeModeDispatchBroker::new(
+        session.thread_id,
         /*executed_tool_calls*/ Default::default(),
     ));
     let cell_id = CellId::new("audit-cell".to_string());
     broker.mark_cell_ready_for_dispatch(
         &cell_id,
-        /*originating_item_id*/ None,
+        /*originating_call*/ None,
         /*scopes*/ Vec::new(),
     );
     let records = DispatchRecords::default();
     let subscriber = tracing_subscriber::registry().with(DispatchCapture(Arc::clone(&records)));
     let _untraced = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let _subscriber = tracing::subscriber::set_default(subscriber);
+    let delegate = CodeModeCellDelegate {
+        broker: Arc::clone(&broker),
+        step_context: Arc::clone(&step),
+    };
     let _worker = broker.start_turn_worker(
-        ExecContext {
-            session: Arc::new(session),
-            turn,
-        },
+        Arc::new(session),
         step,
         Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
     );
     // Process-owned code-mode callbacks run on a fresh task without a turn span.
     let result = tokio::spawn(async move {
-        broker
+        delegate
             .invoke_tool(
                 CodeModeNestedToolCall {
                     cell_id,
@@ -177,11 +181,14 @@ async fn detached_code_mode_callback_keeps_thread_id_on_dispatch_span() -> anyho
 // Fork addition: a cell keeps the scopes of the turn that started it.
 #[test]
 fn a_cell_keeps_the_scopes_of_its_turn() {
-    let broker = CodeModeDispatchBroker::new(/*executed_tool_calls*/ Default::default());
+    let broker = CodeModeDispatchBroker::new(
+        codex_protocol::ThreadId::new(),
+        /*executed_tool_calls*/ Default::default(),
+    );
     let cell_id = CellId::new("scoped-cell".to_string());
     broker.mark_cell_ready_for_dispatch(
         &cell_id,
-        /*originating_item_id*/ None,
+        /*originating_call*/ None,
         vec!["memory.write_global".to_string()],
     );
 
@@ -214,32 +221,34 @@ async fn a_cell_from_a_turn_with_other_scopes_cannot_call_tools() -> anyhow::Res
     ));
     let step = StepContext::for_test(Arc::clone(&turn)).with_tool_router_for_test(router);
     let broker = Arc::new(CodeModeDispatchBroker::new(
+        session.thread_id,
         /*executed_tool_calls*/ Default::default(),
     ));
     let own = CellId::new("own-cell".to_string());
     let stranger = CellId::new("stranger-cell".to_string());
     broker.mark_cell_ready_for_dispatch(
         &own,
-        /*originating_item_id*/ None,
+        /*originating_call*/ None,
         vec!["memory.write_global".to_string()],
     );
     broker.mark_cell_ready_for_dispatch(
         &stranger,
-        /*originating_item_id*/ None,
+        /*originating_call*/ None,
         /*scopes*/ Vec::new(),
     );
+    let delegate = Arc::new(CodeModeCellDelegate {
+        broker: Arc::clone(&broker),
+        step_context: Arc::clone(&step),
+    });
     let _worker = broker.start_turn_worker(
-        ExecContext {
-            session: Arc::new(session),
-            turn,
-        },
+        Arc::new(session),
         step,
         Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
     );
     let call = |cell_id: CellId| {
-        let broker = Arc::clone(&broker);
+        let delegate = Arc::clone(&delegate);
         async move {
-            broker
+            delegate
                 .invoke_tool(
                     CodeModeNestedToolCall {
                         cell_id,
@@ -258,4 +267,68 @@ async fn a_cell_from_a_turn_with_other_scopes_cannot_call_tools() -> anyhow::Res
     let refused = call(stranger).await.expect_err("stranger refused");
     assert!(refused.contains("earlier turn"), "{refused}");
     Ok(())
+}
+
+#[tokio::test]
+async fn dropped_tool_callbacks_release_the_origin_before_dispatch() {
+    let (session, turn) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn = Arc::new(turn);
+    let broker = Arc::new(CodeModeDispatchBroker::new(
+        session.thread_id,
+        /*executed_tool_calls*/ Default::default(),
+    ));
+    let delegate = CodeModeCellDelegate {
+        broker: Arc::clone(&broker),
+        step_context: StepContext::for_test(Arc::clone(&turn)),
+    };
+    let origin = Arc::downgrade(&delegate.step_context);
+    let cell_id = CellId::new("queued-cell".to_string());
+    let cancellation_token = CancellationToken::new();
+    let mut callback = delegate.invoke_tool(
+        CodeModeNestedToolCall {
+            cell_id: cell_id.clone(),
+            runtime_tool_call_id: "call-a".to_string(),
+            tool_name: codex_tools::ToolName::plain("test-tool"),
+            tool_kind: codex_code_mode::CodeModeToolKind::Function,
+            input: None,
+        },
+        cancellation_token.clone(),
+    );
+    assert!(futures::poll!(callback.as_mut()).is_pending());
+    assert_eq!(broker.dispatch_rx.len(), 1);
+    drop(callback);
+    drop(delegate);
+    assert!(
+        origin.upgrade().is_none(),
+        "queued work must not own the step"
+    );
+
+    // Observe the queued message's result after its original receiver was dropped.
+    let mut message = broker.dispatch_rx.try_recv().unwrap();
+    let (response_tx, response_rx) = oneshot::channel();
+    let DispatchMessage::InvokeTool {
+        response_tx: queued_response,
+        ..
+    } = &mut message
+    else {
+        panic!("expected tool invocation");
+    };
+    *queued_response = response_tx;
+    broker.dispatch_tx.send(message).await.unwrap();
+    broker.mark_cell_ready_for_dispatch(
+        &cell_id,
+        /*originating_call*/ None,
+        /*scopes*/ Vec::new(),
+    );
+    let _worker = broker.start_turn_worker(
+        Arc::clone(&session),
+        StepContext::for_test(Arc::clone(&turn)),
+        Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new())),
+    );
+    let response = response_rx.await;
+    assert_eq!(
+        response.unwrap(),
+        Err("code mode nested tool call cancelled".to_string()),
+    );
 }

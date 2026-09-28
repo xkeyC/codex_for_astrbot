@@ -5,6 +5,7 @@ use crate::session::step_context::StepContext;
 #[cfg(test)]
 use crate::session::turn_context::TurnContext;
 use crate::tools::context::SharedTurnDiffTracker;
+use crate::tools::context::ToolCallState;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 #[cfg(test)]
@@ -27,7 +28,6 @@ use codex_tools::ToolSpec;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
@@ -173,7 +173,7 @@ impl ToolRouter {
     }
 
     // Answers if the tool plan lets the model invoke the tool directly, through code mode, or deferred tool search.
-    fn exposes_tool(&self, name: &ToolName) -> bool {
+    pub(super) fn exposes_tool(&self, name: &ToolName) -> bool {
         let name = name.clone().with_default_namespace();
         if self
             .code_mode_tool_names
@@ -220,6 +220,10 @@ impl ToolRouter {
             return Vec::new();
         }
         crate::tools::tool_catalog::deferred_code_mode_tools(&self.registry, excluded_namespaces)
+    }
+
+    pub(crate) fn mcp_namespaces(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.registry.mcp_namespaces()
     }
 
     #[cfg(test)]
@@ -325,14 +329,14 @@ impl ToolRouter {
             tracker,
             call,
             source,
-            /*terminal_outcome_reached*/ None,
+            /*call_state*/ None,
         )
         .await
     }
 
     #[instrument(level = "trace", skip_all, err)]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn dispatch_tool_call_with_terminal_outcome(
+    pub(crate) async fn dispatch_tool_call_with_state(
         &self,
         session: Arc<Session>,
         step_context: Arc<StepContext>,
@@ -340,7 +344,7 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
-        terminal_outcome_reached: Arc<AtomicBool>,
+        call_state: Arc<ToolCallState>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         self.dispatch_tool_call_with_code_mode_result_inner(
             session,
@@ -349,7 +353,7 @@ impl ToolRouter {
             tracker,
             call,
             source,
-            Some(terminal_outcome_reached),
+            Some(call_state),
         )
         .await
     }
@@ -363,7 +367,7 @@ impl ToolRouter {
         tracker: SharedTurnDiffTracker,
         call: ToolCall,
         source: ToolCallSource,
-        terminal_outcome_reached: Option<Arc<AtomicBool>>,
+        call_state: Option<Arc<ToolCallState>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let ToolCall {
             tool_name,
@@ -387,7 +391,7 @@ impl ToolRouter {
         };
 
         self.registry
-            .dispatch_any_with_terminal_outcome(invocation, terminal_outcome_reached)
+            .dispatch_any_with_state(invocation, call_state)
             .await
     }
 }

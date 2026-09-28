@@ -18,6 +18,7 @@ use tokio::sync::Semaphore;
 
 use http::HeaderValue;
 
+use crate::NetworkPolicy;
 use crate::chatgpt_cloudflare_cookies::ChatGptCookieStore;
 use crate::custom_ca::BuildCustomCaTransportError;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
@@ -171,13 +172,17 @@ pub struct HttpClientFactory {
     outbound_proxy_policy: OutboundProxyPolicy,
     /// Proxy URL of [`OutboundProxyPolicy::Explicit`].
     explicit_proxy: Option<Arc<str>>,
+    system_proxy_fallback: bool,
     chatgpt_cookie_store: Option<Arc<ChatGptCookieStore>>,
+    network_policy: NetworkPolicy,
 }
 
 impl PartialEq for HttpClientFactory {
     fn eq(&self, other: &Self) -> bool {
         self.outbound_proxy_policy == other.outbound_proxy_policy
             && self.explicit_proxy == other.explicit_proxy
+            && self.system_proxy_fallback == other.system_proxy_fallback
+            && self.network_policy == other.network_policy
             && self
                 .chatgpt_cookie_store
                 .as_ref()
@@ -195,6 +200,8 @@ impl fmt::Debug for HttpClientFactory {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HttpClientFactory")
             .field("outbound_proxy_policy", &self.outbound_proxy_policy)
+            .field("system_proxy_fallback", &self.system_proxy_fallback)
+            .field("network_policy", &self.network_policy)
             .finish()
     }
 }
@@ -205,18 +212,18 @@ impl HttpClientFactory {
         Self {
             outbound_proxy_policy,
             explicit_proxy: None,
+            system_proxy_fallback: false,
             chatgpt_cookie_store: None,
+            network_policy: NetworkPolicy::unmanaged(),
         }
     }
 
     /// Creates a factory that sends every request through `proxy_url`
     /// ([`OutboundProxyPolicy::Explicit`]).
     pub fn with_explicit_proxy(proxy_url: impl Into<Arc<str>>) -> Self {
-        Self {
-            outbound_proxy_policy: OutboundProxyPolicy::Explicit,
-            explicit_proxy: Some(proxy_url.into()),
-            chatgpt_cookie_store: None,
-        }
+        let mut factory = Self::new(OutboundProxyPolicy::Explicit);
+        factory.explicit_proxy = Some(proxy_url.into());
+        factory
     }
 
     fn explicit_route(&self) -> Option<OutboundProxyRoute> {
@@ -226,6 +233,34 @@ impl HttpClientFactory {
                 url: url.to_string(),
                 no_proxy: None,
             })
+    }
+
+    /// Carries the account/configuration owner's application policy into every transport.
+    pub fn with_network_policy(mut self, policy: NetworkPolicy) -> Self {
+        self.network_policy = policy;
+        self
+    }
+
+    pub fn network_policy(&self) -> &NetworkPolicy {
+        &self.network_policy
+    }
+
+    /// Changes the route policy while retaining the configured cookies and network policy.
+    pub fn with_outbound_proxy_policy(mut self, policy: OutboundProxyPolicy) -> Self {
+        self.outbound_proxy_policy = policy;
+        self
+    }
+
+    /// Allows bootstrap callers to retry through the system proxy when their request is safe
+    /// to replay. This does not change routing or enable retries for ordinary HTTP requests.
+    pub fn with_system_proxy_fallback(mut self) -> Self {
+        self.system_proxy_fallback = true;
+        self
+    }
+
+    pub fn allows_system_proxy_fallback(&self) -> bool {
+        self.system_proxy_fallback
+            && self.outbound_proxy_policy == OutboundProxyPolicy::ReqwestDefault
     }
 
     /// Adds process-scoped cookies to requests made by ChatGPT cookie-store clients.
@@ -319,14 +354,15 @@ impl HttpClientFactory {
     }
 
     /// Builds a reqwest client for a concrete outbound route.
-    pub fn build_reqwest_client(
+    pub(crate) fn build_reqwest_client(
         &self,
         builder: reqwest::ClientBuilder,
         request_url: &str,
         route_class: ClientRouteClass,
     ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
         if let Some(route) = self.explicit_route() {
-            return self.build_reqwest_client_for_resolved_route(builder, route_class, &route);
+            let builder = configure_builder_for_resolved_route(builder, route_class, &route)?;
+            return build_reqwest_client_with_custom_ca(builder).map_err(Into::into);
         }
         build_reqwest_client_for_route(
             builder,
@@ -334,16 +370,6 @@ impl HttpClientFactory {
             route_class,
             self.outbound_proxy_policy,
         )
-    }
-
-    pub(crate) fn build_reqwest_client_for_resolved_route(
-        &self,
-        builder: reqwest::ClientBuilder,
-        route_class: ClientRouteClass,
-        route: &OutboundProxyRoute,
-    ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-        let builder = configure_builder_for_resolved_route(builder, route_class, route)?;
-        build_reqwest_client_with_custom_ca(builder).map_err(Into::into)
     }
 }
 
@@ -449,6 +475,9 @@ pub enum BuildRouteAwareHttpClientError {
     #[error(transparent)]
     CustomCa(#[from] BuildCustomCaTransportError),
 
+    #[error("Failed to build HTTP client with explicit TLS configuration: {0}")]
+    ExplicitTls(reqwest::Error),
+
     #[error("Failed to configure outbound proxy selected for {route_class}")]
     InvalidProxyConfig { route_class: ClientRouteClass },
 }
@@ -457,7 +486,8 @@ impl From<BuildRouteAwareHttpClientError> for io::Error {
     fn from(error: BuildRouteAwareHttpClientError) -> Self {
         match error {
             BuildRouteAwareHttpClientError::CustomCa(error) => error.into(),
-            BuildRouteAwareHttpClientError::InvalidProxyConfig { .. } => io::Error::other(error),
+            BuildRouteAwareHttpClientError::InvalidProxyConfig { .. }
+            | BuildRouteAwareHttpClientError::ExplicitTls(_) => io::Error::other(error),
         }
     }
 }
@@ -502,7 +532,7 @@ fn configure_proxy_for_route(
     configure_builder_for_resolved_route(builder, route_class, &route)
 }
 
-fn configure_builder_for_resolved_route(
+pub(crate) fn configure_builder_for_resolved_route(
     builder: reqwest::ClientBuilder,
     route_class: ClientRouteClass,
     route: &OutboundProxyRoute,
@@ -629,7 +659,9 @@ static SYSTEM_PROXY_CACHE: OnceLock<Mutex<HashMap<String, CachedSystemProxyDecis
 
 fn cached_system_proxy_decision(request_url: &str) -> Option<SystemProxyDecision> {
     let cache = SYSTEM_PROXY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = cache.lock().ok()?;
+    // Platform resolution holds this mutex. Let contended async callers wait in the resolver
+    // lane instead of blocking their executor while checking the cache.
+    let mut cache = cache.try_lock().ok()?;
     let key = system_proxy_cache_key(request_url);
     cached_system_proxy_decision_from_cache(&mut cache, &key, Instant::now())
 }

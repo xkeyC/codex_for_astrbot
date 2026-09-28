@@ -3,7 +3,6 @@ use std::sync::Arc;
 use super::session::Session;
 use super::step_context::StepContext;
 use crate::connectors;
-use crate::context::ApprovalPromptContext;
 use crate::context::TokenBudgetContext;
 use crate::context::world_state::AgentsMdState;
 use crate::context::world_state::AppsInstructionsState;
@@ -18,7 +17,6 @@ use crate::context::world_state::MultiAgentModeState;
 use crate::context::world_state::MultiAgentUsageHintState;
 use crate::context::world_state::PermissionsState;
 use crate::context::world_state::PersistentModeState;
-use crate::context::world_state::PersonalityState;
 use crate::context::world_state::PluginsInstructionsState;
 use crate::context::world_state::RealtimeState;
 use crate::context::world_state::ToolCatalogSnapshot;
@@ -29,9 +27,16 @@ use crate::context::world_state::WorldStateSection;
 use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
-use codex_protocol::error::CodexErr;
+use codex_file_system::FileSystemSandboxContext;
+use codex_prompts::ApprovalPromptContext;
+use codex_prompts::ResolvedModelMessages;
+use codex_prompts::render_model_instructions;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructionsProvenance;
+use codex_protocol::protocol::MultiAgentVersion;
+
+const MAX_ENVIRONMENT_SUBAGENTS: usize = 8;
+const MAX_ENVIRONMENT_SUBAGENT_BYTES: usize = 1_024;
 
 impl Session {
     #[tracing::instrument(name = "world_state.build", level = "info", skip_all)]
@@ -42,12 +47,12 @@ impl Session {
         let turn_context = step_context.turn.as_ref();
         let settings = &step_context.settings;
         let model_info = settings.model_info.as_ref();
-        let personality = settings.personality();
+        let model_messages = ResolvedModelMessages::from_model(model_info);
         tracing::trace!(
             selected_capability_root_count = step_context.selected_capability_roots.len(),
             "building step world state"
         );
-        let model_instructions = model_info.get_model_instructions(personality);
+        let model_instructions = render_model_instructions(model_info);
         let model_instructions = if !turn_context.config.update_plan_enabled
             && turn_context.config.model_catalog.is_none()
             && (turn_context.config.base_instructions.is_none()
@@ -55,42 +60,59 @@ impl Session {
                     turn_context.config.base_instructions_provenance,
                     Some(BaseInstructionsProvenance::Model { .. })
                 )) {
-            crate::context::without_update_plan_instructions(&model_instructions)
+            codex_prompts::without_update_plan_instructions(&model_instructions)
         } else {
             model_instructions
         };
         let base_instructions = self.get_prompt_base_instructions().await.text;
-        let (previous_model, previous_context, base_instructions) = {
+        let previous_model = {
             let state = self.state.lock().await;
-            (
-                state
-                    .previous_turn_settings()
-                    .map(|previous| previous.model)
-                    .or_else(|| {
-                        state
-                            .base_instructions_provenance
-                            .as_ref()
-                            .and_then(|provenance| match provenance {
-                                BaseInstructionsProvenance::Model { model } => Some(model),
-                                BaseInstructionsProvenance::Custom => None,
-                            })
-                            .filter(|_| base_instructions != model_instructions)
-                            .cloned()
-                    }),
-                state.reference_context_item(),
-                base_instructions,
-            )
+            state
+                .previous_turn_settings()
+                .map(|previous| previous.model)
+                .or_else(|| {
+                    state
+                        .base_instructions_provenance
+                        .as_ref()
+                        .and_then(|provenance| match provenance {
+                            BaseInstructionsProvenance::Model { model } => Some(model),
+                            BaseInstructionsProvenance::Custom => None,
+                        })
+                        .filter(|_| base_instructions != model_instructions)
+                        .cloned()
+                })
         };
-        let personality_is_baked =
-            model_info.supports_personality() && base_instructions == model_instructions;
         let environment_subagents = if turn_context.config.include_environment_context {
-            self.services
-                .agent_control
-                .format_environment_context_subagents(
-                    self.thread_id,
-                    turn_context.multi_agent_version,
-                )
-                .await
+            match turn_context.multi_agent_version {
+                MultiAgentVersion::V2 => {
+                    let agent_paths = self
+                        .services
+                        .agent_control
+                        .child_agent_paths(self.thread_id)
+                        .await;
+                    let mut lines =
+                        Vec::with_capacity(agent_paths.len().min(MAX_ENVIRONMENT_SUBAGENTS));
+                    let mut rendered_bytes = "  <subagents>\n  </subagents>\n".len();
+                    for agent_path in agent_paths {
+                        if lines.len() == MAX_ENVIRONMENT_SUBAGENTS {
+                            break;
+                        }
+                        let line = format!(r#"<agent name="{agent_path}" />"#);
+                        let line_bytes = "    \n".len() + line.len();
+                        if rendered_bytes + line_bytes <= MAX_ENVIRONMENT_SUBAGENT_BYTES {
+                            rendered_bytes += line_bytes;
+                            lines.push(line);
+                        }
+                    }
+                    lines.join("\n")
+                }
+                MultiAgentVersion::Disabled | MultiAgentVersion::V1 => {
+                    self.services
+                        .local_agent_runtime
+                        .format_legacy_environment_context_subagents(self.thread_id)
+                        .await
+                }
+            }
         } else {
             String::new()
         };
@@ -100,28 +122,6 @@ impl Session {
             previous_model.as_deref(),
             model_instructions,
         ));
-        if self.features.enabled(Feature::Personality) {
-            let personality_instructions = personality.and_then(|personality| {
-                model_info
-                    .model_messages
-                    .as_ref()
-                    .and_then(|messages| messages.get_personality_message(Some(personality)))
-                    .filter(|message| !message.is_empty())
-            });
-            world_state.add_section(PersonalityState::new(
-                &model_info.slug,
-                personality,
-                previous_context
-                    .as_ref()
-                    .map(|previous| previous.model.as_str())
-                    .or(previous_model.as_deref()),
-                previous_context
-                    .as_ref()
-                    .and_then(|previous| previous.personality),
-                personality_instructions,
-                personality_is_baked,
-            ));
-        }
         let token_budget_enabled = turn_context.config.features.enabled(Feature::TokenBudget)
             && step_context
                 .settings
@@ -147,17 +147,19 @@ impl Session {
             .and_then(|config| config.guidance_message.as_deref())
             .filter(|_| token_budget_enabled);
         world_state.add_section(ContextWindowGuidanceState::new(guidance));
-        let realtime_mode_instructions = self.conversation.mode_instructions().await;
+        let realtime = &step_context.realtime;
         world_state.add_section(RealtimeState::new(
-            turn_context.realtime_active,
-            realtime_mode_instructions
+            realtime.active,
+            realtime
+                .mode_instructions
                 .as_ref()
                 .and_then(|instructions| instructions.start.as_deref())
                 .or(turn_context
                     .config
                     .experimental_realtime_start_instructions
                     .as_deref()),
-            realtime_mode_instructions
+            realtime
+                .mode_instructions
                 .as_ref()
                 .and_then(|instructions| instructions.end.as_deref()),
         ));
@@ -168,24 +170,27 @@ impl Session {
             .current_for_prefix_rules(turn_context.allow_prefix_rules());
         if turn_context.config.include_permissions_instructions {
             let environment = step_context.environments.primary();
-            let permission_profile = step_context
-                .environments
-                .permission_profile_or_else(|| turn_context.permission_profile());
+            let sandbox = environment
+                .filter(|environment| environment.environment.is_remote())
+                .map(|environment| {
+                    environment.sandbox_context(/*additional_permissions*/ None)
+                });
+            let paths = sandbox
+                .as_ref()
+                .map(FileSystemSandboxContext::policy_context);
+            let permission_profile =
+                turn_context.permission_profile_for_environments(&step_context.environments);
             #[allow(deprecated)]
             let cwd = environment
                 .and_then(|environment| environment.cwd().to_abs_path().ok())
                 .unwrap_or_else(|| turn_context.cwd.clone());
-            let model_messages = model_info.model_messages.as_ref();
             world_state.add_section(PermissionsState::new(
                 &permission_profile,
                 settings.approval_policy(),
-                ApprovalPromptContext::new(
-                    settings.approvals_reviewer(),
-                    model_messages.and_then(|messages| messages.approvals.as_ref()),
-                    model_messages.and_then(|messages| messages.permissions.as_ref()),
-                ),
+                ApprovalPromptContext::new(settings.approvals_reviewer(), model_messages),
                 exec_policy.as_ref(),
                 &cwd,
+                paths.as_ref(),
                 turn_context
                     .config
                     .features
@@ -201,10 +206,7 @@ impl Session {
         if turn_context.config.include_collaboration_mode_instructions {
             world_state.add_section(CollaborationModeState::from_collaboration_mode(
                 &settings.effective_collaboration_mode(),
-                model_info
-                    .model_messages
-                    .as_ref()
-                    .and_then(|messages| messages.collaboration_modes.as_ref()),
+                model_messages.collaboration_modes(),
                 turn_context.config.update_plan_enabled,
                 turn_context.config.model_catalog.is_some(),
             ));
@@ -220,30 +222,25 @@ impl Session {
                         .any(|tool| tool == "send_user_message_async");
             world_state.add_section(PersistentModeState::new(
                 step_context.settings.effective_reasoning_effort().as_ref(),
-                step_context
-                    .settings
-                    .model_info
-                    .model_messages
-                    .as_ref()
-                    .and_then(|messages| messages.persistent_instructions.as_deref()),
+                model_messages.persistent_instructions(),
                 send_user_message_async_available,
             ));
         }
         if turn_context.config.include_environment_context {
             let current_date = self
-                .services
-                .time_provider
-                .current_time(self.thread_id())
-                .await
-                .map_err(|err| CodexErr::Fatal(format!("failed to read current time: {err:#}")))?
-                .with_timezone(&chrono::Local)
-                .format("%Y-%m-%d")
-                .to_string();
+                .read_clock_for_context(turn_context, "environment_date")
+                .await?
+                .map(|current_time| {
+                    current_time
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d")
+                        .to_string()
+                });
             world_state.add_section(
                 EnvironmentsState::from_turn_context_with_environments(
                     turn_context,
                     &step_context.environments,
-                    Some(current_date),
+                    current_date,
                 )
                 .await
                 .with_subagents(environment_subagents),
@@ -277,6 +274,9 @@ impl Session {
         world_state.add_section(PluginsInstructionsState::new(
             plugins_usage_instructions_available,
         ));
+        let extension_metrics = super::extension_metrics::from_session_telemetry(
+            step_context.session_telemetry.clone(),
+        );
         if turn_context
             .config
             .features
@@ -284,6 +284,7 @@ impl Session {
         {
             world_state.add_section(ToolsState::new(
                 step_context.tool_router.deferred_tool_namespaces(),
+                Arc::clone(&extension_metrics),
             ));
         }
         if turn_context.config.code_mode.tool_catalog {
@@ -307,9 +308,6 @@ impl Session {
             .iter()
             .map(|root| root.selected_root().clone())
             .collect::<Vec<_>>();
-        let extension_metrics = super::extension_metrics::from_session_telemetry(
-            step_context.session_telemetry.clone(),
-        );
         for contributor in self.services.extensions.context_contributors() {
             for section in contributor
                 .contribute_world_state(WorldStateContributionInput {
@@ -334,9 +332,7 @@ impl Session {
         let mut multi_agent_mode = MultiAgentModeState::new(
             super::multi_agents::effective_multi_agent_mode(step_context),
         );
-        if let Some(usage_hint_text) =
-            super::multi_agents::usage_hint_text(step_context, &turn_context.session_source)
-        {
+        if let Some(usage_hint_text) = super::multi_agents::usage_hint_text(step_context) {
             let usage_hint = MultiAgentUsageHintState::new(usage_hint_text);
             multi_agent_mode = multi_agent_mode.with_usage_hint(&usage_hint);
             world_state.add_section(usage_hint);

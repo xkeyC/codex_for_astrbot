@@ -15,6 +15,7 @@ fn defaults(transport: Option<ConversationStartTransport>) -> ConversationStartP
         codex_responses_as_items: false,
         codex_response_item_prefix: None,
         codex_response_handoff_mode: CodexResponseHandoffMode::Thinking,
+        backend_reasoning_status: false,
         codex_response_handoff_channel_prefixes: None,
         model: None,
         output_modality: RealtimeOutputModality::Audio,
@@ -90,6 +91,7 @@ fn full_request_maps_every_field() {
         codex_responses_as_items: true,
         codex_response_item_prefix: Some("codex:".to_string()),
         codex_response_handoff_mode: CodexResponseHandoffMode::BemTags,
+        backend_reasoning_status: false,
         codex_response_handoff_channel_prefixes: Some(BTreeMap::from([(
             "final".to_string(),
             vec!["<f>".to_string()],

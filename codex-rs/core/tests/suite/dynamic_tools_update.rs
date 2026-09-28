@@ -80,6 +80,8 @@ async fn replacing_dynamic_tools_keeps_history_and_persists() -> Result<()> {
         .thread_manager
         .start_thread(StartThreadOptions {
             dynamic_tools: vec![namespace_with(&["tool_alpha"])],
+            // AstrBot's threads: resuming reads the whole rollout.
+            history_mode: Some(codex_protocol::protocol::ThreadHistoryMode::Legacy),
             ..StartThreadOptions::new(base_test.config.clone())
         })
         .await?;
@@ -124,7 +126,7 @@ async fn replacing_dynamic_tools_keeps_history_and_persists() -> Result<()> {
     let rollout_path = test.codex.rollout_path().expect("rollout path");
     let resumed = test
         .thread_manager
-        .resume_thread_from_rollout(
+        .resume_legacy_thread_from_rollout(
             test.config.clone(),
             rollout_path,
             test.thread_manager.auth_manager(),

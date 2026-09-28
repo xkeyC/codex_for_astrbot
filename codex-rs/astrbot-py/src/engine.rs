@@ -43,6 +43,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::turn_input::TurnInputRequest;
 use codex_protocol::user_input::UserInput;
@@ -312,6 +313,9 @@ impl Engine {
     fn start_options(&self, config: Config, params: ThreadParams) -> StartThreadOptions {
         let mut options = StartThreadOptions::new(config);
         options.dynamic_tools = params.dynamic_tools;
+        // Resume reads the whole rollout (`resume_thread`), which paginated
+        // threads -- the local default since rust-v0.158 -- do not support.
+        options.history_mode = Some(ThreadHistoryMode::Legacy);
         if params.no_environment {
             options.environments = Some(Vec::new());
         }
@@ -512,6 +516,7 @@ impl Engine {
                     dynamic_tools: Some(tools),
                     ..Default::default()
                 },
+                reply: None,
             })
             .await?;
         Ok(())
@@ -725,7 +730,7 @@ fn build_extensions(
             include_instructions: config.include_skill_instructions,
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: config.bundled_skills_enabled(),
-            orchestrator_skills_enabled: config.orchestrator_skills_enabled,
+            cloud_skill_enabled: config.cloud_skill_enabled,
             shadow_selection_enabled: false,
         }
     });

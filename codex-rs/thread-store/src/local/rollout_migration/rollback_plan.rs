@@ -12,9 +12,11 @@ use std::collections::HashSet;
 
 use codex_protocol::ResponseItemId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::protocol::UserMessageImageKind;
 use codex_rollout::CompactedItem;
 use codex_rollout::RetainedContextEntry;
 use codex_rollout::RetainedInputSource;
@@ -156,6 +158,19 @@ impl RollbackPlanner {
         match &line.item {
             RolloutItem::SessionMeta(_) => self.record_boundaries[index] = None,
             RolloutItem::ResponseItem(response) => {
+                if matches!(&response.item, ResponseItem::Message { role, .. } if role == "assistant")
+                    || matches!(&response.item, ResponseItem::FunctionCall { .. })
+                {
+                    self.retained_fact_sources.push(RetainedFactSource {
+                        record_index: index,
+                        turn_id: response.turn_id().unwrap_or_default().to_owned(),
+                        acceptance_order: response
+                            .metadata
+                            .as_ref()
+                            .filter(|metadata| !metadata.inherited_user_message)
+                            .and_then(|metadata| metadata.user_input_order),
+                    });
+                }
                 if let Some(boundary) = paired_delivery_boundary {
                     self.record_boundaries[index] = Some(boundary);
                     self.boundaries[boundary].message_id = response.id().cloned();
@@ -488,19 +503,39 @@ fn explicit_event_turn_id(event: &EventMsg) -> Option<&str> {
 fn user_response_matches_event(content: &[ContentItem], event: &UserMessageEvent) -> bool {
     let mut text = String::new();
     let mut images = Vec::new();
+    let mut file_ids = Vec::new();
+    let mut image_order = Vec::new();
     let mut audio = Vec::new();
     for item in content {
         match item {
             ContentItem::InputText { text: item_text } => text.push_str(item_text),
-            ContentItem::InputImage { image_url, .. } => images.push(image_url.as_str()),
+            ContentItem::InputImage { image, .. } => match image {
+                ImageReference::Inline { image_url } => {
+                    image_order.push(UserMessageImageKind::Inline);
+                    images.push(image_url.as_str());
+                }
+                ImageReference::File { file_id } => {
+                    image_order.push(UserMessageImageKind::File);
+                    file_ids.push(file_id.as_str());
+                }
+            },
             ContentItem::InputAudio { audio_url } => audio.push(audio_url.as_str()),
             ContentItem::OutputText { .. } => return false,
         }
     }
     text == event.message
+        && (!event.has_complete_image_order() || image_order == event.image_order)
         && images
             == event
                 .images
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        && file_ids
+            == event
+                .file_ids
                 .as_deref()
                 .unwrap_or_default()
                 .iter()

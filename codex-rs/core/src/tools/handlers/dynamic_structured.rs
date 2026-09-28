@@ -16,6 +16,7 @@
 //! output for direct calls is unchanged.
 
 use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
 use serde_json::Value as JsonValue;
 use serde_json::json;
@@ -53,14 +54,19 @@ pub(crate) fn structured_code_mode_result(
                 texts.push(text.as_str());
                 content.push(json!({"type": "text", "text": text}));
             }
-            FunctionCallOutputContentItem::InputImage { image_url, .. } => {
-                match split_data_url(image_url) {
-                    Some((mime, data)) => {
-                        content.push(json!({"type": "image", "data": data, "mimeType": mime}));
-                    }
-                    None => content.push(json!({"type": "text", "text": image_url})),
+            FunctionCallOutputContentItem::InputImage {
+                image: ImageReference::Inline { image_url },
+                ..
+            } => match split_data_url(image_url) {
+                Some((mime, data)) => {
+                    content.push(json!({"type": "image", "data": data, "mimeType": mime}));
                 }
-            }
+                None => content.push(json!({"type": "text", "text": image_url})),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image: ImageReference::File { file_id },
+                ..
+            } => content.push(json!({"type": "text", "text": format!("[image file {file_id}]")})),
             FunctionCallOutputContentItem::InputAudio { audio_url } => {
                 match split_data_url(audio_url) {
                     Some((mime, data)) => {
@@ -113,7 +119,9 @@ mod tests {
                 text: "hello".to_string(),
             },
             FunctionCallOutputContentItem::InputImage {
-                image_url: "data:image/png;base64,AAAA".to_string(),
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,AAAA".to_string(),
+                },
                 detail: None,
             },
             FunctionCallOutputContentItem::InputText {

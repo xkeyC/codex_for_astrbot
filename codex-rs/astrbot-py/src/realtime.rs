@@ -123,6 +123,8 @@ impl RealtimeStartRequest {
             codex_responses_as_items: self.codex_responses_as_items,
             codex_response_item_prefix: self.codex_response_item_prefix,
             codex_response_handoff_mode: self.codex_response_handoff_mode,
+            // Only realtime V3 delegations use it; AstrBot drives V1/V2 sessions.
+            backend_reasoning_status: false,
             codex_response_handoff_channel_prefixes: self.codex_response_handoff_channel_prefixes,
             model: self.model,
             output_modality: self.output_modality,

@@ -19,7 +19,13 @@ fn tool(hook: Option<SavedImageHook>) -> ImageGenerationTool {
         /*auth_manager*/ None,
     );
     ImageGenerationTool::new(
-        CodexImagesBackend::new(provider, /*originator*/ None),
+        CodexImagesBackend::new(
+            provider,
+            codex_http_client::HttpClientFactory::new(
+                codex_http_client::OutboundProxyPolicy::ReqwestDefault,
+            ),
+            /*originator*/ None,
+        ),
         /*save_root*/ None,
         "thread-1".to_string(),
         hook,

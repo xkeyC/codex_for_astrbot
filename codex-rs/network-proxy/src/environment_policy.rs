@@ -16,7 +16,8 @@ pub struct EnvironmentNetworkPolicy {
     pub unix_sockets: Option<NetworkUnixSocketPermissions>,
     pub allow_upstream_proxy: bool,
     pub dangerously_allow_all_unix_sockets: bool,
-    pub allow_local_binding: bool,
+    /// Omission inherits local-binding policy; an explicit false remains a restriction.
+    pub allow_local_binding: Option<bool>,
     pub managed_allowed_domains_only: bool,
 }
 
@@ -27,7 +28,9 @@ impl EnvironmentNetworkPolicy {
             domains: config.domains.clone(),
             unix_sockets: config.unix_sockets.clone(),
             allow_upstream_proxy: config.allow_upstream_proxy,
-            dangerously_allow_all_unix_sockets: config.dangerously_allow_all_unix_sockets,
+            dangerously_allow_all_unix_sockets: config
+                .dangerously_allow_all_unix_sockets
+                .unwrap_or(false),
             allow_local_binding: config.allow_local_binding,
             managed_allowed_domains_only,
         }
@@ -45,11 +48,16 @@ impl EnvironmentNetworkPolicy {
                 crate::normalize_host,
             );
         }
+        // An omitted controller policy leaves socket permissions to the attachment;
+        // an explicitly empty socket map still supplies a restrictive ceiling.
+        let inherited_allow_all = config
+            .dangerously_allow_all_unix_sockets
+            .unwrap_or(config.unix_sockets.is_none());
         let inherited_sockets = config.unix_sockets.take().unwrap_or_default();
         let mut effective_sockets = self.unix_sockets.clone().unwrap_or_default();
 
         // "Allow all" cannot override a socket denied by either policy.
-        let inherited_permits_all = config.dangerously_allow_all_unix_sockets
+        let inherited_permits_all = inherited_allow_all
             && !inherited_sockets
                 .entries
                 .values()
@@ -75,10 +83,15 @@ impl EnvironmentNetworkPolicy {
             }
         }
 
-        // Enable permissions only when both controller and owner allow them.
+        // Socket and upstream-proxy permissions require both controller and owner grants.
         config.unix_sockets = (!effective_sockets.entries.is_empty()).then_some(effective_sockets);
-        config.dangerously_allow_all_unix_sockets = inherited_permits_all && owner_permits_all;
+        config.dangerously_allow_all_unix_sockets =
+            Some(inherited_permits_all && owner_permits_all);
         config.allow_upstream_proxy &= self.allow_upstream_proxy;
-        config.allow_local_binding &= self.allow_local_binding;
+        // Either explicit denial wins; defer unresolved defaults to the executor.
+        config.allow_local_binding = match (config.allow_local_binding, self.allow_local_binding) {
+            (Some(controller), Some(owner)) => Some(controller && owner),
+            (controller, owner) => controller.or(owner),
+        };
     }
 }
