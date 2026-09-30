@@ -58,7 +58,8 @@ pub struct LocalInfraRealtimeConfig {
     #[schemars(with = "BTreeMap<String, serde_json::Value>")]
     pub session: BTreeMap<String, serde_json::Value>,
     /// While the conversation is idle, compact the thread's history once its
-    /// prompt passes this percentage of the auto-compact limit, so no turn
-    /// waits for it (0 or unset: only Codex's own compaction).
+    /// prompt passes this percentage of the model's context window, so no
+    /// turn waits for it (0 or unset: only Codex's own compaction). After one
+    /// the prompt must grow by a tenth of the window before the next.
     pub idle_compact_percent: Option<u8>,
 }

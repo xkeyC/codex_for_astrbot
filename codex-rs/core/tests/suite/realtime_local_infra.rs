@@ -199,6 +199,11 @@ async fn the_silence_marker_is_not_spoken() -> Result<()> {
         move |config| {
             config.realtime.backend = RealtimeBackend::LocalMultimodalInfra;
             config.realtime.local_infra.url = Some(url);
+            config
+                .realtime
+                .local_infra
+                .session
+                .insert("name".to_string(), json!("Xiaole"));
         }
     });
     let test = builder.build(&api_server).await?;

@@ -63,8 +63,9 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
 }
 
 /// AstrBot: `model` with the fields of `metadata` (a partial model info
-/// object, e.g. from `model_provider_options`) set over its own. The model
-/// then counts as known. Metadata that does not fit is logged and ignored.
+/// object, e.g. from `model_provider_options`) set over its own, field by
+/// field: one that does not fit is logged and skipped. The model then counts
+/// as known. A `context_window` also raises `max_context_window` to it.
 pub fn with_metadata(model: ModelInfo, metadata: &serde_json::Value) -> ModelInfo {
     let Some(fields) = metadata.as_object() else {
         warn!(
@@ -73,23 +74,31 @@ pub fn with_metadata(model: ModelInfo, metadata: &serde_json::Value) -> ModelInf
         );
         return model;
     };
-    let mut merged = match serde_json::to_value(&model) {
-        Ok(serde_json::Value::Object(merged)) => merged,
-        _ => return model,
-    };
+    let slug = model.slug.clone();
+    let mut merged = model;
     for (key, value) in fields {
-        merged.insert(key.clone(), value.clone());
-    }
-    match serde_json::from_value::<ModelInfo>(serde_json::Value::Object(merged)) {
-        Ok(merged) => ModelInfo {
-            slug: model.slug,
-            used_fallback_model_metadata: false,
-            ..merged
-        },
-        Err(err) => {
-            warn!(model = model.slug, "model metadata ignored: {err}");
-            model
+        let Ok(serde_json::Value::Object(mut object)) = serde_json::to_value(&merged) else {
+            break;
+        };
+        object.insert(key.clone(), value.clone());
+        match serde_json::from_value::<ModelInfo>(serde_json::Value::Object(object)) {
+            Ok(next) => merged = next,
+            Err(err) => warn!(
+                model = slug,
+                field = key,
+                "model metadata field ignored: {err}"
+            ),
         }
+    }
+    if !fields.contains_key("max_context_window")
+        && let Some(window) = merged.context_window
+    {
+        merged.max_context_window = Some(merged.max_context_window.unwrap_or(0).max(window));
+    }
+    ModelInfo {
+        slug,
+        used_fallback_model_metadata: false,
+        ..merged
     }
 }
 

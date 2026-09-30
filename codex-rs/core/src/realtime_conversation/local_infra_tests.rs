@@ -21,18 +21,23 @@ fn harness(group: bool) -> Harness {
             events_tx,
             out: out_tx,
             resampler: Resampler::default(),
+            output_rate: OUTPUT_RATE,
             started: true,
             speaking: false,
             listening: false,
             turn: Some("t1".to_string()),
-            open_responses: HashSet::new(),
+            compacting: false,
+            muted_turn: None,
+            open_responses: HashMap::new(),
             items: HashMap::new(),
             context: Vec::new(),
             cut_off: None,
+            last_answered: None,
             waiting: Vec::new(),
             waiting_since: None,
             idle_since: None,
             last_prompt: None,
+            compact_floor: CompactFloor::None,
         },
         out: out_rx,
         _events: events_rx,
@@ -172,6 +177,7 @@ async fn the_next_input_carries_context_and_what_was_heard_of_a_cut_reply() {
     h.conversation
         .server_event(r#"{"type":"input.transcript","id":3,"text":"老王，吃饭去","respond":false}"#)
         .await;
+    h.delta("t1", "m1", "从前有座山，山里有座庙。").await;
     h.conversation
         .server_event(
             r#"{"type":"response.done","response_id":"m1","spoken":"从前有座山，","cut":true}"#,
@@ -260,4 +266,99 @@ fn audio_at_24k_is_resampled() {
         total += out.len() / 2;
     }
     assert!((15_999..=16_000).contains(&total), "{total}");
+}
+
+#[tokio::test]
+async fn a_cut_turn_says_nothing_more_and_leaves_nothing_open() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "从前有座山，").await;
+    h.sent();
+    h.conversation
+        .server_event(r#"{"type":"response.cut","response_id":"m1"}"#)
+        .await;
+    h.conversation
+        .server_event(
+            r#"{"type":"response.done","response_id":"m1","spoken":"从前有座山，","cut":true}"#,
+        )
+        .await;
+    // The turn goes on generating: none of it is spoken, a new message
+    // included, and nothing stays open.
+    h.delta("t1", "m1", "山里有座庙。").await;
+    h.delta("t1", "m2", "我接着讲。").await;
+    h.done("t1", "m2", "我接着讲。").await;
+    assert_eq!(h.sent(), Vec::<serde_json::Value>::new());
+    assert!(h.conversation.open_responses.is_empty());
+    h.conversation
+        .turn_signal(TurnSignal::Finished {
+            turn_id: Some("t1".to_string()),
+        })
+        .await;
+    assert!(h.conversation.idle());
+    assert_eq!(h.conversation.cut_off.as_deref(), Some("从前有座山，"));
+}
+
+#[tokio::test]
+async fn what_was_heard_of_several_cut_replies_adds_up() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "第一句。").await;
+    h.delta("t1", "m2", "第二句。").await;
+    for (id, spoken) in [("m1", "第一句。"), ("m2", "")] {
+        h.conversation
+            .server_event(&format!(
+                r#"{{"type":"response.done","response_id":"{id}","spoken":"{spoken}","cut":true}}"#
+            ))
+            .await;
+    }
+    assert_eq!(h.conversation.cut_off.as_deref(), Some("第一句。"));
+}
+
+#[tokio::test]
+async fn a_cut_of_a_replaced_turn_is_not_told_to_the_next_one() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "旧的回答。").await;
+    // Already answering a newer utterance.
+    h.conversation.turn = Some("t2".to_string());
+    h.conversation
+        .server_event(r#"{"type":"response.done","response_id":"m1","spoken":"旧的","cut":true}"#)
+        .await;
+    assert_eq!(h.conversation.cut_off, None);
+}
+
+#[tokio::test]
+async fn an_utterance_that_goes_on_replaces_its_context() {
+    let mut h = harness(true);
+    h.conversation
+        .server_event(r#"{"type":"input.transcript","id":3,"text":"老王","respond":false}"#)
+        .await;
+    h.conversation
+        .server_event(
+            r#"{"type":"input.transcript","id":4,"text":"老王，吃饭去","replaces":3,"respond":false}"#,
+        )
+        .await;
+    assert_eq!(
+        h.conversation.context,
+        vec![(4, "老王，吃饭去".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn after_a_compaction_the_prompt_must_grow_again() {
+    let mut h = harness(false);
+    h.conversation.compact_floor = CompactFloor::AfterNextPrompt;
+    h.conversation
+        .turn_signal(TurnSignal::Tokens {
+            input: 60_000,
+            window: Some(100_000),
+        })
+        .await;
+    assert_eq!(h.conversation.compact_floor, CompactFloor::Tokens(70_000));
+}
+
+#[tokio::test]
+async fn the_marker_cut_short_at_the_end_is_not_spoken() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "<sil").await;
+    h.done("t1", "m1", "<sil").await;
+    h.done("t1", "m2", "<silence>\n(nothing to say)").await;
+    assert_eq!(h.sent(), Vec::<serde_json::Value>::new());
 }

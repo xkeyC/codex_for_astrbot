@@ -1657,13 +1657,22 @@ fn provider_model_metadata_makes_an_unknown_model_known() {
 }
 
 #[test]
-fn provider_model_metadata_that_does_not_fit_is_ignored() {
+fn provider_model_metadata_fields_that_do_not_fit_are_skipped() {
     let mut config = ModelsManagerConfig::default();
     config.model_overrides.insert(
         "odd-model".to_string(),
-        serde_json::json!({"context_window": "large"}),
+        serde_json::json!({
+            "context_window": 1_000_000,
+            "supported_reasoning_levels": ["low", "high"],
+            "support_verbosity": "sometimes",
+        }),
     );
     let model = construct_model_info_from_candidates("odd-model", &[], &config);
-    assert!(model.used_fallback_model_metadata);
-    assert_eq!(model.context_window, Some(272_000));
+    // The fields that fit are kept; the window above the fallback's maximum
+    // raises it.
+    assert!(!model.used_fallback_model_metadata);
+    assert_eq!(model.context_window, Some(1_000_000));
+    assert_eq!(model.max_context_window, Some(1_000_000));
+    assert!(model.supported_reasoning_levels.is_empty());
+    assert!(!model.support_verbosity);
 }

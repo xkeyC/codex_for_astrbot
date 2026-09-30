@@ -2238,7 +2238,7 @@
       "description": "`[realtime.local_infra]`: the server and how its sessions start.",
       "properties": {
         "idle_compact_percent": {
-          "description": "While the conversation is idle, compact the thread's history once its prompt passes this percentage of the auto-compact limit, so no turn waits for it (0 or unset: only Codex's own compaction).",
+          "description": "While the conversation is idle, compact the thread's history once its prompt passes this percentage of the model's context window, so no turn waits for it (0 or unset: only Codex's own compaction). After one the prompt must grow by a tenth of the window before the next.",
           "format": "uint8",
           "minimum": 0.0,
           "type": "integer"
@@ -2826,7 +2826,7 @@
             "type": "object"
           },
           "default": {},
-          "description": "Model metadata by model slug: any fields of Codex's model info (for example `context_window`, `auto_compact_token_limit`, `supported_reasoning_levels`, `default_reasoning_level`, `input_modalities`), merged over what Codex would use otherwise.",
+          "description": "Model metadata by model slug: any fields of Codex's model info (for example `context_window`, `auto_compact_token_limit`, `supported_reasoning_levels` as `[{effort, description}]`, `default_reasoning_level`, `input_modalities`), merged field by field over what Codex would use otherwise; a field that does not fit is skipped (and logged).",
           "type": "object"
         }
       },

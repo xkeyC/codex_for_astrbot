@@ -33,8 +33,10 @@ pub struct ModelProviderOptions {
     pub compaction: ProviderCompaction,
     /// Model metadata by model slug: any fields of Codex's model info (for
     /// example `context_window`, `auto_compact_token_limit`,
-    /// `supported_reasoning_levels`, `default_reasoning_level`,
-    /// `input_modalities`), merged over what Codex would use otherwise.
+    /// `supported_reasoning_levels` as `[{effort, description}]`,
+    /// `default_reasoning_level`, `input_modalities`), merged field by field
+    /// over what Codex would use otherwise; a field that does not fit is
+    /// skipped (and logged).
     #[serde(default)]
     #[schemars(with = "BTreeMap<String, BTreeMap<String, serde_json::Value>>")]
     pub models: BTreeMap<String, serde_json::Value>,
