@@ -185,6 +185,8 @@ pub(crate) struct ModelInfoOverrides {
     pub(crate) tool_output_token_limit: Option<usize>,
     pub(crate) base_instructions: Option<String>,
     pub(crate) tool_mode: Option<codex_protocol::openai_models::ToolMode>,
+    /// AstrBot: the provider's model metadata (`model_provider_options`).
+    pub(crate) model_overrides: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl From<ModelsManagerConfig> for ModelInfoOverrides {
@@ -195,6 +197,7 @@ impl From<ModelsManagerConfig> for ModelInfoOverrides {
             tool_output_token_limit: config.tool_output_token_limit,
             base_instructions: config.base_instructions,
             tool_mode: config.tool_mode,
+            model_overrides: config.model_overrides,
         }
     }
 }
@@ -213,6 +216,7 @@ impl ModelInfoOverrides {
             // The models manager already owns its catalog.
             model_catalog: None,
             tool_mode: self.tool_mode,
+            model_overrides: self.model_overrides.clone(),
         }
     }
 }

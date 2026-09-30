@@ -34,6 +34,7 @@ use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::loader::load_config_layers_state;
 use codex_config::loader::project_trust_key;
+use codex_config::model_provider_options::ModelProviderOptions;
 use codex_config::permissions_toml::PermissionProfileToml;
 use codex_config::permissions_toml::PermissionsToml;
 use codex_config::sandbox_mode_requirement_for_permission_profile;
@@ -1006,6 +1007,10 @@ pub struct Config {
     /// When set, this replaces the bundled catalog for the current process.
     pub model_catalog: Option<ModelsResponse>,
 
+    /// AstrBot: per-provider options (compaction mode, model metadata) by
+    /// provider id.
+    pub model_provider_options: HashMap<String, ModelProviderOptions>,
+
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
@@ -1708,7 +1713,16 @@ impl Config {
             personality: self.personality,
             model_catalog: self.model_catalog.clone(),
             tool_mode: self.model_tool_mode,
+            model_overrides: self.provider_options().models,
         }
+    }
+
+    /// AstrBot: the options of this thread's provider (defaults when none).
+    pub fn provider_options(&self) -> ModelProviderOptions {
+        self.model_provider_options
+            .get(&self.model_provider_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Returns auth routing resolved from the effective feature configuration.
@@ -4470,6 +4484,7 @@ impl Config {
             plan_mode_reasoning_effort: cfg.plan_mode_reasoning_effort,
             model_reasoning_summary: cfg.model_reasoning_summary,
             model_catalog,
+            model_provider_options: cfg.model_provider_options.clone(),
             model_verbosity: cfg.model_verbosity,
             chatgpt_base_url: cfg
                 .chatgpt_base_url
@@ -4503,6 +4518,8 @@ impl Config {
                         host_routes_handoffs: realtime
                             .host_routes_handoffs
                             .unwrap_or(defaults.host_routes_handoffs),
+                        backend: realtime.backend.unwrap_or(defaults.backend),
+                        local_infra: realtime.local_infra.unwrap_or_default(),
                     }
                 }),
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,

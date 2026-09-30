@@ -1623,3 +1623,47 @@ fn bundled_models_json_roundtrips() {
         "bundled models.json should contain at least one model"
     );
 }
+
+// AstrBot: model metadata of `model_provider_options`.
+#[test]
+fn provider_model_metadata_makes_an_unknown_model_known() {
+    let mut config = ModelsManagerConfig::default();
+    config.model_overrides.insert(
+        "deepseek-v4.1-flash".to_string(),
+        serde_json::json!({
+            "context_window": 128000,
+            "auto_compact_token_limit": 100000,
+            "default_reasoning_level": "none",
+            "input_modalities": ["text", "image"],
+        }),
+    );
+    let model = construct_model_info_from_candidates("deepseek-v4.1-flash", &[], &config);
+    assert!(!model.used_fallback_model_metadata);
+    assert_eq!(model.slug, "deepseek-v4.1-flash");
+    assert_eq!(model.context_window, Some(128000));
+    assert_eq!(model.auto_compact_token_limit, Some(100000));
+    assert_eq!(
+        model.default_reasoning_level,
+        Some(codex_protocol::openai_models::ReasoningEffort::None)
+    );
+    assert_eq!(model.input_modalities.len(), 2);
+
+    // Other models are left alone; an explicit context window still wins.
+    let other = construct_model_info_from_candidates("another-model", &[], &config);
+    assert!(other.used_fallback_model_metadata);
+    config.model_context_window = Some(64000);
+    let model = construct_model_info_from_candidates("deepseek-v4.1-flash", &[], &config);
+    assert_eq!(model.context_window, Some(64000));
+}
+
+#[test]
+fn provider_model_metadata_that_does_not_fit_is_ignored() {
+    let mut config = ModelsManagerConfig::default();
+    config.model_overrides.insert(
+        "odd-model".to_string(),
+        serde_json::json!({"context_window": "large"}),
+    );
+    let model = construct_model_info_from_candidates("odd-model", &[], &config);
+    assert!(model.used_fallback_model_metadata);
+    assert_eq!(model.context_window, Some(272_000));
+}

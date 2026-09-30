@@ -797,6 +797,10 @@ pub(crate) fn construct_model_info_from_candidates(
     } else {
         model_info::model_info_from_slug(model)
     };
+    let model_info = match config.model_overrides.get(model) {
+        Some(metadata) => model_info::with_metadata(model_info, metadata),
+        None => model_info,
+    };
     model_info::with_config_overrides(model_info, config)
 }
 

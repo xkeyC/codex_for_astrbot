@@ -13193,6 +13193,8 @@ voice = "cedar"
             transport: Some(RealtimeTransport::WebRtc),
             voice: Some(RealtimeVoice::Cedar),
             host_routes_handoffs: None,
+            backend: None,
+            local_infra: None,
         })
     );
 
@@ -13212,6 +13214,8 @@ voice = "cedar"
             transport: RealtimeTransport::WebRtc,
             voice: Some(RealtimeVoice::Cedar),
             host_routes_handoffs: false,
+            backend: Default::default(),
+            local_infra: Default::default(),
         }
     );
     Ok(())
@@ -13483,5 +13487,69 @@ fn sqlite_home_env_conflict_reports_an_override() -> std::io::Result<()> {
     );
     assert!(warnings.is_empty());
 
+    Ok(())
+}
+
+// AstrBot: `[model_provider_options]` and the local-multimodal-infra realtime
+// backend load from config.toml.
+#[tokio::test]
+async fn provider_options_and_local_infra_realtime_load_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+model_provider = "deepseek"
+
+[model_providers.deepseek]
+name = "DeepSeek"
+base_url = "https://api.deepseek.com"
+
+[model_provider_options.deepseek]
+compaction = "local"
+
+[model_provider_options.deepseek.models."deepseek-v4.1-flash"]
+context_window = 128000
+
+[realtime]
+backend = "local_multimodal_infra"
+
+[realtime.local_infra]
+url = "ws://127.0.0.1:17890/v1/realtime"
+idle_compact_percent = 70
+
+[realtime.local_infra.session]
+name = "Xiaole"
+group = true
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.abs(),
+    )
+    .await?;
+
+    let options = config.provider_options();
+    assert_eq!(
+        options.compaction,
+        codex_config::model_provider_options::ProviderCompaction::Local
+    );
+    assert_eq!(
+        config.to_models_manager_config().model_overrides["deepseek-v4.1-flash"]["context_window"],
+        serde_json::json!(128000)
+    );
+    assert_eq!(
+        config.realtime.backend,
+        codex_config::realtime_local_infra::RealtimeBackend::LocalMultimodalInfra
+    );
+    assert_eq!(
+        config.realtime.local_infra.url.as_deref(),
+        Some("ws://127.0.0.1:17890/v1/realtime")
+    );
+    assert_eq!(config.realtime.local_infra.idle_compact_percent, Some(70));
+    assert_eq!(
+        config.realtime.local_infra.session["group"],
+        serde_json::json!(true)
+    );
     Ok(())
 }

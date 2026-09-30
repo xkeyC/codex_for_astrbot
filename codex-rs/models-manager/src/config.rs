@@ -1,6 +1,7 @@
 use codex_protocol::config_types::Personality;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ToolMode;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Default)]
 pub struct ModelsManagerConfig {
@@ -12,4 +13,7 @@ pub struct ModelsManagerConfig {
     pub model_catalog: Option<ModelsResponse>,
     /// Forces the tool mode regardless of the model catalog.
     pub tool_mode: Option<ToolMode>,
+    /// AstrBot: model metadata of the provider by model slug (partial model
+    /// info objects), merged over the catalog entry or the fallback.
+    pub model_overrides: BTreeMap<String, serde_json::Value>,
 }

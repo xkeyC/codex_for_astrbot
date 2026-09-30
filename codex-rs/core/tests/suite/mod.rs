@@ -163,6 +163,7 @@ mod prompt_debug_tests;
 mod quota_exceeded;
 mod realtime_conversation;
 mod realtime_initial_items;
+mod realtime_local_infra;
 mod realtime_misalignment;
 mod realtime_sideband_endpoint;
 mod realtime_system_proxy;

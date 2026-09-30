@@ -2233,6 +2233,37 @@
     "LegacyAppPathString": {
       "type": "string"
     },
+    "LocalInfraRealtimeConfig": {
+      "additionalProperties": false,
+      "description": "`[realtime.local_infra]`: the server and how its sessions start.",
+      "properties": {
+        "idle_compact_percent": {
+          "description": "While the conversation is idle, compact the thread's history once its prompt passes this percentage of the auto-compact limit, so no turn waits for it (0 or unset: only Codex's own compaction).",
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "ref_audio_path": {
+          "description": "A WAV file whose voice the bot speaks with (sent as `ref_audio`); without it the server's default voice.",
+          "type": "string"
+        },
+        "session": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "More `session.start` config fields, sent as they are (`name`, `aliases`, `group`, `tts_emotion`, `min_silence_ms`, ...). `mode` is always `audio`.",
+          "type": "object"
+        },
+        "token": {
+          "description": "Bearer token (one of the server's `LOCAL_MCP_INFER_TOKENS`), if it asks for one.",
+          "type": "string"
+        },
+        "url": {
+          "description": "The server's realtime WebSocket, e.g. `ws://127.0.0.1:17890/v1/realtime`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
@@ -2772,6 +2803,31 @@
           ],
           "default": "responses",
           "description": "Which wire protocol this provider expects."
+        }
+      },
+      "type": "object"
+    },
+    "ModelProviderOptions": {
+      "additionalProperties": false,
+      "description": "Options for one provider id.",
+      "properties": {
+        "compaction": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProviderCompaction"
+            }
+          ],
+          "default": "auto",
+          "description": "How the provider's threads compact their history."
+        },
+        "models": {
+          "additionalProperties": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "default": {},
+          "description": "Model metadata by model slug: any fields of Codex's model info (for example `context_window`, `auto_compact_token_limit`, `supported_reasoning_levels`, `default_reasoning_level`, `input_modalities`), merged over what Codex would use otherwise.",
+          "type": "object"
         }
       },
       "type": "object"
@@ -3624,6 +3680,32 @@
       },
       "type": "object"
     },
+    "ProviderCompaction": {
+      "description": "Where a provider's history compaction runs.",
+      "oneOf": [
+        {
+          "description": "Codex decides (remote for OpenAI and Azure, local otherwise).",
+          "enum": [
+            "auto"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The model summarizes the history itself, in an ordinary request.",
+          "enum": [
+            "local"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "The provider's `/responses/compact` endpoint (it must have one).",
+          "enum": [
+            "remote"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "RawMcpServerConfig": {
       "additionalProperties": false,
       "description": "Raw MCP config shape used for deserialization and supported-field JSON Schema generation.\n\nFields that are accepted only to produce targeted validation errors should be skipped in the generated schema.\n\nKeep `TryFrom<RawMcpServerConfig> for McpServerConfig` exhaustively destructuring this struct so new TOML fields cannot be added here without updating the validation/mapping logic that produces [`McpServerConfig`].",
@@ -3813,6 +3895,25 @@
       },
       "type": "object"
     },
+    "RealtimeBackend": {
+      "description": "Which service carries a realtime conversation.",
+      "oneOf": [
+        {
+          "description": "An OpenAI realtime model (upstream behavior).",
+          "enum": [
+            "openai"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "A local-multimodal-infra server for the audio; the thread's own model for the words.",
+          "enum": [
+            "local_multimodal_infra"
+          ],
+          "type": "string"
+        }
+      ]
+    },
     "RealtimeConversationVersion": {
       "enum": [
         "v1",
@@ -3824,9 +3925,25 @@
     "RealtimeToml": {
       "additionalProperties": false,
       "properties": {
+        "backend": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/RealtimeBackend"
+            }
+          ],
+          "description": "AstrBot: see `RealtimeConfig::backend`."
+        },
         "host_routes_handoffs": {
           "description": "AstrBot: see `RealtimeConfig::host_routes_handoffs`.",
           "type": "boolean"
+        },
+        "local_infra": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LocalInfraRealtimeConfig"
+            }
+          ],
+          "description": "AstrBot: see `RealtimeConfig::local_infra`."
         },
         "transport": {
           "$ref": "#/definitions/RealtimeTransport"
@@ -7491,6 +7608,14 @@
     "model_provider": {
       "description": "Provider to use from the model_providers map.",
       "type": "string"
+    },
+    "model_provider_options": {
+      "additionalProperties": {
+        "$ref": "#/definitions/ModelProviderOptions"
+      },
+      "default": {},
+      "description": "AstrBot: per-provider options by provider id (see `model_provider_options`): compaction mode and model metadata.",
+      "type": "object"
     },
     "model_providers": {
       "additionalProperties": {

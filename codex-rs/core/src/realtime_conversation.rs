@@ -87,6 +87,8 @@ use tracing::warn;
 
 mod bem;
 mod existing_call;
+// AstrBot: realtime voice over local-multimodal-infra.
+mod local_infra;
 mod sideband;
 
 use self::bem::ChannelParser as BemChannelParser;
@@ -527,6 +529,8 @@ struct ConversationState {
     // A misalignment failure retires only this session's queued handoffs.
     route_handoffs: Arc<RealtimeHandoffAdmission>,
     stop_token: CancellationToken,
+    /// AstrBot: set for a local-multimodal-infra conversation.
+    local_infra: Option<local_infra::LocalInfraHandle>,
 }
 
 struct RealtimeStart {
@@ -788,6 +792,7 @@ impl RealtimeConversationManager {
             realtime_active: Arc::clone(&realtime_active),
             route_handoffs: Arc::clone(&route_handoffs),
             stop_token,
+            local_infra: None,
         });
         state.mode_instructions = Some(mode_instructions);
         Ok(RealtimeStartOutput {
@@ -1283,6 +1288,12 @@ pub(crate) async fn handle_start(
     sub_id: String,
     params: ConversationStartParams,
 ) -> CodexResult<()> {
+    // AstrBot: `[realtime] backend = "local_multimodal_infra"`.
+    if sess.get_config().await.realtime.backend
+        == codex_config::realtime_local_infra::RealtimeBackend::LocalMultimodalInfra
+    {
+        return local_infra::handle_start(sess, sub_id, params).await;
+    }
     let prepared_start = match prepare_realtime_start(sess, params).await {
         Ok(prepared_start) => prepared_start,
         Err(err) => {

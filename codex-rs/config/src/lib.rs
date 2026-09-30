@@ -49,6 +49,10 @@ mod tui_rendering;
 pub mod types;
 // Fork addition: per-chat memory scopes.
 pub mod memory_scopes;
+// Fork addition: per-provider compaction and model metadata.
+pub mod model_provider_options;
+// Fork addition: realtime voice over local-multimodal-infra.
+pub mod realtime_local_infra;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 

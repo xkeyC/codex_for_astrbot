@@ -2455,6 +2455,10 @@ impl Session {
         if self.conversation.running_state().await.is_none() {
             return;
         }
+        // AstrBot: a local-multimodal-infra conversation speaks the turns itself.
+        if self.conversation.local_infra_observe(msg).await {
+            return;
+        }
         match msg {
             EventMsg::ItemStarted(event) => {
                 if let TurnItem::AgentMessage(item) = &event.item {

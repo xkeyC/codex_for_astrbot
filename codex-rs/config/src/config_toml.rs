@@ -398,6 +398,12 @@ pub struct ConfigToml {
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
+    /// AstrBot: per-provider options by provider id (see
+    /// `model_provider_options`): compaction mode and model metadata.
+    #[serde(default)]
+    pub model_provider_options:
+        HashMap<String, crate::model_provider_options::ModelProviderOptions>,
+
     /// Optional path to a JSON model catalog (applied on startup only).
     /// Per-thread `config` overrides are accepted but do not reapply this (no-ops).
     pub model_catalog_json: Option<AbsolutePathBuf>,
@@ -644,6 +650,12 @@ pub struct RealtimeConfig {
     /// the realtime thread. Off by default (upstream behavior).
     #[serde(default)]
     pub host_routes_handoffs: bool,
+    /// AstrBot: the service carrying the conversation (default: OpenAI).
+    #[serde(default)]
+    pub backend: crate::realtime_local_infra::RealtimeBackend,
+    /// AstrBot: the local-multimodal-infra server, for that backend.
+    #[serde(default)]
+    pub local_infra: crate::realtime_local_infra::LocalInfraRealtimeConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -656,6 +668,10 @@ pub struct RealtimeToml {
     pub voice: Option<RealtimeVoice>,
     /// AstrBot: see `RealtimeConfig::host_routes_handoffs`.
     pub host_routes_handoffs: Option<bool>,
+    /// AstrBot: see `RealtimeConfig::backend`.
+    pub backend: Option<crate::realtime_local_infra::RealtimeBackend>,
+    /// AstrBot: see `RealtimeConfig::local_infra`.
+    pub local_infra: Option<crate::realtime_local_infra::LocalInfraRealtimeConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]

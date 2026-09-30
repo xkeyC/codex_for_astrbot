@@ -575,6 +575,37 @@ impl Session {
         self.state.lock().await.last_started_turn_id = Some(turn_id.to_string());
     }
 
+    /// AstrBot: `text` heard in a local-infra voice conversation, as a turn
+    /// (started, or steering the running one). Returns that turn's id.
+    pub(crate) async fn route_local_voice_input(
+        self: &Arc<Self>,
+        text: String,
+    ) -> Result<String, String> {
+        let submission = handle(
+            self,
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text,
+                text_elements: Vec::new(),
+            }])
+            .on_start(TurnStartOptions {
+                turn_trigger: Some("realtime".to_string()),
+                ..Default::default()
+            }),
+            TurnInputMode::StartOrSteer,
+            Uuid::now_v7().to_string(),
+        )
+        .await;
+        match submission {
+            Ok(
+                TurnInputSubmission::Started { turn_id } | TurnInputSubmission::Steered { turn_id },
+            ) => Ok(turn_id),
+            Ok(TurnInputSubmission::NotSubmitted { reason }) => {
+                Err(format!("the voice turn was not submitted: {reason:?}"))
+            }
+            Err(error) => Err(error.to_error_event(/*message_prefix*/ None).message),
+        }
+    }
+
     pub(crate) async fn route_realtime_text_input(
         self: &Arc<Self>,
         text: String,

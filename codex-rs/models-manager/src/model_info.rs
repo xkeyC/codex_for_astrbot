@@ -62,6 +62,37 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
     model
 }
 
+/// AstrBot: `model` with the fields of `metadata` (a partial model info
+/// object, e.g. from `model_provider_options`) set over its own. The model
+/// then counts as known. Metadata that does not fit is logged and ignored.
+pub fn with_metadata(model: ModelInfo, metadata: &serde_json::Value) -> ModelInfo {
+    let Some(fields) = metadata.as_object() else {
+        warn!(
+            model = model.slug,
+            "model metadata must be an object; ignored"
+        );
+        return model;
+    };
+    let mut merged = match serde_json::to_value(&model) {
+        Ok(serde_json::Value::Object(merged)) => merged,
+        _ => return model,
+    };
+    for (key, value) in fields {
+        merged.insert(key.clone(), value.clone());
+    }
+    match serde_json::from_value::<ModelInfo>(serde_json::Value::Object(merged)) {
+        Ok(merged) => ModelInfo {
+            slug: model.slug,
+            used_fallback_model_metadata: false,
+            ..merged
+        },
+        Err(err) => {
+            warn!(model = model.slug, "model metadata ignored: {err}");
+            model
+        }
+    }
+}
+
 fn strip_personality_section(mut instructions: String) -> String {
     let mut section_start = None;
     let mut section_end = None;
