@@ -58,7 +58,7 @@ const IDLE_BEFORE_COMPACT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(100);
 /// Put before an utterance that continues the one answered last.
 const CONTINUES_NOTE: &str =
-    "(The speaker went on; this is the whole utterance, replacing the one you last answered:)";
+    "(The speaker went on; their words below are the whole utterance, replacing the words you last answered:)";
 /// Context lines (talk that wanted no reply) kept for the next input.
 const MAX_CONTEXT_LINES: usize = 20;
 const MAX_CONTEXT_CHARS: usize = 2_000;
@@ -239,6 +239,7 @@ pub(super) async fn handle_start(
         context: Vec::new(),
         cut_off: None,
         last_answered: None,
+        last_relays: Vec::new(),
         waiting: Vec::new(),
         waiting_since: None,
         relay_retry_at: None,
@@ -419,6 +420,9 @@ struct LocalInfraConversation {
     cut_off: Option<String>,
     /// The id of the last utterance answered.
     last_answered: Option<u64>,
+    /// Appended words the running turn was started with: told again if it
+    /// stops before it ends.
+    last_relays: Vec<String>,
     /// Appended words waiting for a quiet moment, and since when.
     waiting: Vec<String>,
     waiting_since: Option<Instant>,
@@ -681,6 +685,11 @@ impl LocalInfraConversation {
                 let spoken = field("spoken").to_string();
                 let cut = event.get("cut").and_then(serde_json::Value::as_bool) == Some(true);
                 let turn = self.open_responses.remove(&response_id);
+                // The server takes no more of it (a cut one included, should
+                // its turn be spoken again).
+                if let Some(item) = self.items.get_mut(&response_id) {
+                    item.silent = true;
+                }
                 // What was heard of a cut reply goes with the next input, if
                 // it was the current turn's (a turn already replaced says it
                 // no longer).
@@ -750,13 +759,29 @@ impl LocalInfraConversation {
             self.send(json!({"type": "response.cancel"}));
         }
         self.items.clear();
-        let mut input = self.input_for(text);
-        if continues {
-            input = format!("{CONTINUES_NOTE}\n{input}");
+        // Words the stopped turn was to tell go with this one.
+        if !self.last_relays.is_empty() {
+            let mut relays = std::mem::take(&mut self.last_relays);
+            relays.append(&mut self.waiting);
+            self.waiting = relays;
+            self.waiting_since.get_or_insert_with(Instant::now);
         }
-        if let Err(err) = self.start_turn(&sess, input).await {
-            warn!("local-infra conversation: the turn did not start: {err}");
-            self.emit(RealtimeEvent::Error(err)).await;
+        let relays = self.waiting.clone();
+        let waiting_since = self.waiting_since;
+        let input = if continues {
+            self.input_for(&format!("{CONTINUES_NOTE}\n{text}"))
+        } else {
+            self.input_for(text)
+        };
+        match self.start_turn(&sess, input).await {
+            Ok(()) => self.last_relays = relays,
+            Err(err) => {
+                warn!("local-infra conversation: the turn did not start: {err}");
+                // Still to be told.
+                self.waiting = relays;
+                self.waiting_since = waiting_since;
+                self.emit(RealtimeEvent::Error(err)).await;
+            }
         }
     }
 
@@ -767,11 +792,7 @@ impl LocalInfraConversation {
         let mut input = String::new();
         if !self.waiting.is_empty() {
             // Told with this turn rather than after it.
-            input.push_str(&self.waiting.join(
-                "
-
-",
-            ));
+            input.push_str(&self.waiting.join("\n\n"));
             input.push('\n');
             self.waiting.clear();
             self.waiting_since = None;
@@ -856,7 +877,7 @@ impl LocalInfraConversation {
                 let input = self.waiting.join("\n\n");
                 match self.start_turn(&sess, input).await {
                     Ok(()) => {
-                        self.waiting.clear();
+                        self.last_relays = std::mem::take(&mut self.waiting);
                         self.waiting_since = None;
                         self.relay_retry_at = None;
                     }
@@ -926,6 +947,9 @@ impl LocalInfraConversation {
                     } else {
                         CompactFloor::AfterNextPrompt
                     };
+                }
+                if !aborted {
+                    self.last_relays.clear();
                 }
                 self.turn = None;
                 self.compacting = false;

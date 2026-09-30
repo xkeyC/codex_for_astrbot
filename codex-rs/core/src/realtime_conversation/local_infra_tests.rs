@@ -34,6 +34,7 @@ fn harness(group: bool) -> Harness {
             context: Vec::new(),
             cut_off: None,
             last_answered: None,
+            last_relays: Vec::new(),
             waiting: Vec::new(),
             waiting_since: None,
             relay_retry_at: None,
@@ -394,10 +395,17 @@ async fn a_cut_by_talk_that_was_no_utterance_lets_the_turn_speak_again() {
     h.conversation
         .server_event(r#"{"type":"state","speaking":false,"listening":false}"#)
         .await;
+    // The cut message is over for the server: only the next one is spoken.
+    h.delta("t1", "m1", "第二段。").await;
+    h.done("t1", "m1", "第一段。第二段。").await;
     h.delta("t1", "m2", "结果是晴天。").await;
     assert_eq!(
         h.sent(),
         vec![json!({"type": "response.delta", "response_id": "m2", "text": "结果是晴天。"})]
+    );
+    assert_eq!(
+        h.conversation.open_responses,
+        HashMap::from([("m2".to_string(), "t1".to_string())])
     );
 }
 
@@ -429,4 +437,26 @@ async fn a_compaction_counts_nothing_and_its_end_sets_the_floor() {
         })
         .await;
     assert_eq!(h.conversation.compact_floor, CompactFloor::None);
+}
+
+#[tokio::test]
+async fn words_a_turn_was_started_with_are_kept_until_it_ends() {
+    let mut h = harness(false);
+    h.conversation.last_relays = vec!["(The backend finished \"weather\": sunny)".to_string()];
+    // Stopped: told again with the next answer.
+    h.conversation
+        .turn_signal(TurnSignal::Finished {
+            turn_id: Some("t1".to_string()),
+            aborted: true,
+        })
+        .await;
+    assert_eq!(h.conversation.last_relays.len(), 1);
+    h.conversation.turn = Some("t2".to_string());
+    h.conversation
+        .turn_signal(TurnSignal::Finished {
+            turn_id: Some("t2".to_string()),
+            aborted: false,
+        })
+        .await;
+    assert_eq!(h.conversation.last_relays, Vec::<String>::new());
 }
