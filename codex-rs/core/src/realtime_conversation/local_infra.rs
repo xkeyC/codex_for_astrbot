@@ -51,6 +51,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(300);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Appended words wait at most this long for a quiet moment.
 const RELAY_WAIT: Duration = Duration::from_secs(20);
+/// A relay that could not be submitted is tried again after this.
+const RELAY_RETRY: Duration = Duration::from_secs(2);
 /// Idle this long before the history is compacted.
 const IDLE_BEFORE_COMPACT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(100);
@@ -78,6 +80,8 @@ pub(super) enum TurnSignal {
     },
     Finished {
         turn_id: Option<String>,
+        /// It was aborted (interrupted, replaced) rather than completed.
+        aborted: bool,
     },
     Tokens {
         input: i64,
@@ -109,9 +113,11 @@ impl RealtimeConversationManager {
         let signal = match msg {
             EventMsg::TurnComplete(event) => Some(TurnSignal::Finished {
                 turn_id: Some(event.turn_id.clone()),
+                aborted: false,
             }),
             EventMsg::TurnAborted(event) => Some(TurnSignal::Finished {
                 turn_id: event.turn_id.clone(),
+                aborted: true,
             }),
             EventMsg::AgentMessageContentDelta(event) => Some(TurnSignal::Delta {
                 turn_id: event.turn_id.clone(),
@@ -213,7 +219,10 @@ pub(super) async fn handle_start(
             .get("group")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
-        idle_compact_percent: infra.idle_compact_percent.unwrap_or(0),
+        idle_compact_percent: infra
+            .idle_compact_percent
+            .filter(|percent| *percent <= 100)
+            .unwrap_or(0),
         events_tx,
         out: out_tx,
         resampler: Resampler::default(),
@@ -224,6 +233,7 @@ pub(super) async fn handle_start(
         turn: None,
         compacting: false,
         muted_turn: None,
+        heard_since_cut: false,
         open_responses: HashMap::new(),
         items: HashMap::new(),
         context: Vec::new(),
@@ -231,6 +241,7 @@ pub(super) async fn handle_start(
         last_answered: None,
         waiting: Vec::new(),
         waiting_since: None,
+        relay_retry_at: None,
         idle_since: None,
         last_prompt: None,
         compact_floor: CompactFloor::None,
@@ -353,6 +364,8 @@ async fn connect(infra: &LocalInfraRealtimeConfig) -> Result<InfraSocket, String
         let stream = tokio::net::TcpStream::connect((host.as_str(), port))
             .await
             .map_err(|err| format!("cannot connect to {url}: {err}"))?;
+        // 20 ms audio frames: no Nagle delay.
+        let _ = stream.set_nodelay(true);
         tokio_tungstenite::client_async_tls(request, stream)
             .await
             .map_err(|err| format!("cannot connect to {url}: {err}"))
@@ -391,8 +404,11 @@ struct LocalInfraConversation {
     /// `turn` is a compaction (nothing is told into it).
     compacting: bool,
     /// A turn whose speech was cut (someone talked over it): nothing more of
-    /// it is spoken.
+    /// it is spoken, unless the talk that cut it turns out to be no
+    /// utterance (a cough, noise).
     muted_turn: Option<String>,
+    /// An utterance was heard since the last cut.
+    heard_since_cut: bool,
     /// Responses given to the server and not done, with their turn.
     open_responses: HashMap<String, String>,
     /// The messages of the running turn being spoken, by item id.
@@ -406,6 +422,8 @@ struct LocalInfraConversation {
     /// Appended words waiting for a quiet moment, and since when.
     waiting: Vec<String>,
     waiting_since: Option<Instant>,
+    /// A relay that could not be submitted is retried from then.
+    relay_retry_at: Option<Instant>,
     /// Since when nothing happens (for compaction).
     idle_since: Option<Instant>,
     /// The last request's prompt size and the context window.
@@ -614,6 +632,7 @@ impl LocalInfraConversation {
                 if text.is_empty() {
                     return Step::Continue;
                 }
+                self.heard_since_cut = true;
                 let respond = event
                     .get("respond")
                     .and_then(serde_json::Value::as_bool)
@@ -641,7 +660,13 @@ impl LocalInfraConversation {
                         .unwrap_or(false)
                 };
                 self.speaking = flag("speaking");
-                self.listening = flag("listening");
+                let listening = flag("listening");
+                // The talk that cut the bot ended without an utterance: the
+                // turn is spoken again (its next messages).
+                if self.listening && !listening && !self.heard_since_cut {
+                    self.muted_turn = None;
+                }
+                self.listening = listening;
             }
             "response.text" => {
                 self.emit(RealtimeEvent::OutputTranscriptDelta(
@@ -650,16 +675,6 @@ impl LocalInfraConversation {
                     },
                 ))
                 .await;
-            }
-            // Talked over: nothing more of the current turn is spoken (its
-            // later messages included) until a new turn answers.
-            "response.cut"
-                if self
-                    .open_responses
-                    .values()
-                    .any(|turn| Some(turn) == self.turn.as_ref()) =>
-            {
-                self.muted_turn = self.turn.clone();
             }
             "response.done" => {
                 let response_id = field("response_id").to_string();
@@ -672,6 +687,11 @@ impl LocalInfraConversation {
                 if cut && turn.is_some() && turn == self.turn {
                     let heard = self.cut_off.get_or_insert_with(String::new);
                     heard.push_str(&spoken);
+                    // Talked over: nothing more of this turn is spoken (its
+                    // later messages included) until an utterance answers,
+                    // or the talk turns out to be none.
+                    self.muted_turn = self.turn.clone();
+                    self.heard_since_cut = false;
                 }
                 self.emit(RealtimeEvent::OutputTranscriptDone(
                     RealtimeTranscriptDone { text: spoken },
@@ -740,10 +760,22 @@ impl LocalInfraConversation {
         }
     }
 
-    /// The turn input for `text`: the context kept for it (talk that wanted
-    /// no reply, what was heard of a reply cut off) first.
+    /// The turn input for `text`: what it carries first (host words still
+    /// waiting for a quiet moment, talk that wanted no reply, what was heard
+    /// of a reply cut off).
     fn input_for(&mut self, text: &str) -> String {
         let mut input = String::new();
+        if !self.waiting.is_empty() {
+            // Told with this turn rather than after it.
+            input.push_str(&self.waiting.join(
+                "
+
+",
+            ));
+            input.push('\n');
+            self.waiting.clear();
+            self.waiting_since = None;
+        }
         if !self.context.is_empty() {
             let lines: Vec<&str> = self.context.iter().map(|(_, line)| line.as_str()).collect();
             input.push_str(&format!(
@@ -772,10 +804,6 @@ impl LocalInfraConversation {
     async fn start_turn(&mut self, sess: &Arc<Session>, input: String) -> Result<(), String> {
         self.idle_since = None;
         let turn_id = sess.route_local_voice_input(input).await?;
-        if self.turn.as_ref() != Some(&turn_id) {
-            // A new turn: nothing cut of it yet.
-            self.cut_off = None;
-        }
         self.turn = Some(turn_id);
         Ok(())
     }
@@ -819,16 +847,23 @@ impl LocalInfraConversation {
             let late = self
                 .waiting_since
                 .is_some_and(|since| since.elapsed() > RELAY_WAIT);
-            // Late words steer the running turn, but not a compaction.
-            if self.idle() || (late && self.started && !self.compacting) {
+            let retry_due = self.relay_retry_at.is_none_or(|at| Instant::now() >= at);
+            // Told at a quiet moment, or (late) once no turn runs even if
+            // someone is still talking; never steered into a running turn,
+            // where an interruption would drop it. The next utterance takes
+            // it along too (`input_for`).
+            if retry_due && self.started && (self.idle() || (late && self.turn.is_none())) {
                 let input = self.waiting.join("\n\n");
                 match self.start_turn(&sess, input).await {
                     Ok(()) => {
                         self.waiting.clear();
                         self.waiting_since = None;
+                        self.relay_retry_at = None;
                     }
-                    // Kept for the next quiet moment.
-                    Err(err) => warn!("local-infra conversation: not told yet: {err}"),
+                    Err(err) => {
+                        warn!("local-infra conversation: not told yet: {err}");
+                        self.relay_retry_at = Some(Instant::now() + RELAY_RETRY);
+                    }
                 }
             }
             return;
@@ -862,10 +897,10 @@ impl LocalInfraConversation {
             window, "local-infra conversation: compacting the idle thread's history"
         );
         self.last_prompt = None;
-        self.compact_floor = CompactFloor::AfterNextPrompt;
         let turn_id = uuid::Uuid::now_v7().to_string();
         self.turn = Some(turn_id.clone());
         self.compacting = true;
+        self.compact_floor = CompactFloor::None;
         let turn_context = sess
             .new_turn_with_default_settings(turn_id, Default::default())
             .await;
@@ -875,13 +910,22 @@ impl LocalInfraConversation {
     async fn turn_signal(&mut self, signal: TurnSignal) -> Step {
         let current = |turn: &Option<String>, turn_id: &str| turn.as_deref() == Some(turn_id);
         match signal {
-            TurnSignal::Finished { turn_id } => {
+            TurnSignal::Finished { turn_id, aborted } => {
                 // A turn stopped for a newer one ends on its own.
                 if turn_id
                     .as_deref()
                     .is_some_and(|id| !current(&self.turn, id))
                 {
                     return Step::Continue;
+                }
+                if self.compacting {
+                    // Done: the next turn's prompt sets how far it must
+                    // grow before another; stopped: tried again when idle.
+                    self.compact_floor = if aborted {
+                        CompactFloor::None
+                    } else {
+                        CompactFloor::AfterNextPrompt
+                    };
                 }
                 self.turn = None;
                 self.compacting = false;
@@ -942,6 +986,8 @@ impl LocalInfraConversation {
                     self.send(json!({"type": "response.end", "response_id": item_id}));
                 }
             }
+            // A compaction's own counts say nothing of the next prompt.
+            TurnSignal::Tokens { .. } if self.compacting => {}
             TurnSignal::Tokens { input, window } => {
                 self.last_prompt = Some((input, window));
                 if self.compact_floor == CompactFloor::AfterNextPrompt {

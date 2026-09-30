@@ -75,14 +75,19 @@ pub fn with_metadata(model: ModelInfo, metadata: &serde_json::Value) -> ModelInf
         return model;
     };
     let slug = model.slug.clone();
+    let used_fallback = model.used_fallback_model_metadata;
     let mut merged = model;
+    let mut applied = 0;
     for (key, value) in fields {
         let Ok(serde_json::Value::Object(mut object)) = serde_json::to_value(&merged) else {
             break;
         };
         object.insert(key.clone(), value.clone());
         match serde_json::from_value::<ModelInfo>(serde_json::Value::Object(object)) {
-            Ok(next) => merged = next,
+            Ok(next) => {
+                merged = next;
+                applied += 1;
+            }
             Err(err) => warn!(
                 model = slug,
                 field = key,
@@ -97,7 +102,8 @@ pub fn with_metadata(model: ModelInfo, metadata: &serde_json::Value) -> ModelInf
     }
     ModelInfo {
         slug,
-        used_fallback_model_metadata: false,
+        // Known once some metadata was taken.
+        used_fallback_model_metadata: used_fallback && applied == 0,
         ..merged
     }
 }

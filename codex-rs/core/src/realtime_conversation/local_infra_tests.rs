@@ -28,6 +28,7 @@ fn harness(group: bool) -> Harness {
             turn: Some("t1".to_string()),
             compacting: false,
             muted_turn: None,
+            heard_since_cut: false,
             open_responses: HashMap::new(),
             items: HashMap::new(),
             context: Vec::new(),
@@ -35,6 +36,7 @@ fn harness(group: bool) -> Harness {
             last_answered: None,
             waiting: Vec::new(),
             waiting_since: None,
+            relay_retry_at: None,
             idle_since: None,
             last_prompt: None,
             compact_floor: CompactFloor::None,
@@ -141,6 +143,7 @@ async fn a_stopped_turn_says_nothing_more_and_ends_on_its_own() {
     h.conversation
         .turn_signal(TurnSignal::Finished {
             turn_id: Some("t1".to_string()),
+            aborted: false,
         })
         .await;
     assert_eq!(h.sent(), Vec::<serde_json::Value>::new());
@@ -148,6 +151,7 @@ async fn a_stopped_turn_says_nothing_more_and_ends_on_its_own() {
     h.conversation
         .turn_signal(TurnSignal::Finished {
             turn_id: Some("t2".to_string()),
+            aborted: false,
         })
         .await;
     assert_eq!(h.conversation.turn, None);
@@ -160,6 +164,7 @@ async fn an_aborted_turn_ends_what_it_was_saying() {
     h.conversation
         .turn_signal(TurnSignal::Finished {
             turn_id: Some("t1".to_string()),
+            aborted: false,
         })
         .await;
     assert_eq!(
@@ -274,9 +279,6 @@ async fn a_cut_turn_says_nothing_more_and_leaves_nothing_open() {
     h.delta("t1", "m1", "从前有座山，").await;
     h.sent();
     h.conversation
-        .server_event(r#"{"type":"response.cut","response_id":"m1"}"#)
-        .await;
-    h.conversation
         .server_event(
             r#"{"type":"response.done","response_id":"m1","spoken":"从前有座山，","cut":true}"#,
         )
@@ -291,6 +293,7 @@ async fn a_cut_turn_says_nothing_more_and_leaves_nothing_open() {
     h.conversation
         .turn_signal(TurnSignal::Finished {
             turn_id: Some("t1".to_string()),
+            aborted: false,
         })
         .await;
     assert!(h.conversation.idle());
@@ -361,4 +364,69 @@ async fn the_marker_cut_short_at_the_end_is_not_spoken() {
     h.done("t1", "m1", "<sil").await;
     h.done("t1", "m2", "<silence>\n(nothing to say)").await;
     assert_eq!(h.sent(), Vec::<serde_json::Value>::new());
+}
+
+#[tokio::test]
+async fn words_still_waiting_go_with_the_next_utterance() {
+    let mut h = harness(false);
+    h.conversation
+        .wait_to_tell("(The backend finished \"weather\": sunny)".to_string());
+    assert_eq!(
+        h.conversation.input_for("小乐，还有呢？"),
+        "(The backend finished \"weather\": sunny)\n小乐，还有呢？"
+    );
+    assert!(h.conversation.waiting.is_empty());
+    assert_eq!(h.conversation.waiting_since, None);
+}
+
+#[tokio::test]
+async fn a_cut_by_talk_that_was_no_utterance_lets_the_turn_speak_again() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "第一段。").await;
+    h.conversation
+        .server_event(r#"{"type":"state","speaking":true,"listening":true}"#)
+        .await;
+    h.conversation
+        .server_event(r#"{"type":"response.done","response_id":"m1","spoken":"","cut":true}"#)
+        .await;
+    h.sent();
+    // A cough: listening ends with no transcript.
+    h.conversation
+        .server_event(r#"{"type":"state","speaking":false,"listening":false}"#)
+        .await;
+    h.delta("t1", "m2", "结果是晴天。").await;
+    assert_eq!(
+        h.sent(),
+        vec![json!({"type": "response.delta", "response_id": "m2", "text": "结果是晴天。"})]
+    );
+}
+
+#[tokio::test]
+async fn a_compaction_counts_nothing_and_its_end_sets_the_floor() {
+    let mut h = harness(false);
+    h.conversation.compacting = true;
+    h.conversation
+        .turn_signal(TurnSignal::Tokens {
+            input: 90_000,
+            window: Some(100_000),
+        })
+        .await;
+    assert_eq!(h.conversation.last_prompt, None);
+    h.conversation
+        .turn_signal(TurnSignal::Finished {
+            turn_id: Some("t1".to_string()),
+            aborted: false,
+        })
+        .await;
+    assert_eq!(h.conversation.compact_floor, CompactFloor::AfterNextPrompt);
+    // A compaction stopped by an utterance is simply tried again.
+    h.conversation.turn = Some("t2".to_string());
+    h.conversation.compacting = true;
+    h.conversation
+        .turn_signal(TurnSignal::Finished {
+            turn_id: Some("t2".to_string()),
+            aborted: true,
+        })
+        .await;
+    assert_eq!(h.conversation.compact_floor, CompactFloor::None);
 }
