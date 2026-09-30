@@ -19,6 +19,7 @@ use http::HeaderValue;
 use http::header::USER_AGENT;
 use std::sync::LazyLock;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::sync::RwLock;
 
 use crate::outbound_proxy::AuthRouteConfig;
@@ -39,6 +40,9 @@ use crate::outbound_proxy::AuthRouteConfig;
 /// The full user agent string is returned from the mcp initialize response.
 /// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
 pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+/// Fork identity for the User-Agent, set once by an embedder (fork addition):
+/// `<originator>/<version> (<os>) <terminal>; <tag>`, before any suffix.
+pub static USER_AGENT_FORK_TAG: OnceLock<String> = OnceLock::new();
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub use codex_model_provider_info::RESIDENCY_HEADER_NAME;
@@ -156,8 +160,11 @@ pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = &*OS_INFO;
     let originator = originator();
+    let fork_tag = USER_AGENT_FORK_TAG
+        .get()
+        .map_or_else(String::new, |tag| format!("; {tag}"));
     let prefix = format!(
-        "{}/{build_version} ({} {}; {}) {}",
+        "{}/{build_version} ({} {}; {}) {}{fork_tag}",
         originator.value.as_str(),
         os_info.os_type(),
         os_info.version(),

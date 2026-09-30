@@ -55,7 +55,11 @@ use tokio::sync::RwLock;
 use crate::account::Accounts;
 use crate::convert::json_overrides_to_toml;
 
-const ORIGINATOR: &str = "astrbot";
+const SESSION_SOURCE: &str = "astrbot";
+/// Requests go out as `codex exec` does, so backends that know its identity
+/// accept them; the User-Agent names the fork after the terminal token.
+const DEFAULT_ORIGINATOR: &str = "codex_exec";
+const FORK_TAG: &str = "xkeyC/codex_for_astrbot";
 
 /// Process-wide options, fixed when the runtime is created.
 #[derive(Debug, Default, Deserialize)]
@@ -80,7 +84,8 @@ pub struct EngineOptions {
     pub approve_every_command: bool,
     /// `originator` header, User-Agent prefix and suffix for every request of
     /// this process, as an app-server client with this `clientInfo.name` gets
-    /// them; defaults to `astrbot`. The official TUI is `codex-tui`. Threads
+    /// them; defaults to `codex_exec` with no suffix, as `codex exec` sends.
+    /// The User-Agent always names the fork. The official TUI is `codex-tui`. Threads
     /// resumed from a rollout keep the originator recorded there. Only the
     /// first runtime of a process can set it.
     #[serde(default)]
@@ -191,34 +196,38 @@ impl Engine {
         if !options.codex_home.is_absolute() {
             options.codex_home = std::env::current_dir()?.join(&options.codex_home);
         }
-        match options.originator.clone() {
-            // Same identity an app-server client with this name gets.
-            Some(originator) => {
-                use codex_login::default_client::SetOriginatorError;
-                match codex_login::default_client::set_default_originator(originator.clone()) {
-                    Ok(()) => {
-                        if let Ok(mut suffix) =
+        // e.g. `codex_exec/0.158.0 (Linux 22.04; x86_64) unknown; xkeyC/codex_for_astrbot`.
+        let _ = codex_login::default_client::USER_AGENT_FORK_TAG.set(FORK_TAG.to_string());
+        let requested = options.originator.clone();
+        let originator = requested
+            .clone()
+            .unwrap_or_else(|| DEFAULT_ORIGINATOR.to_string());
+        {
+            use codex_login::default_client::SetOriginatorError;
+            match codex_login::default_client::set_default_originator(originator.clone()) {
+                Ok(()) => {
+                    // Same suffix an app-server client with this name gets.
+                    if requested.is_some()
+                        && let Ok(mut suffix) =
                             codex_login::default_client::USER_AGENT_SUFFIX.lock()
-                        {
-                            *suffix = Some(format!("{originator}; {}", env!("CARGO_PKG_VERSION")));
-                        }
-                    }
-                    Err(SetOriginatorError::InvalidHeaderValue) => {
-                        return Err(anyhow!(
-                            "originator {originator:?} is not a valid header value"
-                        ));
-                    }
-                    Err(SetOriginatorError::AlreadyInitialized) => {
-                        if codex_login::default_client::originator().value != originator {
-                            return Err(anyhow!(
-                                "originator is already set for this process; only the first runtime can set it"
-                            ));
-                        }
+                    {
+                        *suffix = Some(format!("{originator}; {}", env!("CARGO_PKG_VERSION")));
                     }
                 }
-            }
-            None => {
-                let _ = codex_login::default_client::set_default_originator(ORIGINATOR.to_string());
+                Err(SetOriginatorError::InvalidHeaderValue) => {
+                    return Err(anyhow!(
+                        "originator {originator:?} is not a valid header value"
+                    ));
+                }
+                Err(SetOriginatorError::AlreadyInitialized) => {
+                    if requested.is_some()
+                        && codex_login::default_client::originator().value != originator
+                    {
+                        return Err(anyhow!(
+                            "originator is already set for this process; only the first runtime can set it"
+                        ));
+                    }
+                }
             }
         }
         let base_overrides = json_overrides_to_toml(&options.config)?;
@@ -256,7 +265,7 @@ impl Engine {
             Arc::clone(&auth_manager),
             build_models_manager(&config, Arc::clone(&auth_manager)),
             CodexAppsToolsCache::default(),
-            SessionSource::Custom(ORIGINATOR.to_string()),
+            SessionSource::Custom(SESSION_SOURCE.to_string()),
             environment_manager,
             Arc::new(extensions),
             user_instructions_provider,

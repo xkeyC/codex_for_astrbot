@@ -47,8 +47,12 @@ payload. `realtime_append_text`,
 `realtime_stop` and `Runtime.realtime_list_voices()` cover the rest; realtime
 events come through `next_event` like any other.
 
+Requests carry the `codex exec` identity (`originator: codex_exec`) and a
+User-Agent such as
+`codex_exec/0.158.0 (Linux 22.04; x86_64) unknown; xkeyC/codex_for_astrbot`.
 `Runtime.create` accepts `"originator"` to send another client identity
-(`originator` header and User-Agent), e.g. `codex-tui` as the official TUI does.
+(`originator` header and User-Agent), e.g. `codex-tui` as the official TUI does;
+the User-Agent keeps `xkeyC/codex_for_astrbot`.
 
 ## Development
 
