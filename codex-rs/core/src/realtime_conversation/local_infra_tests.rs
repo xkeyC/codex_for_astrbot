@@ -96,6 +96,36 @@ async fn a_message_is_spoken_as_it_streams() {
 }
 
 #[tokio::test]
+async fn words_are_spoken_whole() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "我在用 Git").await;
+    h.delta("t1", "m1", "Hub 上找 Open").await;
+    h.delta("t1", "m1", "AI 的 Codex, it wor").await;
+    h.delta("t1", "m1", "ks well").await;
+    h.done(
+        "t1",
+        "m1",
+        "我在用 GitHub 上找 OpenAI 的 Codex, it works well",
+    )
+    .await;
+    let texts: Vec<String> = h
+        .sent()
+        .iter()
+        .filter_map(|m| m["text"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "我在用 ",
+            "GitHub 上找 ",
+            "OpenAI 的 Codex, it ",
+            "works ",
+            "well"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn the_silence_marker_says_nothing() {
     let mut h = harness(false);
     h.delta("t1", "m1", "<sil").await;

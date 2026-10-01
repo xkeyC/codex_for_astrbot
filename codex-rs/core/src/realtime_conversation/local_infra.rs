@@ -16,6 +16,11 @@
 //! goes with the next input as context, as does what the listener actually
 //! heard of a reply that was cut off.
 //!
+//! The text goes to the server in whole words (an ASCII word still being
+//! written waits for what completes it). When the conversation ends, its end
+//! goes into the thread at once (`{now}` in the host's end instructions reads
+//! as the local time), so the next call starts anew, with its own start.
+//!
 //! The thread's history only ever grows (its prefix stays cacheable); while
 //! the conversation is idle and the prompt has grown past
 //! `idle_compact_percent` of the context window, the history is compacted,
@@ -298,11 +303,19 @@ pub(super) async fn handle_start(
                 })
                 .await;
         }
-        if fanout_active.swap(false, Ordering::Relaxed) {
+        // Still active: the server or the connection ended it (else the
+        // host stopped it, and is told once this task is done).
+        let ended_here = fanout_active.swap(false, Ordering::Relaxed);
+        if ended_here {
             sess_clone
                 .conversation
                 .finish_if_active(&fanout_active)
                 .await;
+        }
+        // In a task of its own: a fanout task can be aborted.
+        let recording = Arc::clone(&sess_clone);
+        let _ = tokio::spawn(async move { record_end(&recording).await }).await;
+        if ended_here {
             send_realtime_conversation_closed(&sess_clone, sub_id, end).await;
         }
     });
@@ -310,6 +323,34 @@ pub(super) async fn handle_start(
         .register_fanout_task(&realtime_active, fanout_task)
         .await;
     Ok(())
+}
+
+/// The conversation is over: its end goes into the thread now, with `{now}`
+/// in the host's end instructions read as the local time.
+async fn record_end(sess: &Arc<Session>) {
+    {
+        let mut state = sess.conversation.state.lock().await;
+        // Another call started meanwhile: the instructions are its own, and
+        // the thread is in a call again.
+        if state.conversation.is_some() {
+            return;
+        }
+        if let Some(end) = state
+            .mode_instructions
+            .as_mut()
+            .and_then(|instructions| instructions.end.as_mut())
+        {
+            *end = end.replace("{now}", &local_time_now());
+        }
+    }
+    sess.record_local_voice_end().await;
+}
+
+/// The local time, as `2026-10-02 14:05 (Friday, UTC+08:00)`.
+fn local_time_now() -> String {
+    chrono::Local::now()
+        .format("%Y-%m-%d %H:%M (%A, UTC%:z)")
+        .to_string()
 }
 
 /// Opens the server's WebSocket and asks for an audio mode session.
@@ -465,6 +506,10 @@ struct SpokenItem {
     sent: bool,
     /// It is (or starts with) the silence marker: nothing more is spoken.
     silent: bool,
+    /// The end of the text so far while it may be a word still being
+    /// written (ASCII without a space): TTS gets whole words, so it goes
+    /// with what completes it.
+    word: String,
 }
 
 enum Step {
@@ -566,6 +611,13 @@ impl LocalInfraConversation {
             if let Step::Stop = step {
                 break;
             }
+        }
+        // Nothing it says is heard any more (an idle compaction goes on).
+        if let Some(turn) = self.turn.take().filter(|_| !self.compacting)
+            && let Some(sess) = self.sess.upgrade()
+        {
+            sess.abort_turn_if_active(&turn, TurnAbortReason::Interrupted)
+                .await;
         }
         // The writer ends once what was sent (a session.stop) is out.
         drop(self);
@@ -994,6 +1046,11 @@ impl LocalInfraConversation {
                     std::mem::take(&mut item.held)
                 };
                 item.sent = true;
+                let mut text = std::mem::take(&mut item.word) + &text;
+                let words = text
+                    .trim_end_matches(|c: char| c.is_ascii() && !c.is_ascii_whitespace())
+                    .len();
+                item.word = text.split_off(words);
                 self.speak(&item_id, &text);
             }
             TurnSignal::MessageDone { item_id, text, .. } => {
@@ -1002,7 +1059,7 @@ impl LocalInfraConversation {
                     return Step::Continue;
                 }
                 let rest = if item.sent {
-                    String::new()
+                    item.word
                 } else if item.held.is_empty() {
                     // Not streamed: the whole message at once.
                     text

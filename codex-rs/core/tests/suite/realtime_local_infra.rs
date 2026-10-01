@@ -230,6 +230,95 @@ async fn the_silence_marker_is_not_spoken() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_hang_up_is_told_with_its_time_and_the_next_call_starts_anew() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let answer = |id: &str| {
+        responses::sse(vec![
+            responses::ev_response_created(id),
+            responses::ev_assistant_message(&format!("msg-{id}"), "Hi."),
+            responses::ev_completed(id),
+        ])
+    };
+    let response_mock =
+        responses::mount_sse_sequence(&api_server, vec![answer("resp-1"), answer("resp-2")]).await;
+    let call = |text: &str| {
+        vec![
+            // session.start
+            vec![
+                json!({"type": "session.started", "input_rate": 16000, "output_rate": 24000}),
+                json!({"type": "input.transcript", "id": 0, "text": text, "respond": true}),
+            ],
+            // response.delta, response.end, session.stop
+            vec![],
+            vec![],
+            vec![],
+        ]
+    };
+    let voice_server = start_websocket_server(vec![call("hello"), call("hello again")]).await;
+
+    let mut builder = test_codex().with_config({
+        let url = voice_server.uri().to_string();
+        move |config| {
+            config.realtime.backend = RealtimeBackend::LocalMultimodalInfra;
+            config.realtime.local_infra.url = Some(url);
+            config
+                .realtime
+                .local_infra
+                .session
+                .insert("name".to_string(), json!("Xiaole"));
+        }
+    });
+    let test = builder.build(&api_server).await?;
+    let params = || ConversationStartParams {
+        realtime_end_instructions: Some("The voice call ended at {now}.".to_string()),
+        ..start_params()
+    };
+    for _ in 0..2 {
+        test.codex
+            .submit(Op::RealtimeConversationStart(params()))
+            .await?;
+        wait_for_event(&test.codex, |msg| matches!(msg, EventMsg::TurnComplete(_))).await;
+        test.codex.submit(Op::RealtimeConversationClose).await?;
+        wait_for_event(&test.codex, |msg| {
+            matches!(msg, EventMsg::RealtimeConversationClosed(_))
+        })
+        .await;
+    }
+
+    // The second call's turn reads the first one's end, with its time, and
+    // a start of its own.
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let developer = requests[1].message_input_texts("developer").join(
+        "
+",
+    );
+    assert_eq!(
+        developer.matches("A voice call started.").count(),
+        2,
+        "{developer}"
+    );
+    let ended = developer
+        .split("The voice call ended at ")
+        .nth(1)
+        .expect("the end of the first call");
+    assert!(
+        ended.starts_with("20") && !ended.starts_with("{now}"),
+        "{developer}"
+    );
+    assert!(
+        developer.find("The voice call ended at").unwrap()
+            < developer.rfind("A voice call started.").unwrap(),
+        "{developer}"
+    );
+
+    voice_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_missing_server_url_is_reported() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
