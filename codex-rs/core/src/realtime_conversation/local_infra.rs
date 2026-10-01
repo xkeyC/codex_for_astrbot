@@ -345,6 +345,16 @@ async fn connect(infra: &LocalInfraRealtimeConfig) -> Result<InfraSocket, String
             "ref_audio".to_string(),
             json!(BASE64_STANDARD.encode(bytes)),
         );
+        // The transcript belongs to that recording (the server's default
+        // voice has its own).
+        if let Some(text) = infra
+            .ref_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            config.insert("ref_text".to_string(), json!(text));
+        }
     }
     // Straight to the server (a local or LAN one), never through the
     // environment's proxy.

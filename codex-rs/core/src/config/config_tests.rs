@@ -13513,6 +13513,7 @@ backend = "local_multimodal_infra"
 
 [realtime.local_infra]
 url = "ws://127.0.0.1:17890/v1/realtime"
+ref_text = "Hello there."
 idle_compact_percent = 70
 
 [realtime.local_infra.session]
@@ -13545,6 +13546,10 @@ group = true
     assert_eq!(
         config.realtime.local_infra.url.as_deref(),
         Some("ws://127.0.0.1:17890/v1/realtime")
+    );
+    assert_eq!(
+        config.realtime.local_infra.ref_text.as_deref(),
+        Some("Hello there.")
     );
     assert_eq!(config.realtime.local_infra.idle_compact_percent, Some(70));
     assert_eq!(

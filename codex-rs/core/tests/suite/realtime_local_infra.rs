@@ -99,12 +99,18 @@ async fn what_the_server_hears_is_answered_by_a_turn_and_spoken() -> Result<()> 
     ]])
     .await;
 
+    let voice_dir = tempfile::tempdir()?;
+    let ref_audio = voice_dir.path().join("voice.wav");
+    std::fs::write(&ref_audio, b"RIFF")?;
     let mut builder = test_codex().with_config({
         let url = voice_server.uri().to_string();
         move |config| {
             config.realtime.backend = RealtimeBackend::LocalMultimodalInfra;
             config.realtime.local_infra.url = Some(url);
             config.realtime.local_infra.token = Some("infer-token".to_string());
+            config.realtime.local_infra.ref_audio_path =
+                Some(ref_audio.to_string_lossy().into_owned());
+            config.realtime.local_infra.ref_text = Some(" Hello there. ".to_string());
             config
                 .realtime
                 .local_infra
@@ -125,6 +131,8 @@ async fn what_the_server_hears_is_answered_by_a_turn_and_spoken() -> Result<()> 
     assert_eq!(messages[0]["type"], "session.start");
     assert_eq!(messages[0]["config"]["mode"], "audio");
     assert_eq!(messages[0]["config"]["name"], "Xiaole");
+    assert_eq!(messages[0]["config"]["ref_audio"], "UklGRg==");
+    assert_eq!(messages[0]["config"]["ref_text"], "Hello there.");
     let item = messages[1]["response_id"].clone();
     assert_eq!(
         messages[1..3],

@@ -2247,6 +2247,10 @@
           "description": "A WAV file whose voice the bot speaks with (sent as `ref_audio`); without it the server's default voice.",
           "type": "string"
         },
+        "ref_text": {
+          "description": "What `ref_audio_path` says (sent as `ref_text`, only with it): a TTS model that takes it (Qwen3-TTS) clones the voice in context, closer than from the recording alone.",
+          "type": "string"
+        },
         "session": {
           "additionalProperties": true,
           "default": {},

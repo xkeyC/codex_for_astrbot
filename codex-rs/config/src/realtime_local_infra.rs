@@ -14,6 +14,7 @@
 //! url = "ws://127.0.0.1:17890/v1/realtime"
 //! token = "..."
 //! ref_audio_path = "/data/voice.wav"
+//! ref_text = "What the reference recording says."
 //! idle_compact_percent = 70
 //!
 //! [realtime.local_infra.session]
@@ -51,6 +52,10 @@ pub struct LocalInfraRealtimeConfig {
     /// A WAV file whose voice the bot speaks with (sent as `ref_audio`);
     /// without it the server's default voice.
     pub ref_audio_path: Option<String>,
+    /// What `ref_audio_path` says (sent as `ref_text`, only with it): a TTS
+    /// model that takes it (Qwen3-TTS) clones the voice in context, closer
+    /// than from the recording alone.
+    pub ref_text: Option<String>,
     /// More `session.start` config fields, sent as they are (`name`,
     /// `aliases`, `group`, `tts_emotion`, `min_silence_ms`, ...). `mode` is
     /// always `audio`.
