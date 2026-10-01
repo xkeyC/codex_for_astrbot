@@ -5,8 +5,9 @@
 //! translated here; the streamed chunks come back as the same
 //! [`ResponseEvent`]s.
 //!
-//! - The instructions are a leading `system` message, `developer` messages are
-//!   `system` ones.
+//! - The instructions are the one `system` message, at the start; developer
+//!   messages are user ones, in a `<system>` tag (a system message mid-way
+//!   may be moved to the front, breaking the prefix cache).
 //! - An assistant step (its reasoning, text and tool calls) is one `assistant`
 //!   message; its reasoning goes back as `reasoning_content`.
 //! - Function tools go as they are; a namespace's tools flattened
@@ -16,9 +17,9 @@
 //! - Tool outputs are `tool` messages. One whose call is not in the history
 //!   becomes a user message; a call left without output gets an `aborted` one.
 //! - `reasoning.effort` is `reasoning_effort`, an output schema
-//!   `response_format`; token usage comes with `stream_options.include_usage`.
-//!   The provider's extra body is merged over the top level, and the fields
-//!   it rejects are removed.
+//!   `response_format` (not strict); token usage comes with
+//!   `stream_options.include_usage`. The provider's extra body is merged over
+//!   the top level, and the fields it rejects are removed.
 
 use crate::auth::SharedAuthProvider;
 use crate::common::ResponseEvent;
@@ -289,7 +290,9 @@ pub(crate) fn chat_request(
             "json_schema": {
                 "name": format.name,
                 "schema": format.schema,
-                "strict": format.strict,
+                // Not strict: chat providers that take a schema at all
+                // rarely take a strict one.
+                "strict": false,
             },
         });
     }
@@ -424,11 +427,11 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
             ResponseItem::Message { role, content, .. } => {
                 flush_step(&mut messages, &mut step, &mut open);
                 close_calls(&mut messages, &mut open);
-                let role = match role.as_str() {
-                    "system" | "developer" => "system",
-                    _ => "user",
+                let content = match role.as_str() {
+                    "system" | "developer" => system_content(content),
+                    _ => message_content(content),
                 };
-                messages.push(json!({"role": role, "content": message_content(content)}));
+                messages.push(json!({"role": "user", "content": content}));
             }
             ResponseItem::Reasoning {
                 summary, content, ..
@@ -592,6 +595,26 @@ fn message_text(content: &[ContentItem]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A developer (or system) message of the history: a user message, its text
+/// in a `<system>` tag. Only the instructions are a `system` message: one
+/// put mid-conversation may be moved to the front by the provider, which
+/// breaks its prefix cache, and some providers refuse it.
+fn system_content(content: &[ContentItem]) -> Value {
+    match message_content(content) {
+        Value::String(text) => Value::String(format!(
+            "<system>
+{text}
+</system>"
+        )),
+        Value::Array(mut parts) => {
+            parts.insert(0, json!({"type": "text", "text": "<system>"}));
+            parts.push(json!({"type": "text", "text": "</system>"}));
+            Value::Array(parts)
+        }
+        other => other,
+    }
 }
 
 /// Text, or text and images as content parts.

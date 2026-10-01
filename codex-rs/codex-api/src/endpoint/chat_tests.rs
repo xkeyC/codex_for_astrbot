@@ -109,7 +109,9 @@ fn a_turn_becomes_chat_messages() {
         body["messages"],
         json!([
             {"role": "system", "content": "You are a voice."},
-            {"role": "system", "content": "The call started."},
+            {"role": "user", "content": "<system>
+The call started.
+</system>"},
             {"role": "user", "content": "What time is it?"},
             {"role": "assistant", "content": "Let me check.",
              "reasoning_content": "They want the time.",
@@ -257,7 +259,7 @@ fn effort_schema_and_extra_body_shape_the_request() {
     assert_eq!(
         body["response_format"],
         json!({"type": "json_schema",
-               "json_schema": {"name": "answer", "schema": {"type": "object"}, "strict": true}})
+               "json_schema": {"name": "answer", "schema": {"type": "object"}, "strict": false}})
     );
 
     let (body, _) = chat_request(&req, &ChatOptions::default());
