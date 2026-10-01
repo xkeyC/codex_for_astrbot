@@ -2824,6 +2824,20 @@
           "default": "auto",
           "description": "How the provider's threads compact their history."
         },
+        "extra_body": {
+          "additionalProperties": true,
+          "default": {},
+          "description": "Chat wire: merged over each request body's top level (a provider's own fields).",
+          "type": "object"
+        },
+        "extra_body_remove": {
+          "default": [],
+          "description": "Chat wire: top-level fields Codex sends that the provider rejects (`reasoning_effort`, say), left out of each request body.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "models": {
           "additionalProperties": {
             "additionalProperties": true,
@@ -2832,6 +2846,15 @@
           "default": {},
           "description": "Model metadata by model slug: any fields of Codex's model info (for example `context_window`, `auto_compact_token_limit`, `supported_reasoning_levels` as `[{effort, description}]`, `default_reasoning_level`, `input_modalities`), merged field by field over what Codex would use otherwise; a field that does not fit is skipped (and logged).",
           "type": "object"
+        },
+        "wire": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ProviderWire"
+            }
+          ],
+          "default": "responses",
+          "description": "Which API the provider's requests go to."
         }
       },
       "type": "object"
@@ -3705,6 +3728,25 @@
           "description": "The provider's `/responses/compact` endpoint (it must have one).",
           "enum": [
             "remote"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderWire": {
+      "description": "The API a provider's requests go to.",
+      "oneOf": [
+        {
+          "description": "The provider's `wire_api` (Responses).",
+          "enum": [
+            "responses"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "`/chat/completions`: for a provider whose Responses endpoint is missing or broken. Hosted tools (web search) and remote compaction are not available over it.",
+          "enum": [
+            "chat"
           ],
           "type": "string"
         }
@@ -7618,7 +7660,7 @@
         "$ref": "#/definitions/ModelProviderOptions"
       },
       "default": {},
-      "description": "AstrBot: per-provider options by provider id (see `model_provider_options`): compaction mode and model metadata.",
+      "description": "AstrBot: per-provider options by provider id (see `model_provider_options`): compaction mode, wire (Responses or chat completions) and model metadata.",
       "type": "object"
     },
     "model_providers": {

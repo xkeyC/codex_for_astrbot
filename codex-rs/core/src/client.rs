@@ -41,6 +41,8 @@ use async_channel::Sender;
 use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
+use codex_api::ChatClient as ApiChatClient;
+use codex_api::ChatOptions as ApiChatOptions;
 use codex_api::Compression;
 use codex_api::MemoriesClient as ApiMemoriesClient;
 use codex_api::MemorySummarizeInput as ApiMemorySummarizeInput;
@@ -272,6 +274,9 @@ pub struct ModelClient {
     restored_history: bool,
     request_contributors: Vec<Arc<dyn codex_extension_api::ModelRequestContributor>>,
     executed_tool_calls: Option<ExecutedToolCalls>,
+    /// AstrBot: requests go to `/chat/completions`, shaped so
+    /// (`model_provider_options.<id>.wire = "chat"`).
+    chat_wire: Option<Arc<ApiChatOptions>>,
 }
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
@@ -551,11 +556,18 @@ impl ModelClient {
             restored_history: false,
             request_contributors,
             executed_tool_calls: None,
+            chat_wire: None,
         }
     }
 
     pub(crate) fn with_executed_tool_calls(mut self, recorder: ExecutedToolCalls) -> Self {
         self.executed_tool_calls = Some(recorder);
+        self
+    }
+
+    /// AstrBot: sends requests to `/chat/completions` (HTTP only).
+    pub fn with_chat_wire(mut self, chat: Option<ApiChatOptions>) -> Self {
+        self.chat_wire = chat.map(Arc::new);
         self
     }
 
@@ -1034,6 +1046,7 @@ impl ModelClient {
     pub fn responses_websocket_enabled(&self) -> bool {
         if !self.state.provider.info().supports_websockets
             || self.state.disable_websockets.load(Ordering::Relaxed)
+            || self.chat_wire.is_some()
         {
             return false;
         }
@@ -1678,10 +1691,15 @@ impl ModelClientSession {
             let responses_headers = self
                 .client
                 .responses_headers(client_setup.auth.as_ref(), &model_info.slug);
-            tracing::Span::current().record("api.path", "/responses");
+            let api_path = if self.client.chat_wire.is_some() {
+                "/chat/completions"
+            } else {
+                "/responses"
+            };
+            tracing::Span::current().record("api.path", api_path);
             let transport = self.client.build_api_transport(
                 &client_setup.api_provider,
-                "/responses",
+                api_path,
                 client_setup.redirect_policy,
             )?;
             let request_auth_context = AuthRequestTelemetryContext::new(
@@ -1693,7 +1711,7 @@ impl ModelClientSession {
             let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
                 session_telemetry,
                 request_auth_context,
-                RequestRouteTelemetry::for_endpoint("/responses"),
+                RequestRouteTelemetry::for_endpoint(api_path),
                 self.client.state.auth_env_telemetry.clone(),
             );
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
@@ -1761,13 +1779,24 @@ impl ModelClientSession {
                 request.input = input;
             }
             inference_trace_attempt.record_started(&request);
-            let client = ApiResponsesClient::new(
-                transport,
-                client_setup.api_provider,
-                client_setup.api_auth,
-            )
-            .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request, options).await;
+            let stream_result = match self.client.chat_wire.as_deref() {
+                Some(chat) => {
+                    ApiChatClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+                        .with_telemetry(Some(request_telemetry), Some(sse_telemetry))
+                        .stream_request(request, options, chat)
+                        .await
+                }
+                None => {
+                    ApiResponsesClient::new(
+                        transport,
+                        client_setup.api_provider,
+                        client_setup.api_auth,
+                    )
+                    .with_telemetry(Some(request_telemetry), Some(sse_telemetry))
+                    .stream_request(request, options)
+                    .await
+                }
+            };
 
             match stream_result {
                 Ok(stream) => {

@@ -8,6 +8,9 @@
 //! ```toml
 //! [model_provider_options.deepseek]
 //! compaction = "local"
+//! wire = "chat"
+//! extra_body = { thinking = { type = "disabled" } }
+//! extra_body_remove = ["reasoning_effort"]
 //!
 //! [model_provider_options.deepseek.models."deepseek-v4.1-flash"]
 //! context_window = 128000
@@ -31,6 +34,18 @@ pub struct ModelProviderOptions {
     /// How the provider's threads compact their history.
     #[serde(default)]
     pub compaction: ProviderCompaction,
+    /// Which API the provider's requests go to.
+    #[serde(default)]
+    pub wire: ProviderWire,
+    /// Chat wire: merged over each request body's top level (a provider's
+    /// own fields).
+    #[serde(default)]
+    #[schemars(with = "BTreeMap<String, serde_json::Value>")]
+    pub extra_body: serde_json::Map<String, serde_json::Value>,
+    /// Chat wire: top-level fields Codex sends that the provider rejects
+    /// (`reasoning_effort`, say), left out of each request body.
+    #[serde(default)]
+    pub extra_body_remove: Vec<String>,
     /// Model metadata by model slug: any fields of Codex's model info (for
     /// example `context_window`, `auto_compact_token_limit`,
     /// `supported_reasoning_levels` as `[{effort, description}]`,
@@ -40,6 +55,19 @@ pub struct ModelProviderOptions {
     #[serde(default)]
     #[schemars(with = "BTreeMap<String, BTreeMap<String, serde_json::Value>>")]
     pub models: BTreeMap<String, serde_json::Value>,
+}
+
+/// The API a provider's requests go to.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderWire {
+    /// The provider's `wire_api` (Responses).
+    #[default]
+    Responses,
+    /// `/chat/completions`: for a provider whose Responses endpoint is
+    /// missing or broken. Hosted tools (web search) and remote compaction
+    /// are not available over it.
+    Chat,
 }
 
 /// Where a provider's history compaction runs.

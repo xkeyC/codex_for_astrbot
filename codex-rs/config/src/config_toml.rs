@@ -399,7 +399,8 @@ pub struct ConfigToml {
     pub model_verbosity: Option<Verbosity>,
 
     /// AstrBot: per-provider options by provider id (see
-    /// `model_provider_options`): compaction mode and model metadata.
+    /// `model_provider_options`): compaction mode, wire (Responses or chat
+    /// completions) and model metadata.
     #[serde(default)]
     pub model_provider_options:
         HashMap<String, crate::model_provider_options::ModelProviderOptions>,

@@ -37,6 +37,7 @@ mod compact_remote_v2;
 mod compact_token_budget;
 // AstrBot: per-provider compaction mode.
 mod provider_compaction;
+pub use provider_compaction::chat_wire_options;
 mod thread_startup_metadata;
 pub use codex_network_proxy::EnvironmentNetworkPolicy;
 pub use codex_network_proxy::NetworkDomainPermission;
