@@ -855,6 +855,9 @@ impl ModelClient {
         use_responses_lite: bool,
     ) -> HashMap<String, String> {
         let mut client_metadata = responses_metadata.client_metadata(include_internal);
+        if self.omit_turn_metadata {
+            client_metadata.remove(X_CODEX_TURN_METADATA_HEADER);
+        }
         if use_responses_lite {
             client_metadata.insert(
                 WS_REQUEST_HEADER_RESPONSES_LITE_CLIENT_METADATA_KEY.to_string(),
@@ -1020,7 +1023,11 @@ impl ModelClient {
                 item.clear_tool_result_metadata();
             }
         }
-        let client_metadata = responses_metadata.client_metadata(include_internal);
+        let mut client_metadata = responses_metadata.client_metadata(include_internal);
+        if self.omit_turn_metadata {
+            // Left out of the body as well as the headers.
+            client_metadata.remove(X_CODEX_TURN_METADATA_HEADER);
+        }
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions,

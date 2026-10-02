@@ -2849,7 +2849,7 @@
         },
         "omit_turn_metadata": {
           "default": false,
-          "description": "Leave the `x-codex-turn-metadata` header out of the provider's requests. Some providers take a request carrying it as Codex's and change course: DeepSeek then thinks whatever the reasoning effort.",
+          "description": "Leave the `x-codex-turn-metadata` header (and its copy in the body's `client_metadata`) out of the provider's requests. Some providers take a request carrying it as Codex's and change course: DeepSeek then thinks whatever the reasoning effort.",
           "type": "boolean"
         },
         "wire": {

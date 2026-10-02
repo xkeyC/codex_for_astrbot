@@ -7,7 +7,8 @@
 //! barge-in, TTS. This thread does the talking: an utterance that wants a
 //! reply starts a turn (stopping one still running for an earlier utterance),
 //! and the text of the turn's messages is streamed back to be spoken. A
-//! message that is only `SILENCE_MARKER` says nothing.
+//! message that is only `SILENCE_MARKER`, or only some other bare tag (`<s>`:
+//! models fall back on markers like it), says nothing.
 //!
 //! What the host appends (`realtime_append_text` / `realtime_append_speech`:
 //! a task's result, something to say first) is told in a turn of its own once
@@ -48,6 +49,28 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
 /// What the model says instead of an answer to stay silent.
 pub(crate) const SILENCE_MARKER: &str = "<silence>";
+/// The longest bare tag (`<s>`, `</s>`, `<silent>`) taken as silence.
+const MAX_BARE_TAG: usize = 24;
+
+/// The whole text is one tag and nothing else: silence, not speech.
+fn bare_tag(text: &str) -> bool {
+    let text = text.trim();
+    text.len() <= MAX_BARE_TAG
+        && text.len() > 2
+        && text.starts_with('<')
+        && text.ends_with('>')
+        && !text[1..text.len() - 1].contains(['<', '>'])
+        && !text.contains(char::is_whitespace)
+}
+
+/// The text so far may still become a bare tag (held back until it is clear).
+fn may_be_bare_tag(text: &str) -> bool {
+    text.starts_with('<')
+        && text.len() <= MAX_BARE_TAG
+        && !text.contains(char::is_whitespace)
+        && !text[1..].contains('<')
+        && text.find('>').is_none_or(|end| end == text.len() - 1)
+}
 /// The server's input and output sample rates (16-bit mono PCM).
 const INPUT_RATE: u32 = 16_000;
 const OUTPUT_RATE: u32 = 24_000;
@@ -62,8 +85,7 @@ const RELAY_RETRY: Duration = Duration::from_secs(2);
 const IDLE_BEFORE_COMPACT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(100);
 /// Put before an utterance that continues the one answered last.
-const CONTINUES_NOTE: &str =
-    "(The speaker went on; their words below are the whole utterance, replacing the words you last answered:)";
+const CONTINUES_NOTE: &str = "(The speaker went on; their words below are the whole utterance, replacing the words you last answered:)";
 /// Context lines (talk that wanted no reply) kept for the next input.
 const MAX_CONTEXT_LINES: usize = 20;
 const MAX_CONTEXT_CHARS: usize = 2_000;
@@ -504,7 +526,8 @@ enum CompactFloor {
 /// A message of the running turn, as far as it was spoken.
 #[derive(Default)]
 struct SpokenItem {
-    /// Held back while it may still turn out to be `SILENCE_MARKER`.
+    /// Held back while it may still turn out to be `SILENCE_MARKER` or a
+    /// bare tag.
     held: String,
     /// Some text was given to the server.
     sent: bool,
@@ -584,7 +607,9 @@ impl LocalInfraConversation {
                 },
                 text = text_rx.recv() => match text {
                     Ok(params) if params.role == ConversationTextRole::Context => {
-                        self.host_context = Some(params.text);
+                        // An empty one clears it.
+                        self.host_context =
+                            Some(params.text).filter(|text| !text.trim().is_empty());
                         Step::Continue
                     }
                     Ok(params) => {
@@ -838,6 +863,10 @@ impl LocalInfraConversation {
         }
         let relays = self.waiting.clone();
         let waiting_since = self.waiting_since;
+        // What the input carries, kept should the turn not start.
+        let host_context = self.host_context.clone();
+        let context = self.context.clone();
+        let cut_off = self.cut_off.clone();
         let input = if continues {
             self.input_for(&format!("{CONTINUES_NOTE}\n{text}"))
         } else {
@@ -850,6 +879,9 @@ impl LocalInfraConversation {
                 // Still to be told.
                 self.waiting = relays;
                 self.waiting_since = waiting_since;
+                self.host_context = host_context;
+                self.context = context;
+                self.cut_off = cut_off;
                 self.emit(RealtimeEvent::Error(err)).await;
             }
         }
@@ -1056,8 +1088,10 @@ impl LocalInfraConversation {
                         item.silent = true;
                         return Step::Continue;
                     }
-                    if SILENCE_MARKER.starts_with(held) {
-                        return Step::Continue; // may still be the marker
+                    if SILENCE_MARKER.starts_with(held) || may_be_bare_tag(held) || bare_tag(held) {
+                        // May still be the marker or a bare tag (whitespace
+                        // after a whole tag included).
+                        return Step::Continue;
                     }
                     std::mem::take(&mut item.held)
                 };
@@ -1083,9 +1117,12 @@ impl LocalInfraConversation {
                     item.held
                 };
                 let unsent = rest.trim_start();
-                // Silence, or the start of the marker cut short.
+                // Silence, the start of the marker cut short, or a bare tag.
                 let silent = unsent.starts_with(SILENCE_MARKER)
-                    || (!unsent.is_empty() && SILENCE_MARKER.starts_with(unsent.trim_end()));
+                    || (!unsent.is_empty() && SILENCE_MARKER.starts_with(unsent.trim_end()))
+                    // A whole message that is one tag (not a tag-like last
+                    // word of speech, "Press <Enter>").
+                    || (!item.sent && bare_tag(unsent));
                 if !silent && !unsent.is_empty() {
                     self.speak(&item_id, &rest);
                 }

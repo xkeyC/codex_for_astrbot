@@ -47,9 +47,10 @@ pub struct ModelProviderOptions {
     /// (`reasoning_effort`, say), left out of each request body.
     #[serde(default)]
     pub extra_body_remove: Vec<String>,
-    /// Leave the `x-codex-turn-metadata` header out of the provider's
-    /// requests. Some providers take a request carrying it as Codex's and
-    /// change course: DeepSeek then thinks whatever the reasoning effort.
+    /// Leave the `x-codex-turn-metadata` header (and its copy in the body's
+    /// `client_metadata`) out of the provider's requests. Some providers take
+    /// a request carrying it as Codex's and change course: DeepSeek then
+    /// thinks whatever the reasoning effort.
     #[serde(default)]
     pub omit_turn_metadata: bool,
     /// Model metadata by model slug: any fields of Codex's model info (for

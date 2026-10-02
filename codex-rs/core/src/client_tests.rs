@@ -2132,4 +2132,31 @@ fn omit_turn_metadata_leaves_the_header_out() {
     assert!(!headers.contains_key(X_CODEX_TURN_METADATA_HEADER));
     // The rest stays.
     assert!(headers.contains_key("x-codex-window-id"));
+    // Nor in the body, over HTTP or a websocket.
+    let request = client
+        .build_responses_request(
+            &Prompt::default(),
+            &test_model_info(),
+            /*effort*/ None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            /*service_tier*/ None,
+            &responses_metadata,
+            /*include_internal*/ true,
+        )
+        .expect("request");
+    assert!(
+        !request
+            .client_metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.contains_key(X_CODEX_TURN_METADATA_HEADER))
+    );
+    assert!(
+        !client
+            .build_ws_client_metadata(
+                &responses_metadata,
+                /*include_internal*/ true,
+                /*use_responses_lite*/ false,
+            )
+            .contains_key(X_CODEX_TURN_METADATA_HEADER)
+    );
 }

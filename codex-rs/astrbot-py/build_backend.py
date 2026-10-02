@@ -169,17 +169,20 @@ def _shared_build_env() -> None:
 
     pip builds in a fresh temporary copy of the sources, so cargo's default
     target directory would start empty on every install: keep it in the user's
-    cache instead, so dependencies compile once and a later install rebuilds
-    only what changed. The release overrides apply to both builds alike; with
+    cache instead, so dependencies compile once (the workspace's own crates,
+    at a new temporary path each time, still rebuild). The release overrides apply to both builds alike; with
     different profiles every shared dependency would compile twice.
     """
-    if not os.environ.get("CARGO_TARGET_DIR"):
-        os.environ["CARGO_TARGET_DIR"] = str(
-            Path(
-                os.environ.get("CODEX_ASTRBOT_TARGET_DIR")
-                or Path.home() / ".cache" / "codex-astrbot" / "target"
-            )
+    # Absolute: cargo and the copies below run from different directories.
+    os.environ["CARGO_TARGET_DIR"] = str(
+        Path(
+            os.environ.get("CARGO_TARGET_DIR")
+            or os.environ.get("CODEX_ASTRBOT_TARGET_DIR")
+            or Path.home() / ".cache" / "codex-astrbot" / "target"
         )
+        .expanduser()
+        .resolve()
+    )
     if not os.environ.get("CODEX_ASTRBOT_DEBUG"):
         # The workspace release profile keeps debuginfo; drop it from the wheel.
         os.environ.setdefault("CARGO_PROFILE_RELEASE_DEBUG", "0")

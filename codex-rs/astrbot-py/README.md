@@ -12,8 +12,9 @@ pip install "git+https://github.com/xkeyC/codex_for_astrbot@astrbot#subdirectory
 
 Requirements: a Rust toolchain (stable), a C/C++ linker, and network access.
 Expect a long first build. Compiled crates are kept in
-`~/.cache/codex-astrbot/target/` (several GB), so later installs of newer
-commits rebuild only what changed; delete the directory to reclaim the space.
+`~/.cache/codex-astrbot/target/` (several GB), so later installs reuse the
+compiled dependencies and rebuild only Codex's own crates; delete the directory
+to reclaim the space.
 
 The code-mode host links V8. The `v8` crate fetches its prebuilt archive from
 denoland/rusty_v8, which does not publish the version Codex pins, so the build

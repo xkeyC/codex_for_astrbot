@@ -149,3 +149,45 @@ async fn a_response_with_another_tool_call_still_gets_its_follow_up() -> Result<
     assert_eq!(responses_mock.requests().len(), 2);
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unknown_tool_call_beside_it_still_gets_its_follow_up() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let responses_mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call("jump-call", "jump", "{}"),
+                // No such tool: its error is for the model to see.
+                responses::ev_function_call("fly-call", "fly", "{}"),
+                responses::ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_assistant_message("msg-1", "I cannot fly."),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = thread_with_tools(&server).await?;
+
+    answer(&test, /*end_turn*/ true, Some("Watch this!")).await?;
+    let EventMsg::TurnComplete(complete) = wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await
+    else {
+        unreachable!("event guard guarantees TurnComplete");
+    };
+
+    assert_eq!(
+        complete.last_agent_message.as_deref(),
+        Some("I cannot fly.")
+    );
+    assert_eq!(responses_mock.requests().len(), 2);
+    Ok(())
+}

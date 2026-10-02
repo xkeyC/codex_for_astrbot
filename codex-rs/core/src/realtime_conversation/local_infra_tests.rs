@@ -138,6 +138,20 @@ async fn the_silence_marker_says_nothing() {
 }
 
 #[tokio::test]
+async fn a_bare_tag_says_nothing() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "<").await;
+    h.delta("t1", "m1", "s>").await;
+    h.done("t1", "m1", "<s>").await;
+    h.done(
+        "t1", "m2", " </s>
+",
+    )
+    .await;
+    assert_eq!(h.sent(), Vec::<serde_json::Value>::new());
+}
+
+#[tokio::test]
 async fn text_that_only_began_like_the_marker_is_spoken_whole() {
     let mut h = harness(false);
     h.delta("t1", "m1", "<").await;
@@ -503,4 +517,28 @@ async fn the_hosts_latest_context_goes_with_the_next_input_once() {
         "(Room: Garden; here: Alice, Bob)\nJarvis, hi"
     );
     assert_eq!(h.conversation.input_for("Jarvis, again"), "Jarvis, again");
+}
+
+#[tokio::test]
+async fn a_streamed_bare_tag_then_a_newline_says_nothing() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "<s>").await;
+    h.delta("t1", "m1", "\n").await;
+    h.done("t1", "m1", "<s>\n").await;
+    h.delta("t1", "m2", "</s>\n").await;
+    h.done("t1", "m2", "</s>\n").await;
+    assert_eq!(h.sent(), Vec::<serde_json::Value>::new());
+}
+
+#[tokio::test]
+async fn a_tag_like_last_word_of_speech_is_spoken() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "Press <Enter>").await;
+    h.done("t1", "m1", "Press <Enter>").await;
+    let texts: Vec<String> = h
+        .sent()
+        .iter()
+        .filter_map(|m| m["text"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(texts.concat(), "Press <Enter>");
 }

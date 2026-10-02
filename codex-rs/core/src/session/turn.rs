@@ -2413,32 +2413,56 @@ async fn handle_assistant_item_done_in_plan_mode(
     false
 }
 
+/// The tool calls of one model response, for [`end_turn_by_tools`].
+#[derive(Default)]
+struct ResponseToolCalls {
+    /// The calls run as tools, by call id.
+    ids: Vec<String>,
+    /// An item of the response needs a model request without being a call run
+    /// here (a rejected call whose error the model must see).
+    other_follow_up: bool,
+}
+
 /// Ends the turn after this response when every one of its tool calls was a
-/// dynamic tool answered with `end_turn`: no model request follows, and what
-/// those calls asked to say becomes the assistant's message.
+/// dynamic tool answered with `end_turn`: no model request follows (even one
+/// the model asked for), and what those calls asked to say becomes the
+/// assistant's message. Calls made inside another tool (code mode) do not
+/// count: their outer call is what the model waits for. Nothing is recorded
+/// for a cancelled turn.
 async fn end_turn_by_tools(
     sess: &Arc<Session>,
     step_context: &StepContext,
-    tool_calls: usize,
+    calls: &ResponseToolCalls,
+    cancelled: bool,
     outcome: CodexResult<SamplingRequestResult>,
 ) -> CodexResult<SamplingRequestResult> {
-    let ending = {
-        let mut active = sess.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => std::mem::take(&mut at.turn_state.lock().await.turn_ending_calls),
-            None => Vec::new(),
-        }
+    let turn_state = sess
+        .active_turn
+        .lock()
+        .await
+        .as_ref()
+        .map(|at| Arc::clone(&at.turn_state));
+    let mut ending: HashMap<String, Option<String>> = match turn_state {
+        Some(turn_state) => std::mem::take(&mut turn_state.lock().await.turn_ending_calls)
+            .into_iter()
+            .collect(),
+        None => HashMap::new(),
     };
     let Ok(mut result) = outcome else {
         return outcome;
     };
-    if tool_calls == 0 || ending.len() != tool_calls {
+    if cancelled
+        || calls.ids.is_empty()
+        || calls.other_follow_up
+        || !calls.ids.iter().all(|id| ending.contains_key(id))
+    {
         return Ok(result);
     }
     result.needs_follow_up = false;
-    let speech = ending
-        .into_iter()
-        .flatten()
+    let speech = calls
+        .ids
+        .iter()
+        .filter_map(|id| ending.remove(id).flatten())
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
         .collect::<Vec<_>>()
@@ -2574,7 +2598,7 @@ async fn try_run_sampling_request(
         .await??;
     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
     // Tool calls of this response (see `end_turn_by_tools`).
-    let mut tool_calls = 0usize;
+    let mut tool_calls = ResponseToolCalls::default();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -2745,6 +2769,11 @@ async fn try_run_sampling_request(
                     | ResponseItem::Other => false,
                 };
 
+                let item_call_id = match &item {
+                    ResponseItem::FunctionCall { call_id, .. }
+                    | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.clone()),
+                    _ => None,
+                };
                 let output_result =
                     match handle_output_item_done(&mut ctx, item, previously_streamed_item)
                         .instrument(handle_responses)
@@ -2753,9 +2782,16 @@ async fn try_run_sampling_request(
                         Ok(output_result) => output_result,
                         Err(err) => break Err(err),
                     };
-                if let Some(tool_future) = output_result.tool_future {
-                    in_flight.push_back(tool_future);
-                    tool_calls += 1;
+                match (output_result.tool_future, item_call_id) {
+                    (Some(tool_future), call_id) => {
+                        in_flight.push_back(tool_future);
+                        // A call without an id of its own never ends the turn.
+                        tool_calls.ids.push(call_id.unwrap_or_default());
+                    }
+                    (None, _) if output_result.needs_follow_up => {
+                        tool_calls.other_follow_up = true;
+                    }
+                    (None, _) => {}
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -3127,7 +3163,14 @@ async fn try_run_sampling_request(
     };
     drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
     drop(tool_blocking_timing_guard);
-    let outcome = end_turn_by_tools(&sess, &step_context, tool_calls, outcome).await;
+    let outcome = end_turn_by_tools(
+        &sess,
+        &step_context,
+        &tool_calls,
+        cancellation_token.is_cancelled(),
+        outcome,
+    )
+    .await;
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token

@@ -222,7 +222,8 @@ async fn request_dynamic_tool(
         let mut active = session.active_turn.lock().await;
         if let Some(at) = active.as_mut() {
             let mut ts = at.turn_state.lock().await;
-            ts.turn_ending_calls.push(response.speak.clone());
+            ts.turn_ending_calls
+                .push((call_id.clone(), response.speak.clone()));
         }
     }
 
