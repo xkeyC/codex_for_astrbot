@@ -36,6 +36,7 @@ fn harness(group: bool) -> Harness {
             last_answered: None,
             last_relays: Vec::new(),
             waiting: Vec::new(),
+            host_context: None,
             waiting_since: None,
             relay_retry_at: None,
             idle_since: None,
@@ -489,4 +490,17 @@ async fn words_a_turn_was_started_with_are_kept_until_it_ends() {
         })
         .await;
     assert_eq!(h.conversation.last_relays, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn the_hosts_latest_context_goes_with_the_next_input_once() {
+    let mut h = harness(false);
+    h.conversation.host_context = Some("(Room: Home; here: Alice)".to_string());
+    // A newer one replaces it.
+    h.conversation.host_context = Some("(Room: Garden; here: Alice, Bob)".to_string());
+    assert_eq!(
+        h.conversation.input_for("Jarvis, hi"),
+        "(Room: Garden; here: Alice, Bob)\nJarvis, hi"
+    );
+    assert_eq!(h.conversation.input_for("Jarvis, again"), "Jarvis, again");
 }

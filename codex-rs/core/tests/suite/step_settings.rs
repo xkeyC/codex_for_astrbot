@@ -374,6 +374,8 @@ async fn tool_result_history_keeps_originating_model_across_switch_and_replay() 
     let response = DynamicToolResponse {
         content_items,
         success: true,
+        end_turn: false,
+        speak: None,
     };
     test.codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {

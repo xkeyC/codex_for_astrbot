@@ -2847,6 +2847,11 @@
           "description": "Model metadata by model slug: any fields of Codex's model info (for example `context_window`, `auto_compact_token_limit`, `supported_reasoning_levels` as `[{effort, description}]`, `default_reasoning_level`, `input_modalities`), merged field by field over what Codex would use otherwise; a field that does not fit is skipped (and logged).",
           "type": "object"
         },
+        "omit_turn_metadata": {
+          "default": false,
+          "description": "Leave the `x-codex-turn-metadata` header out of the provider's requests. Some providers take a request carrying it as Codex's and change course: DeepSeek then thinks whatever the reasoning effort.",
+          "type": "boolean"
+        },
         "wire": {
           "allOf": [
             {

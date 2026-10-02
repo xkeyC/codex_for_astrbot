@@ -260,6 +260,8 @@ async fn live_chat_provider_calls_a_tool_and_remembers() -> Result<()> {
                                 text: "Shanghai today: 24°C, cloudy, light wind.".to_string(),
                             }],
                             success: true,
+                            end_turn: false,
+                            speak: None,
                         },
                     })
                     .await?;

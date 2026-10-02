@@ -97,6 +97,9 @@ pub(crate) struct TurnState {
     granted_permissions_by_environment_id: HashMap<String, AdditionalPermissionProfile>,
     strict_auto_review_enabled: bool,
     pub(crate) tool_calls: u64,
+    /// Dynamic tool calls of the current model response answered with
+    /// `end_turn`, each with what it asked to say.
+    pub(crate) turn_ending_calls: Vec<Option<String>>,
     pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
     pub(crate) token_usage_by_model: TurnTokenUsage,

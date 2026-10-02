@@ -126,6 +126,8 @@ async fn dynamic_tool_audio_exceeding_the_output_budget_is_omitted() -> Result<(
                     audio_url: pcm_wav_data_url(/*sample_count*/ 80_000),
                 }],
                 success: true,
+                end_turn: false,
+                speak: None,
             },
         })
         .await?;

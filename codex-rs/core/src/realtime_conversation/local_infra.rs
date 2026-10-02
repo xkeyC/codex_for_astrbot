@@ -246,6 +246,7 @@ pub(super) async fn handle_start(
         last_answered: None,
         last_relays: Vec::new(),
         waiting: Vec::new(),
+        host_context: None,
         waiting_since: None,
         relay_retry_at: None,
         idle_since: None,
@@ -476,6 +477,9 @@ struct LocalInfraConversation {
     last_relays: Vec<String>,
     /// Appended words waiting for a quiet moment, and since when.
     waiting: Vec<String>,
+    /// The host's latest context (`ConversationTextRole::Context`): given
+    /// with the next input, then dropped; a newer one replaces it.
+    host_context: Option<String>,
     waiting_since: Option<Instant>,
     /// A relay that could not be submitted is retried from then.
     relay_retry_at: Option<Instant>,
@@ -579,6 +583,10 @@ impl LocalInfraConversation {
                     Err(_) => Step::Stop,
                 },
                 text = text_rx.recv() => match text {
+                    Ok(params) if params.role == ConversationTextRole::Context => {
+                        self.host_context = Some(params.text);
+                        Step::Continue
+                    }
                     Ok(params) => {
                         self.wait_to_tell(params.text);
                         Step::Continue
@@ -852,6 +860,10 @@ impl LocalInfraConversation {
     /// of a reply cut off).
     fn input_for(&mut self, text: &str) -> String {
         let mut input = String::new();
+        if let Some(context) = self.host_context.take() {
+            input.push_str(&context);
+            input.push('\n');
+        }
         if !self.waiting.is_empty() {
             // Told with this turn rather than after it.
             input.push_str(&self.waiting.join("\n\n"));
@@ -936,9 +948,13 @@ impl LocalInfraConversation {
             // where an interruption would drop it. The next utterance takes
             // it along too (`input_for`).
             if retry_due && self.started && (self.idle() || (late && self.turn.is_none())) {
-                let input = self.waiting.join("\n\n");
+                let mut input = self.waiting.join("\n\n");
+                if let Some(context) = &self.host_context {
+                    input = format!("{context}\n{input}");
+                }
                 match self.start_turn(&sess, input).await {
                     Ok(()) => {
+                        self.host_context = None;
                         self.last_relays = std::mem::take(&mut self.waiting);
                         self.waiting_since = None;
                         self.relay_retry_at = None;

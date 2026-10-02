@@ -1182,6 +1182,8 @@ async fn tool_search_returns_deferred_dynamic_tool_and_routes_follow_up_call() -
                     text: "dynamic-search-ok".to_string(),
                 }],
                 success: true,
+                end_turn: false,
+                speak: None,
             },
         })
         .await?;

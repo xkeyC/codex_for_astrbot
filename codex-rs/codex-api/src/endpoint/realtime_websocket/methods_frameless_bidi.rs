@@ -79,14 +79,18 @@ pub(super) fn session_json(
                 .into_iter()
                 .map(|item| {
                     let content_type = match item.role {
-                        ConversationTextRole::User | ConversationTextRole::Developer => {
-                            "input_text"
-                        }
+                        ConversationTextRole::User
+                        | ConversationTextRole::Developer
+                        | ConversationTextRole::Context => "input_text",
                         ConversationTextRole::Assistant => "output_text",
+                    };
+                    let role = match item.role {
+                        ConversationTextRole::Context => ConversationTextRole::Developer,
+                        role => role,
                     };
                     json!({
                         "type": "message",
-                        "role": item.role,
+                        "role": role,
                         "content": [{
                             "type": content_type,
                             "text": item.text,

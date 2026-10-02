@@ -6541,7 +6541,8 @@
       "enum": [
         "user",
         "developer",
-        "assistant"
+        "assistant",
+        "context"
       ],
       "type": "string"
     },

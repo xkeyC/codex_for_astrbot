@@ -341,7 +341,8 @@ impl MemoryStartupContext {
             config.workspace_routing_context(),
             Vec::new(),
         )
-        .with_chat_wire(codex_core::chat_wire_options(config));
+        .with_chat_wire(codex_core::chat_wire_options(config))
+        .with_omit_turn_metadata(codex_core::omit_turn_metadata(config));
 
         let mut client_session = model_client.new_session();
         let window_id = format!("{}:0", self.thread_id);

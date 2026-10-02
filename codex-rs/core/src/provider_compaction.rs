@@ -29,6 +29,15 @@ pub(crate) fn remote_compaction_support(turn_context: &TurnContext) -> RemoteCom
     }
 }
 
+/// Whether requests to the configured provider leave out the
+/// `x-codex-turn-metadata` header (`omit_turn_metadata`).
+pub fn omit_turn_metadata(config: &Config) -> bool {
+    config
+        .model_provider_options
+        .get(&config.model_provider_id)
+        .is_some_and(|options| options.omit_turn_metadata)
+}
+
 /// How requests to the configured provider go to `/chat/completions`, when
 /// its wire is chat.
 pub fn chat_wire_options(config: &Config) -> Option<ChatOptions> {

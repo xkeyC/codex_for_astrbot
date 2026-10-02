@@ -11,6 +11,7 @@
 //! wire = "chat"
 //! extra_body = { thinking = { type = "disabled" } }
 //! extra_body_remove = ["reasoning_effort"]
+//! omit_turn_metadata = true
 //!
 //! [model_provider_options.deepseek.models."deepseek-v4.1-flash"]
 //! context_window = 128000
@@ -46,6 +47,11 @@ pub struct ModelProviderOptions {
     /// (`reasoning_effort`, say), left out of each request body.
     #[serde(default)]
     pub extra_body_remove: Vec<String>,
+    /// Leave the `x-codex-turn-metadata` header out of the provider's
+    /// requests. Some providers take a request carrying it as Codex's and
+    /// change course: DeepSeek then thinks whatever the reasoning effort.
+    #[serde(default)]
+    pub omit_turn_metadata: bool,
     /// Model metadata by model slug: any fields of Codex's model info (for
     /// example `context_window`, `auto_compact_token_limit`,
     /// `supported_reasoning_levels` as `[{effort, description}]`,

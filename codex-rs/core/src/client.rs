@@ -277,6 +277,9 @@ pub struct ModelClient {
     /// AstrBot: requests go to `/chat/completions`, shaped so
     /// (`model_provider_options.<id>.wire = "chat"`).
     chat_wire: Option<Arc<ApiChatOptions>>,
+    /// AstrBot: requests leave out `x-codex-turn-metadata`
+    /// (`model_provider_options.<id>.omit_turn_metadata`).
+    omit_turn_metadata: bool,
 }
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
@@ -557,6 +560,7 @@ impl ModelClient {
             request_contributors,
             executed_tool_calls: None,
             chat_wire: None,
+            omit_turn_metadata: false,
         }
     }
 
@@ -568,6 +572,12 @@ impl ModelClient {
     /// AstrBot: sends requests to `/chat/completions` (HTTP only).
     pub fn with_chat_wire(mut self, chat: Option<ApiChatOptions>) -> Self {
         self.chat_wire = chat.map(Arc::new);
+        self
+    }
+
+    /// AstrBot: leaves `x-codex-turn-metadata` out of the requests.
+    pub fn with_omit_turn_metadata(mut self, omit: bool) -> Self {
+        self.omit_turn_metadata = omit;
         self
     }
 
@@ -823,6 +833,9 @@ impl ModelClient {
         responses_metadata: &CodexResponsesMetadata,
     ) -> ApiHeaderMap {
         let mut extra_headers = responses_metadata.compatibility_headers();
+        if self.omit_turn_metadata {
+            extra_headers.remove(X_CODEX_TURN_METADATA_HEADER);
+        }
         if matches!(
             self.state.session_source,
             SessionSource::Internal(InternalSessionSource::MemoryConsolidation)

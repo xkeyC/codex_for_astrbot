@@ -7891,6 +7891,8 @@ text(JSON.stringify({
                             text: "first-winner".to_string(),
                         }],
                         success: true,
+                        end_turn: false,
+                        speak: None,
                     },
                 })
                 .await?;
@@ -8197,6 +8199,8 @@ text(
                     text: "hidden-ok".to_string(),
                 }],
                 success: true,
+                end_turn: false,
+                speak: None,
             },
         })
         .await?;

@@ -42,9 +42,14 @@ pub(super) fn conversation_item_create_message(
 ) -> RealtimeOutboundMessage {
     let content_type = match role {
         ConversationTextRole::Assistant => ConversationContentType::OutputText,
-        ConversationTextRole::User | ConversationTextRole::Developer => {
-            ConversationContentType::InputText
-        }
+        ConversationTextRole::User
+        | ConversationTextRole::Developer
+        | ConversationTextRole::Context => ConversationContentType::InputText,
+    };
+    // A host's context is developer text here (only local_infra keeps it apart).
+    let role = match role {
+        ConversationTextRole::Context => ConversationTextRole::Developer,
+        role => role,
     };
 
     RealtimeOutboundMessage::ConversationItemCreate {

@@ -2413,6 +2413,57 @@ async fn handle_assistant_item_done_in_plan_mode(
     false
 }
 
+/// Ends the turn after this response when every one of its tool calls was a
+/// dynamic tool answered with `end_turn`: no model request follows, and what
+/// those calls asked to say becomes the assistant's message.
+async fn end_turn_by_tools(
+    sess: &Arc<Session>,
+    step_context: &StepContext,
+    tool_calls: usize,
+    outcome: CodexResult<SamplingRequestResult>,
+) -> CodexResult<SamplingRequestResult> {
+    let ending = {
+        let mut active = sess.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => std::mem::take(&mut at.turn_state.lock().await.turn_ending_calls),
+            None => Vec::new(),
+        }
+    };
+    let Ok(mut result) = outcome else {
+        return outcome;
+    };
+    if tool_calls == 0 || ending.len() != tool_calls {
+        return Ok(result);
+    }
+    result.needs_follow_up = false;
+    let speech = ending
+        .into_iter()
+        .flatten()
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !speech.is_empty() {
+        let message = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: speech.clone(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        };
+        sess.record_response_item_and_emit_turn_item(
+            &step_context.turn,
+            &step_context.settings.model_info,
+            message,
+        )
+        .await;
+        result.last_agent_message = Some(speech);
+    }
+    Ok(result)
+}
+
 #[instrument(level = "trace", skip_all)]
 async fn drain_in_flight(
     in_flight: &mut FuturesOrdered<InFlightFuture<'static>>,
@@ -2522,6 +2573,8 @@ async fn try_run_sampling_request(
         .or_cancel(&cancellation_token)
         .await??;
     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
+    // Tool calls of this response (see `end_turn_by_tools`).
+    let mut tool_calls = 0usize;
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
     let mut active_item: Option<TurnItem> = None;
@@ -2702,6 +2755,7 @@ async fn try_run_sampling_request(
                     };
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
+                    tool_calls += 1;
                 }
                 if let Some(agent_message) = output_result.last_agent_message {
                     last_agent_message = Some(agent_message);
@@ -3073,6 +3127,7 @@ async fn try_run_sampling_request(
     };
     drain_in_flight(&mut in_flight, sess.clone(), &step_context).await?;
     drop(tool_blocking_timing_guard);
+    let outcome = end_turn_by_tools(&sess, &step_context, tool_calls, outcome).await;
 
     if should_emit_token_count {
         // A tool call such as request_user_input can intentionally pause the turn. Emit token

@@ -153,6 +153,7 @@ impl DynamicToolHandler {
         let DynamicToolResponse {
             content_items,
             success,
+            ..
         } = response;
         let body = content_items
             .into_iter()
@@ -217,6 +218,13 @@ async fn request_dynamic_tool(
         )
         .await;
     let response = rx_response.await.ok();
+    if let Some(response) = response.as_ref().filter(|response| response.end_turn) {
+        let mut active = session.active_turn.lock().await;
+        if let Some(at) = active.as_mut() {
+            let mut ts = at.turn_state.lock().await;
+            ts.turn_ending_calls.push(response.speak.clone());
+        }
+    }
 
     let item = match &response {
         Some(response) => DynamicToolCallItem {

@@ -60,6 +60,14 @@ pub struct DynamicToolCallRequest {
 pub struct DynamicToolResponse {
     pub content_items: Vec<DynamicToolCallOutputContentItem>,
     pub success: bool,
+    /// The call settles the turn: when every tool call of a model response
+    /// asks for this, no model request follows their outputs and the turn
+    /// ends (a host's quick action needs no reply about itself).
+    #[serde(default)]
+    pub end_turn: bool,
+    /// Said as the assistant's message when the turn ends this way.
+    #[serde(default)]
+    pub speak: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]

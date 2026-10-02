@@ -459,6 +459,9 @@ pub struct ConversationTextParams {
     pub role: ConversationTextRole,
 }
 
+// AstrBot: `Context` is the host's latest context for local_infra (who is
+// around, where): no turn of its own, it goes with the next input and a newer
+// one replaces it. Other backends take it as developer text.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -467,6 +470,7 @@ pub enum ConversationTextRole {
     User,
     Developer,
     Assistant,
+    Context,
 }
 
 #[derive(Debug, Clone, PartialEq)]

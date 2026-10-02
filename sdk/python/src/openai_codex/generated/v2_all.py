@@ -1150,6 +1150,7 @@ class ConversationTextRole(Enum):
     user = "user"
     developer = "developer"
     assistant = "assistant"
+    context = "context"
 
 
 class CreditsSnapshot(BaseModel):

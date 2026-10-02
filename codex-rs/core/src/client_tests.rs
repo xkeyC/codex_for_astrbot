@@ -2111,3 +2111,25 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
     assert_eq!(recorded["output_items"], serde_json::to_value(&delivered)?);
     Ok(())
 }
+
+#[test]
+fn omit_turn_metadata_leaves_the_header_out() {
+    let client = test_model_client(SessionSource::Cli);
+    let responses_metadata = test_responses_metadata_for_client(
+        &client,
+        Some("turn-1"),
+        format!("{}:0", client.state.thread_id),
+        /*parent_thread_id*/ None,
+        TestCodexResponsesRequestKind::Turn,
+    );
+    assert!(
+        client
+            .build_responses_compatibility_headers(&responses_metadata)
+            .contains_key(X_CODEX_TURN_METADATA_HEADER)
+    );
+    let client = client.with_omit_turn_metadata(/*omit*/ true);
+    let headers = client.build_responses_compatibility_headers(&responses_metadata);
+    assert!(!headers.contains_key(X_CODEX_TURN_METADATA_HEADER));
+    // The rest stays.
+    assert!(headers.contains_key("x-codex-window-id"));
+}

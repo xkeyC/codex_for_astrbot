@@ -12,6 +12,9 @@ Environment switches (build time):
 - ``CODEX_ASTRBOT_WITH_CODEX=1`` also build the ``codex`` executable, needed
   only for native command execution and memory consolidation.
 - ``CODEX_ASTRBOT_DEBUG=1``      build the helpers with the dev profile.
+- ``CODEX_ASTRBOT_TARGET_DIR``   where compiled crates are kept between
+  installs (default ``~/.cache/codex-astrbot/target``); ``CARGO_TARGET_DIR``
+  wins when set.
 """
 
 import hashlib
@@ -161,7 +164,30 @@ def _ensure_v8_archive(env: dict) -> None:
         env["RUSTY_V8_SRC_BINDING_PATH"] = str(wanted[binding])
 
 
+def _shared_build_env() -> None:
+    """Set what both builds (the helpers and maturin's extension module) use.
+
+    pip builds in a fresh temporary copy of the sources, so cargo's default
+    target directory would start empty on every install: keep it in the user's
+    cache instead, so dependencies compile once and a later install rebuilds
+    only what changed. The release overrides apply to both builds alike; with
+    different profiles every shared dependency would compile twice.
+    """
+    if not os.environ.get("CARGO_TARGET_DIR"):
+        os.environ["CARGO_TARGET_DIR"] = str(
+            Path(
+                os.environ.get("CODEX_ASTRBOT_TARGET_DIR")
+                or Path.home() / ".cache" / "codex-astrbot" / "target"
+            )
+        )
+    if not os.environ.get("CODEX_ASTRBOT_DEBUG"):
+        # The workspace release profile keeps debuginfo; drop it from the wheel.
+        os.environ.setdefault("CARGO_PROFILE_RELEASE_DEBUG", "0")
+        os.environ.setdefault("CARGO_PROFILE_RELEASE_STRIP", "symbols")
+
+
 def _build_helpers() -> None:
+    _shared_build_env()
     wanted = _helpers()
     if BIN_DIR.exists():
         shutil.rmtree(BIN_DIR)
@@ -169,10 +195,6 @@ def _build_helpers() -> None:
         return
     debug = bool(os.environ.get("CODEX_ASTRBOT_DEBUG"))
     env = dict(os.environ)
-    if not debug:
-        # The workspace release profile keeps debuginfo; drop it from the wheel.
-        env.setdefault("CARGO_PROFILE_RELEASE_DEBUG", "0")
-        env.setdefault("CARGO_PROFILE_RELEASE_STRIP", "symbols")
     if "codex-code-mode-host" in wanted:
         _ensure_v8_archive(env)
     for binary in wanted:
