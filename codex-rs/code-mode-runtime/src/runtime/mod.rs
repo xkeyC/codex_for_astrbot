@@ -12,7 +12,9 @@ use std::sync::Arc;
 use std::sync::mpsc as std_mpsc;
 use std::thread;
 
+use codex_code_mode_protocol::ATTACH_IMAGES_KEY;
 use codex_code_mode_protocol::CodeModeToolKind;
+use codex_code_mode_protocol::DEFAULT_IMAGE_DETAIL;
 use codex_code_mode_protocol::EnabledToolMetadata;
 use codex_code_mode_protocol::ExecuteRequest;
 use codex_code_mode_protocol::FunctionCallOutputContentItem;
@@ -235,7 +237,8 @@ fn run_runtime(
     {
         match command {
             RuntimeCommand::Terminate => break,
-            RuntimeCommand::ToolResponse { id, result } => {
+            RuntimeCommand::ToolResponse { id, mut result } => {
+                attach_result_images(&event_tx, &mut result);
                 if let Err(error_text) =
                     module_loader::resolve_tool_response(scope, &id, Ok(result))
                 {
@@ -278,6 +281,30 @@ fn run_runtime(
                 pending_promise = None;
             }
         }
+    }
+}
+
+/// Shows the images a nested tool result carries under [`ATTACH_IMAGES_KEY`]
+/// in the cell's output, and takes them out of the result the script gets.
+fn attach_result_images(event_tx: &mpsc::UnboundedSender<RuntimeEvent>, result: &mut JsonValue) {
+    let Some(images) = result
+        .as_object_mut()
+        .and_then(|object| object.remove(ATTACH_IMAGES_KEY))
+    else {
+        return;
+    };
+    for image_url in images
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(JsonValue::as_str)
+    {
+        let _ = event_tx.send(RuntimeEvent::ContentItem(
+            FunctionCallOutputContentItem::InputImage {
+                image_url: image_url.to_string(),
+                detail: Some(DEFAULT_IMAGE_DETAIL),
+            },
+        ));
     }
 }
 

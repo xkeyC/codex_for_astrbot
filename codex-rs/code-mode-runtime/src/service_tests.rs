@@ -1754,3 +1754,70 @@ async fn wait_reports_missing_cell_separately_from_runtime_results() {
         })
     );
 }
+
+/// Answers every nested tool call with one fixed result.
+struct FixedResultDelegate(JsonValue);
+
+impl CodeModeSessionDelegate for FixedResultDelegate {
+    fn invoke_tool<'a>(
+        &'a self,
+        _invocation: CodeModeNestedToolCall,
+        _cancellation_token: CancellationToken,
+    ) -> ToolInvocationFuture<'a> {
+        let result = self.0.clone();
+        Box::pin(async move { Ok(result) })
+    }
+
+    fn notify<'a>(
+        &'a self,
+        _call_id: String,
+        _cell_id: CellId,
+        _text: String,
+        _cancellation_token: CancellationToken,
+    ) -> NotificationFuture<'a> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn cell_closed(&self, _cell_id: &CellId) {}
+}
+
+#[tokio::test]
+async fn a_tool_result_attaching_images_shows_them_and_hides_them_from_the_script() {
+    let delegate = Arc::new(FixedResultDelegate(serde_json::json!({
+        "content": [{"type": "text", "text": "[image shown to you in this output]"}],
+        "isError": false,
+        "text": "",
+        crate::ATTACH_IMAGES_KEY: ["data:image/jpeg;base64,AAAA"],
+    })));
+    let service = InProcessCodeModeSession::new();
+    let request = ExecuteRequest {
+        enabled_tools: vec![echo_tool()],
+        source: r#"const r = await tools.echo({}); text(Object.keys(r).join(","));"#.to_string(),
+        ..execute_request("")
+    };
+    let response = service
+        .execute(request, delegate, /*preempt*/ None)
+        .await
+        .unwrap()
+        .initial_response()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response,
+        RuntimeResponse::Result {
+            code_mode_host_duration: None,
+            cell_id: cell_id("1"),
+            content_items: vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image_url: "data:image/jpeg;base64,AAAA".to_string(),
+                    detail: Some(crate::DEFAULT_IMAGE_DETAIL),
+                },
+                FunctionCallOutputContentItem::InputText {
+                    text: "content,isError,text".to_string(),
+                },
+            ],
+            error_text: None,
+        }
+    );
+}

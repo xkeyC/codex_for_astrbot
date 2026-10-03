@@ -7,14 +7,18 @@
 //!
 //! ```json
 //! {"content": [{"type": "text", "text": "..."},
-//!              {"type": "image", "data": "<base64>", "mimeType": "image/png"}],
+//!              {"type": "text", "text": "[image shown to you in this output]"}],
 //!  "isError": false,
 //!  "text": "joined text items"}
 //! ```
 //!
-//! so `image(result.content[i])` works and failures are visible. Model-facing
-//! output for direct calls is unchanged.
+//! so failures are visible. An inline image the tool returned goes to the
+//! model directly, as `image()` would show it (the code-mode runtime takes it
+//! from `ATTACH_IMAGES_KEY`), and the script gets a short note in its place:
+//! never the base64 text, which a script printing its result would otherwise
+//! dump into the output. Model-facing output for direct calls is unchanged.
 
+use codex_code_mode::ATTACH_IMAGES_KEY;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
@@ -48,6 +52,7 @@ pub(crate) fn structured_code_mode_result(
 ) -> JsonValue {
     let mut content = Vec::with_capacity(body.len());
     let mut texts = Vec::new();
+    let mut images = Vec::new();
     for item in body {
         match item {
             FunctionCallOutputContentItem::InputText { text } => {
@@ -58,8 +63,9 @@ pub(crate) fn structured_code_mode_result(
                 image: ImageReference::Inline { image_url },
                 ..
             } => match split_data_url(image_url) {
-                Some((mime, data)) => {
-                    content.push(json!({"type": "image", "data": data, "mimeType": mime}));
+                Some(_) => {
+                    images.push(image_url.clone());
+                    content.push(json!({"type": "text", "text": IMAGE_SHOWN_NOTE}));
                 }
                 None => content.push(json!({"type": "text", "text": image_url})),
             },
@@ -78,12 +84,19 @@ pub(crate) fn structured_code_mode_result(
             FunctionCallOutputContentItem::EncryptedContent { .. } => {}
         }
     }
-    json!({
+    let mut result = json!({
         "content": content,
         "isError": !success.unwrap_or(true),
         "text": texts.join("\n"),
-    })
+    });
+    if !images.is_empty() {
+        result[ATTACH_IMAGES_KEY] = json!(images);
+    }
+    result
 }
+
+/// What a script finds in place of an image the model was shown.
+const IMAGE_SHOWN_NOTE: &str = "[image shown to you in this output]";
 
 impl ToolOutput for StructuredDynamicToolOutput {
     fn log_output(&self) -> String {
@@ -133,11 +146,12 @@ mod tests {
             json!({
                 "content": [
                     {"type": "text", "text": "hello"},
-                    {"type": "image", "data": "AAAA", "mimeType": "image/png"},
+                    {"type": "text", "text": "[image shown to you in this output]"},
                     {"type": "text", "text": "world"},
                 ],
                 "isError": true,
                 "text": "hello\nworld",
+                "__codex_attach_images": ["data:image/png;base64,AAAA"],
             })
         );
     }
