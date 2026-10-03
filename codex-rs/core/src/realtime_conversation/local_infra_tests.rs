@@ -138,6 +138,39 @@ async fn the_silence_marker_says_nothing() {
 }
 
 #[tokio::test]
+async fn a_leading_aside_in_brackets_is_not_spoken() {
+    let mut h = harness(false);
+    h.delta("t1", "m1", "（他在跟").await;
+    h.delta(
+        "t1",
+        "m1",
+        "别人说话吗？）
+
+到了",
+    )
+    .await;
+    h.delta("t1", "m1", "，就在旁边（笑）。").await;
+    h.done(
+        "t1",
+        "m1",
+        "（他在跟别人说话吗？）
+
+到了，就在旁边（笑）。",
+    )
+    .await;
+    // A message all aside, and one not streamed.
+    h.delta("t1", "m2", "(walked too far,").await;
+    h.done("t1", "m2", "(walked too far, turning back)").await;
+    h.done("t1", "m3", "（想想）(再想想) 好的").await;
+    let texts: Vec<String> = h
+        .sent()
+        .iter()
+        .filter_map(|m| m["text"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(texts.concat(), "到了，就在旁边（笑）。好的");
+}
+
+#[tokio::test]
 async fn a_bare_tag_says_nothing() {
     let mut h = harness(false);
     h.delta("t1", "m1", "<").await;

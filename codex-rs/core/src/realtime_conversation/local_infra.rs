@@ -63,6 +63,31 @@ fn bare_tag(text: &str) -> bool {
         && !text.contains(char::is_whitespace)
 }
 
+/// The text after the asides it begins with: a model may start a message
+/// with its own thoughts in brackets ("（走过头了，转回去）到了"), never
+/// spoken. None while an aside is still open (its end not here yet).
+fn after_asides(text: &str) -> Option<&str> {
+    let mut rest = text.trim_start();
+    while rest.starts_with(['(', '（']) {
+        let mut depth = 0usize;
+        let end = rest.char_indices().find_map(|(at, c)| {
+            match c {
+                '(' | '（' => depth += 1,
+                ')' | '）' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(at + c.len_utf8());
+                    }
+                }
+                _ => {}
+            }
+            None
+        })?;
+        rest = rest[end..].trim_start();
+    }
+    Some(rest)
+}
+
 /// The text so far may still become a bare tag (held back until it is clear).
 fn may_be_bare_tag(text: &str) -> bool {
     text.starts_with('<')
@@ -1083,6 +1108,11 @@ impl LocalInfraConversation {
                     delta
                 } else {
                     item.held.push_str(&delta);
+                    let Some(spoken) = after_asides(&item.held) else {
+                        return Step::Continue; // an aside still open: never spoken
+                    };
+                    let aside = item.held.len() - spoken.len();
+                    item.held.drain(..aside);
                     let held = item.held.trim_start();
                     if held.starts_with(SILENCE_MARKER) {
                         item.silent = true;
@@ -1110,11 +1140,15 @@ impl LocalInfraConversation {
                 }
                 let rest = if item.sent {
                     item.word
-                } else if item.held.is_empty() {
-                    // Not streamed: the whole message at once.
-                    text
                 } else {
-                    item.held
+                    // Not streamed (the whole message at once), or held back
+                    // so far; an aside left open at the end is not spoken.
+                    let whole = if item.held.is_empty() {
+                        text
+                    } else {
+                        item.held
+                    };
+                    after_asides(&whole).unwrap_or_default().to_string()
                 };
                 let unsent = rest.trim_start();
                 // Silence, the start of the marker cut short, or a bare tag.
