@@ -269,7 +269,7 @@ async fn the_next_input_carries_context_and_what_was_heard_of_a_cut_reply() {
         .await;
     assert_eq!(
         h.conversation.input_for("小乐，停一下"),
-        "(Said meanwhile by others, not to you: 老王，吃饭去)\n\
+        "(Said before this by others, not to you: 老王，吃饭去)\n\
          (Your last reply was cut off; the listener heard only: \"从前有座山，\")\n\
          小乐，停一下"
     );
@@ -537,6 +537,30 @@ async fn words_a_turn_was_started_with_are_kept_until_it_ends() {
         })
         .await;
     assert_eq!(h.conversation.last_relays, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn voice_session_settings_go_to_the_server_as_they_are() {
+    let mut h = harness(/*group*/ true);
+    h.conversation.update_session(r#"{"wake": false}"#);
+    h.conversation.update_session("not json");
+    assert_eq!(
+        h.sent(),
+        vec![json!({"type": "session.update", "config": {"wake": false}})]
+    );
+}
+
+#[tokio::test]
+async fn an_answer_carries_the_last_nine_things_said_before_it() {
+    let mut h = harness(/*group*/ true);
+    for n in 0..12u64 {
+        h.conversation.keep_as_context(n, format!("s{n}"));
+    }
+    assert_eq!(
+        h.conversation.input_for("Jarvis?"),
+        "(Said before this by others, not to you: s3 / s4 / s5 / s6 / s7 / s8 / s9 / s10 / s11)
+Jarvis?"
+    );
 }
 
 #[tokio::test]

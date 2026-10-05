@@ -871,17 +871,24 @@ impl RealtimeConversationManager {
     pub(crate) async fn text_in(&self, mut params: ConversationTextParams) -> CodexResult<()> {
         let sender = {
             let guard = self.state.lock().await;
-            guard
-                .conversation
-                .as_ref()
-                .map(|state| (state.text_tx.clone(), state.session_kind))
+            guard.conversation.as_ref().map(|state| {
+                (
+                    state.text_tx.clone(),
+                    state.session_kind,
+                    state.local_infra.is_some(),
+                )
+            })
         };
 
-        let Some((sender, session_kind)) = sender else {
+        let Some((sender, session_kind, local_infra)) = sender else {
             return Err(CodexErr::InvalidRequest(
                 "conversation is not running".to_string(),
             ));
         };
+        // Voice server settings mean nothing to the other backends.
+        if params.role == ConversationTextRole::VoiceSession && !local_infra {
+            return Ok(());
+        }
 
         if params.role == ConversationTextRole::User {
             params.text =

@@ -111,8 +111,9 @@ const IDLE_BEFORE_COMPACT: Duration = Duration::from_secs(2);
 const TICK: Duration = Duration::from_millis(100);
 /// Put before an utterance that continues the one answered last.
 const CONTINUES_NOTE: &str = "(The speaker went on; their words below are the whole utterance, replacing the words you last answered:)";
-/// Context lines (talk that wanted no reply) kept for the next input.
-const MAX_CONTEXT_LINES: usize = 20;
+/// Context lines (talk that wanted no reply) kept for the next input: with
+/// the utterance that wants the reply, the last ten heard.
+const MAX_CONTEXT_LINES: usize = 9;
 const MAX_CONTEXT_CHARS: usize = 2_000;
 
 type InfraSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -631,6 +632,10 @@ impl LocalInfraConversation {
                     Err(_) => Step::Stop,
                 },
                 text = text_rx.recv() => match text {
+                    Ok(params) if params.role == ConversationTextRole::VoiceSession => {
+                        self.update_session(&params.text);
+                        Step::Continue
+                    }
                     Ok(params) if params.role == ConversationTextRole::Context => {
                         // An empty one clears it.
                         self.host_context =
@@ -696,6 +701,17 @@ impl LocalInfraConversation {
     /// Sends `event` to the server (in order with the audio).
     fn send(&self, event: serde_json::Value) {
         let _ = self.out.send(Message::Text(event.to_string().into()));
+    }
+
+    /// The host's new settings for the server's session (a JSON object,
+    /// e.g. `{"wake": false}`), passed on as they are.
+    fn update_session(&self, settings: &str) {
+        match serde_json::from_str::<serde_json::Value>(settings) {
+            Ok(config @ serde_json::Value::Object(_)) => {
+                self.send(json!({"type": "session.update", "config": config}));
+            }
+            _ => warn!("local-infra conversation: voice session settings are not a JSON object"),
+        }
     }
 
     /// An event of the server.
@@ -931,7 +947,7 @@ impl LocalInfraConversation {
         if !self.context.is_empty() {
             let lines: Vec<&str> = self.context.iter().map(|(_, line)| line.as_str()).collect();
             input.push_str(&format!(
-                "(Said meanwhile by others, not to you: {})\n",
+                "(Said before this by others, not to you: {})\n",
                 lines.join(" / ")
             ));
             self.context.clear();

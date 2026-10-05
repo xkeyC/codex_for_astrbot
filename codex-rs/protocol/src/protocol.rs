@@ -462,6 +462,9 @@ pub struct ConversationTextParams {
 // AstrBot: `Context` is the host's latest context for local_infra (who is
 // around, where): no turn of its own, it goes with the next input and a newer
 // one replaces it. Other backends take it as developer text.
+// `VoiceSession` is a JSON object of local_infra voice server session settings
+// changed mid-conversation (e.g. `{"wake": false}` when only one person is
+// left to talk with); other backends ignore it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -471,6 +474,7 @@ pub enum ConversationTextRole {
     Developer,
     Assistant,
     Context,
+    VoiceSession,
 }
 
 #[derive(Debug, Clone, PartialEq)]
