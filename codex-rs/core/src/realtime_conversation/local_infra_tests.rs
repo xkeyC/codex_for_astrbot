@@ -564,6 +564,25 @@ Jarvis?"
 }
 
 #[tokio::test]
+async fn context_already_given_is_not_given_again() {
+    let mut h = harness(/*group*/ true);
+    h.conversation.keep_as_context(1, "s1".to_string());
+    h.conversation.keep_as_context(2, "s2".to_string());
+    assert_eq!(
+        h.conversation.input_for("Jarvis?"),
+        "(Said before this by others, not to you: s1 / s2)
+Jarvis?"
+    );
+    h.conversation.keep_as_context(3, "s3".to_string());
+    assert_eq!(
+        h.conversation.input_for("Jarvis, again"),
+        "(Said before this by others, not to you: s3)
+Jarvis, again"
+    );
+    assert_eq!(h.conversation.input_for("Jarvis!"), "Jarvis!");
+}
+
+#[tokio::test]
 async fn the_hosts_latest_context_goes_with_the_next_input_once() {
     let mut h = harness(false);
     h.conversation.host_context = Some("(Room: Home; here: Alice)".to_string());
