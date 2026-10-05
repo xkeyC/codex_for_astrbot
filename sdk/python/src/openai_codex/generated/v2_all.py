@@ -1151,6 +1151,7 @@ class ConversationTextRole(Enum):
     developer = "developer"
     assistant = "assistant"
     context = "context"
+    voice_session = "voice_session"
 
 
 class CreditsSnapshot(BaseModel):

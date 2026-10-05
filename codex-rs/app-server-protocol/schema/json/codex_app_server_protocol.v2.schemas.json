@@ -6542,7 +6542,8 @@
         "user",
         "developer",
         "assistant",
-        "context"
+        "context",
+        "voice_session"
       ],
       "type": "string"
     },

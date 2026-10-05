@@ -1580,6 +1580,16 @@ pub(crate) async fn build_realtime_session_config(
             "initial realtime items must contain no more than {REALTIME_INITIAL_ITEMS_MAX_COUNT} items"
         )));
     }
+    if params
+        .initial_items
+        .iter()
+        .any(|item| item.role == ConversationTextRole::VoiceSession)
+    {
+        // Settings for the voice server, not conversation.
+        return Err(CodexErr::InvalidRequest(
+            "voice_session text is not an initial realtime item".to_string(),
+        ));
+    }
     let mut total_initial_item_tokens: usize = 0;
     for item in &params.initial_items {
         let item_tokens = approx_token_count(&item.text);
