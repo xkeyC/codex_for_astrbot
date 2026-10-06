@@ -42,6 +42,7 @@ use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::AuthProvider;
 use codex_api::ChatClient as ApiChatClient;
+use codex_api::FilesClient as ApiFilesClient;
 use codex_api::ChatOptions as ApiChatOptions;
 use codex_api::Compression;
 use codex_api::MemoriesClient as ApiMemoriesClient;
@@ -280,6 +281,10 @@ pub struct ModelClient {
     /// AstrBot: requests leave out `x-codex-turn-metadata`
     /// (`model_provider_options.<id>.omit_turn_metadata`).
     omit_turn_metadata: bool,
+    /// AstrBot: requests refer to their images by the file ids of uploads to
+    /// the provider's Files API, which keeps them this many seconds
+    /// (`model_provider_options.<id>.files_api`).
+    files_api_expires_seconds: Option<u64>,
 }
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
@@ -561,6 +566,7 @@ impl ModelClient {
             executed_tool_calls: None,
             chat_wire: None,
             omit_turn_metadata: false,
+            files_api_expires_seconds: None,
         }
     }
 
@@ -572,6 +578,13 @@ impl ModelClient {
     /// AstrBot: sends requests to `/chat/completions` (HTTP only).
     pub fn with_chat_wire(mut self, chat: Option<ApiChatOptions>) -> Self {
         self.chat_wire = chat.map(Arc::new);
+        self
+    }
+
+    /// AstrBot: uploads the requests' images to the provider's Files API
+    /// (kept there `expires_seconds`) and refers to them by file id.
+    pub fn with_files_api(mut self, expires_seconds: Option<u64>) -> Self {
+        self.files_api_expires_seconds = expires_seconds;
         self
     }
 
@@ -1797,6 +1810,24 @@ impl ModelClientSession {
                     recorder.invalidate_wire_inventory_loss(&request.input, &input);
                 }
                 request.input = input;
+            }
+            if let Some(expires_seconds) = self.client.files_api_expires_seconds {
+                let files = ApiFilesClient::new(
+                    self.client.build_api_transport(
+                        &client_setup.api_provider,
+                        "/files",
+                        client_setup.redirect_policy,
+                    )?,
+                    client_setup.api_provider.clone(),
+                    client_setup.api_auth.clone(),
+                );
+                crate::provider_files::reference_uploaded_images(
+                    &mut request.input,
+                    &client_setup.api_provider.base_url,
+                    expires_seconds,
+                    |mime, bytes| files.upload_image(mime, bytes, Some(expires_seconds)),
+                )
+                .await;
             }
             inference_trace_attempt.record_started(&request);
             let stream_result = match self.client.chat_wire.as_deref() {

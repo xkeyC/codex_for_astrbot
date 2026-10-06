@@ -1628,6 +1628,20 @@
         }
       ]
     },
+    "FilesApiOptions": {
+      "additionalProperties": false,
+      "description": "How images go to a provider's Files API.",
+      "properties": {
+        "expires_seconds": {
+          "default": 86400,
+          "description": "The provider deletes an upload this long after it (DeepSeek takes 3600 to 2592000); one is uploaded again an hour before that, should the conversation still use it.",
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "FilesystemPermissionToml": {
       "anyOf": [
         {
@@ -2837,6 +2851,15 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "files_api": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/FilesApiOptions"
+            }
+          ],
+          "default": null,
+          "description": "Upload the requests' inline images to the provider's Files API (`POST /files`, purpose `user_data`: DeepSeek's, OpenAI's shape) and reference them by file id. Codex sends the whole history with every request, so an image a tool returned is otherwise sent again with each one; uploaded, it is sent once and its reference stays the same (the provider's prefix cache still matches)."
         },
         "models": {
           "additionalProperties": {

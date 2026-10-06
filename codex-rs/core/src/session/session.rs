@@ -1753,6 +1753,7 @@ impl Session {
                 .with_executed_tool_calls(executed_tool_calls.clone())
                 .with_chat_wire(crate::provider_compaction::chat_wire_options(&config))
                 .with_omit_turn_metadata(crate::provider_compaction::omit_turn_metadata(&config))
+                .with_files_api(crate::provider_compaction::files_api_expires_seconds(&config))
                 .with_restored_history(matches!(
                     &initial_history,
                     InitialHistory::Resumed(_) | InitialHistory::Forked(_)

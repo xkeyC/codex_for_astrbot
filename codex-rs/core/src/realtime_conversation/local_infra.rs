@@ -292,6 +292,7 @@ pub(super) async fn handle_start(
         context: Vec::new(),
         cut_off: None,
         last_answered: None,
+        answer_heard_at: None,
         last_relays: Vec::new(),
         waiting: Vec::new(),
         host_context: None,
@@ -520,6 +521,9 @@ struct LocalInfraConversation {
     cut_off: Option<String>,
     /// The id of the last utterance answered.
     last_answered: Option<u64>,
+    /// When the utterance being answered came (its reply's first text is
+    /// logged against it, then it is cleared).
+    answer_heard_at: Option<Instant>,
     /// Appended words the running turn was started with: told again if it
     /// stops before it ends.
     last_relays: Vec<String>,
@@ -787,6 +791,7 @@ impl LocalInfraConversation {
                 if respond {
                     let continues = replaces.is_some() && replaces == self.last_answered;
                     self.last_answered = id;
+                    self.answer_heard_at = Some(Instant::now());
                     self.answer(&text, continues).await;
                 } else if self.group {
                     self.keep_as_context(id.unwrap_or(u64::MAX), text);
@@ -972,6 +977,9 @@ impl LocalInfraConversation {
     async fn start_turn(&mut self, sess: &Arc<Session>, input: String) -> Result<(), String> {
         self.idle_since = None;
         let turn_id = sess.route_local_voice_input(input).await?;
+        if let Some(heard) = self.answer_heard_at {
+            info!(after_ms = heard.elapsed().as_millis() as u64, turn = %turn_id, "local-infra voice turn started");
+        }
         self.turn = Some(turn_id);
         Ok(())
     }
@@ -1199,7 +1207,11 @@ impl LocalInfraConversation {
         let Some(turn) = self.turn.clone().filter(|_| !text.is_empty()) else {
             return;
         };
-        self.open_responses.insert(item_id.to_string(), turn);
+        self.open_responses.insert(item_id.to_string(), turn.clone());
+        if let Some(heard) = self.answer_heard_at.take() {
+            // The model's first words of the reply (the turn's LLM time).
+            info!(after_ms = heard.elapsed().as_millis() as u64, turn = %turn, "local-infra voice reply's first text");
+        }
         self.send(json!({"type": "response.delta", "response_id": item_id, "text": text}));
     }
 }

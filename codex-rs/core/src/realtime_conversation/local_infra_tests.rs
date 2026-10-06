@@ -38,6 +38,7 @@ fn harness(group: bool) -> Harness {
             waiting: Vec::new(),
             host_context: None,
             waiting_since: None,
+            answer_heard_at: None,
             relay_retry_at: None,
             idle_since: None,
             last_prompt: None,

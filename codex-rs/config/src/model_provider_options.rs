@@ -12,6 +12,7 @@
 //! extra_body = { thinking = { type = "disabled" } }
 //! extra_body_remove = ["reasoning_effort"]
 //! omit_turn_metadata = true
+//! files_api = { expires_seconds = 86400 }
 //!
 //! [model_provider_options.deepseek.models."deepseek-v4.1-flash"]
 //! context_window = 128000
@@ -53,6 +54,14 @@ pub struct ModelProviderOptions {
     /// thinks whatever the reasoning effort.
     #[serde(default)]
     pub omit_turn_metadata: bool,
+    /// Upload the requests' inline images to the provider's Files API
+    /// (`POST /files`, purpose `user_data`: DeepSeek's, OpenAI's shape) and
+    /// reference them by file id. Codex sends the whole history with every
+    /// request, so an image a tool returned is otherwise sent again with
+    /// each one; uploaded, it is sent once and its reference stays the same
+    /// (the provider's prefix cache still matches).
+    #[serde(default)]
+    pub files_api: Option<FilesApiOptions>,
     /// Model metadata by model slug: any fields of Codex's model info (for
     /// example `context_window`, `auto_compact_token_limit`,
     /// `supported_reasoning_levels` as `[{effort, description}]`,
@@ -62,6 +71,29 @@ pub struct ModelProviderOptions {
     #[serde(default)]
     #[schemars(with = "BTreeMap<String, BTreeMap<String, serde_json::Value>>")]
     pub models: BTreeMap<String, serde_json::Value>,
+}
+
+/// How images go to a provider's Files API.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct FilesApiOptions {
+    /// The provider deletes an upload this long after it (DeepSeek takes
+    /// 3600 to 2592000); one is uploaded again an hour before that, should
+    /// the conversation still use it.
+    #[serde(default = "default_files_expires_seconds")]
+    pub expires_seconds: u64,
+}
+
+impl Default for FilesApiOptions {
+    fn default() -> Self {
+        Self {
+            expires_seconds: default_files_expires_seconds(),
+        }
+    }
+}
+
+fn default_files_expires_seconds() -> u64 {
+    86_400
 }
 
 /// The API a provider's requests go to.

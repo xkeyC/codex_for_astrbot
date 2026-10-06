@@ -617,17 +617,12 @@ fn system_content(content: &[ContentItem]) -> Value {
     }
 }
 
-/// Text, or text and images as content parts.
+/// Text, or text and images as content parts (an uploaded image as a
+/// `file` part, DeepSeek's form).
 fn message_content(content: &[ContentItem]) -> Value {
-    let has_image = content.iter().any(|item| {
-        matches!(
-            item,
-            ContentItem::InputImage {
-                image: ImageReference::Inline { .. },
-                ..
-            }
-        )
-    });
+    let has_image = content
+        .iter()
+        .any(|item| matches!(item, ContentItem::InputImage { .. }));
     if !has_image {
         return Value::String(message_text(content));
     }
@@ -641,6 +636,10 @@ fn message_content(content: &[ContentItem]) -> Value {
                 image: ImageReference::Inline { image_url },
                 ..
             } => Some(json!({"type": "image_url", "image_url": {"url": image_url}})),
+            ContentItem::InputImage {
+                image: ImageReference::File { file_id },
+                ..
+            } => Some(json!({"type": "file", "file_id": file_id})),
             _ => None,
         })
         .collect();

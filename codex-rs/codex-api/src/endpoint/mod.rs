@@ -1,4 +1,5 @@
 pub(crate) mod chat;
+pub(crate) mod files;
 pub(crate) mod images;
 pub(crate) mod memories;
 pub(crate) mod models;
@@ -11,6 +12,8 @@ mod session;
 
 pub use chat::ChatClient;
 pub use chat::ChatOptions;
+pub use files::FilesClient;
+pub use files::decode_image_data_url;
 pub use images::ImageRequestError;
 pub use images::ImagesClient;
 pub use memories::MemoriesClient;

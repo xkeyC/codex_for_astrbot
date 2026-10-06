@@ -54,6 +54,7 @@ mod auth_recovery_policy;
 mod auto_review;
 mod catalog_permission_messages;
 mod chat_wire;
+mod files_api;
 mod cli_stream;
 mod client;
 mod client_websockets;

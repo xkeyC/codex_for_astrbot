@@ -38,6 +38,16 @@ pub fn omit_turn_metadata(config: &Config) -> bool {
         .is_some_and(|options| options.omit_turn_metadata)
 }
 
+/// How long the configured provider keeps the images uploaded to its Files
+/// API, when its requests' images go there (`files_api`).
+pub fn files_api_expires_seconds(config: &Config) -> Option<u64> {
+    config
+        .model_provider_options
+        .get(&config.model_provider_id)?
+        .files_api
+        .map(|files| files.expires_seconds)
+}
+
 /// How requests to the configured provider go to `/chat/completions`, when
 /// its wire is chat.
 pub fn chat_wire_options(config: &Config) -> Option<ChatOptions> {

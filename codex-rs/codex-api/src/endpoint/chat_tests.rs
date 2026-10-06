@@ -133,6 +133,40 @@ The call started.
 }
 
 #[test]
+fn user_images_go_inline_or_by_file_id() {
+    let image = |image: ImageReference| ContentItem::InputImage {
+        image,
+        detail: None,
+    };
+    let input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![
+            ContentItem::InputText {
+                text: "Which is newer?".to_string(),
+            },
+            image(ImageReference::Inline {
+                image_url: "data:image/png;base64,AAEC".to_string(),
+            }),
+            image(ImageReference::File {
+                file_id: "file-api-1".to_string(),
+            }),
+        ],
+        phase: None,
+        internal_chat_message_metadata_passthrough: None,
+    }];
+    let (body, _) = chat_request(&request(input, tools()), &ChatOptions::default());
+    assert_eq!(
+        body["messages"][1],
+        json!({"role": "user", "content": [
+            {"type": "text", "text": "Which is newer?"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAEC"}},
+            {"type": "file", "file_id": "file-api-1"}
+        ]})
+    );
+}
+
+#[test]
 fn tools_are_chat_functions() {
     let (body, names) = chat_request(&request(Vec::new(), tools()), &ChatOptions::default());
     let tools = body["tools"].as_array().unwrap();
