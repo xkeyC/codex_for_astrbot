@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 struct Harness {
     conversation: LocalInfraConversation,
     out: tokio::sync::mpsc::UnboundedReceiver<Message>,
-    _events: Receiver<RealtimeEvent>,
+    events: Receiver<RealtimeEvent>,
 }
 
 fn harness(group: bool) -> Harness {
@@ -45,7 +45,7 @@ fn harness(group: bool) -> Harness {
             compact_floor: CompactFloor::None,
         },
         out: out_rx,
-        _events: events_rx,
+        events: events_rx,
     }
 }
 
@@ -285,6 +285,54 @@ async fn one_to_one_talk_that_wants_no_reply_is_dropped() {
         .server_event(r#"{"type":"input.transcript","id":1,"text":"嗯","respond":false}"#)
         .await;
     assert!(h.conversation.context.is_empty());
+}
+
+#[tokio::test]
+async fn the_host_hears_who_spoke_and_whether_the_bot_was_called() {
+    let mut h = harness(/*group*/ true);
+    h.conversation
+        .server_event(r#"{"type":"input.wake","word":"小乐","score":0.75}"#)
+        .await;
+    h.conversation
+        .server_event(
+            r#"{"type":"input.transcript","id":1,"text":"xkeyC: 小乐，几点了","respond":true,"called":true,"speaker":"xkeyC"}"#,
+        )
+        .await;
+    h.conversation
+        .server_event(r#"{"type":"input.transcript","id":2,"text":"嗯"}"#)
+        .await;
+    let events: Vec<RealtimeEvent> = std::iter::from_fn(|| h.events.try_recv().ok())
+        .filter(|event| {
+            matches!(
+                event,
+                RealtimeEvent::InputWake(_) | RealtimeEvent::InputTranscriptDone(_)
+            )
+        })
+        .collect();
+    assert_eq!(
+        events,
+        vec![
+            RealtimeEvent::InputWake(RealtimeInputWake {
+                word: "小乐".to_string(),
+                score: 0.75,
+            }),
+            RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
+                text: "xkeyC: 小乐，几点了".to_string(),
+                respond: Some(true),
+                called: Some(true),
+                speaker: Some("xkeyC".to_string()),
+            }),
+            // What the server leaves out stays out.
+            RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
+                text: "嗯".to_string(),
+                ..Default::default()
+            }),
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(&events[2]).unwrap(),
+        json!({"InputTranscriptDone": {"text": "嗯"}})
+    );
 }
 
 #[tokio::test]

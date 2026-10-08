@@ -62,7 +62,10 @@ pub(super) fn parse_transcript_done_event(
         .get(field)
         .and_then(Value::as_str)
         .map(str::to_string)
-        .map(|text| RealtimeTranscriptDone { text })
+        .map(|text| RealtimeTranscriptDone {
+            text,
+            ..Default::default()
+        })
 }
 
 pub(super) fn parse_error_event(parsed: &Value) -> Option<RealtimeEvent> {

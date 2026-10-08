@@ -688,6 +688,7 @@ impl RealtimeWebsocketEvents {
                 active_transcript.new_output_entry = true;
             }
             RealtimeEvent::SessionUpdated { .. }
+            | RealtimeEvent::InputWake(_)
             | RealtimeEvent::AudioOut(_)
             | RealtimeEvent::ResponseCancelled(_)
             | RealtimeEvent::ResponseDone(_)
@@ -1486,6 +1487,7 @@ mod tests {
         };
         let mut done = RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
             text: "hello world".to_string(),
+            ..Default::default()
         });
         second_events.update_active_transcript(&mut done).await;
 
@@ -1715,6 +1717,7 @@ mod tests {
             parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
                 text: "hello world".to_string(),
+                ..Default::default()
             }))
         );
     }
@@ -1731,6 +1734,7 @@ mod tests {
             parse_realtime_event(payload.as_str(), RealtimeEventParser::V1),
             Some(RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
                 text: "hello realtime".to_string(),
+                ..Default::default()
             }))
         );
     }
@@ -1784,6 +1788,7 @@ mod tests {
             Some(RealtimeEvent::OutputTranscriptDone(
                 RealtimeTranscriptDone {
                     text: "hi there".to_string(),
+                    ..Default::default()
                 }
             ))
         );
@@ -1894,6 +1899,7 @@ mod tests {
             Some(RealtimeEvent::OutputTranscriptDone(
                 RealtimeTranscriptDone {
                     text: "hello there".to_string(),
+                    ..Default::default()
                 }
             ))
         );
@@ -1912,6 +1918,7 @@ mod tests {
             Some(RealtimeEvent::OutputTranscriptDone(
                 RealtimeTranscriptDone {
                     text: "hello there".to_string(),
+                    ..Default::default()
                 }
             ))
         );

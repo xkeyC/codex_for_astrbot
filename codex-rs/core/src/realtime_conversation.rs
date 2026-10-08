@@ -856,6 +856,12 @@ impl RealtimeConversationManager {
             ));
         };
 
+        // A full queue (AUDIO_IN_QUEUE_CAPACITY frames, ~5 s of 20 ms frames:
+        // only a stall that long) drops the frame and still answers Ok. A host
+        // that counts the samples it sent as the server's input clock (AstrBot's
+        // speaker labels for local_infra, whose VAD counts what it received)
+        // then runs ahead of the server by what was dropped; this warning is
+        // the only sign of it.
         match sender.try_send(frame) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => {
@@ -2686,6 +2692,7 @@ async fn handle_realtime_server_event(
         }
         RealtimeEvent::InputTranscriptDelta(_)
         | RealtimeEvent::InputTranscriptDone(_)
+        | RealtimeEvent::InputWake(_)
         | RealtimeEvent::OutputTranscriptDelta(_)
         | RealtimeEvent::OutputTranscriptDone(_)
         | RealtimeEvent::ConversationItemAdded(_)

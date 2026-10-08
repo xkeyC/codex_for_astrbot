@@ -62,7 +62,10 @@ fn parse_turn_done(parsed: &Value) -> Option<RealtimeEvent> {
         .get("transcript")
         .and_then(Value::as_str)
         .map(str::to_string)?;
-    let done = RealtimeTranscriptDone { text };
+    let done = RealtimeTranscriptDone {
+        text,
+        ..Default::default()
+    };
     match role {
         "user" => Some(RealtimeEvent::InputTranscriptDone(done)),
         "assistant" => Some(RealtimeEvent::OutputTranscriptDone(done)),

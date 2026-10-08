@@ -34,6 +34,7 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
+use codex_protocol::protocol::RealtimeInputWake;
 use codex_protocol::protocol::RealtimeResponseCancelled;
 use codex_protocol::protocol::RealtimeResponseDone;
 use codex_protocol::protocol::RealtimeTranscriptDelta;
@@ -769,18 +770,23 @@ impl LocalInfraConversation {
                     .await;
                     return Step::Continue;
                 }
+                // What the server says of it goes to the host as it is.
+                let flag = |key: &str| event.get(key).and_then(serde_json::Value::as_bool);
                 self.emit(RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
                     text: text.clone(),
+                    respond: flag("respond"),
+                    called: flag("called"),
+                    speaker: event
+                        .get("speaker")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string),
                 }))
                 .await;
                 if text.is_empty() {
                     return Step::Continue;
                 }
                 self.heard_since_cut = true;
-                let respond = event
-                    .get("respond")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true);
+                let respond = flag("respond").unwrap_or(true);
                 let id = event.get("id").and_then(serde_json::Value::as_u64);
                 let replaces = event.get("replaces").and_then(serde_json::Value::as_u64);
                 // What it continues was said already: it goes from the context.
@@ -796,6 +802,16 @@ impl LocalInfraConversation {
                 } else if self.group {
                     self.keep_as_context(id.unwrap_or(u64::MAX), text);
                 }
+            }
+            "input.wake" => {
+                self.emit(RealtimeEvent::InputWake(RealtimeInputWake {
+                    word: field("word").to_string(),
+                    score: event
+                        .get("score")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0) as f32,
+                }))
+                .await;
             }
             "state" => {
                 let flag = |key: &str| {
@@ -844,7 +860,10 @@ impl LocalInfraConversation {
                     self.heard_since_cut = false;
                 }
                 self.emit(RealtimeEvent::OutputTranscriptDone(
-                    RealtimeTranscriptDone { text: spoken },
+                    RealtimeTranscriptDone {
+                        text: spoken,
+                        ..Default::default()
+                    },
                 ))
                 .await;
                 self.emit(if cut {

@@ -55,9 +55,11 @@ async fn interleaved_transcripts_reconcile_across_reconnect_in_either_completion
         let reconnected = events(state);
         let user = RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
             text: "What can you do?".into(),
+            ..Default::default()
         });
         let assistant = RealtimeEvent::OutputTranscriptDone(RealtimeTranscriptDone {
             text: "A bunch of stuff, including coding.".into(),
+            ..Default::default()
         });
         let finals = if assistant_finishes_first {
             [assistant, user]
@@ -99,6 +101,7 @@ async fn completed_utterances_keep_repeated_speech_and_final_only_turns_distinct
             }
             let done = RealtimeTranscriptDone {
                 text: "Again.".into(),
+                ..Default::default()
             };
             observe(
                 &events,

@@ -596,7 +596,8 @@ async fn realtime_ws_e2e_realtime_v2_parser_emits_handoff_requested() {
     assert_eq!(
         event,
         RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
-            text: "delegate now".to_string()
+            text: "delegate now".to_string(),
+            ..Default::default()
         })
     );
 

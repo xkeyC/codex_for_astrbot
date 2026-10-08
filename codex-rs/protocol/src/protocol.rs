@@ -372,9 +372,21 @@ pub struct RealtimeTranscriptDelta {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeTranscriptDone {
     pub text: String,
+    /// AstrBot: what local_infra's voice server says of a heard utterance:
+    /// whether it wants a reply, whether it called the bot by a wake word,
+    /// and who said it (a guess). Left out when the server says nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub respond: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub called: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub speaker: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -417,7 +429,16 @@ pub struct RealtimeResponseDone {
     pub response_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+/// AstrBot: local_infra's voice server heard a wake word (as soon as it is:
+/// its utterance may still go on).
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct RealtimeInputWake {
+    pub word: String,
+    pub score: f32,
+}
+
+// AstrBot: not `Eq`, for `InputWake`'s score.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
         realtime_session_id: String,
@@ -426,6 +447,7 @@ pub enum RealtimeEvent {
     InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
     InputTranscriptDelta(RealtimeTranscriptDelta),
     InputTranscriptDone(RealtimeTranscriptDone),
+    InputWake(RealtimeInputWake),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
     OutputTranscriptDone(RealtimeTranscriptDone),
     AudioOut(RealtimeAudioFrame),

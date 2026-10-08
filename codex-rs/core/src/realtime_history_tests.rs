@@ -329,6 +329,7 @@ fn streams_stable_segment_items_and_ignores_upstream_transcript_revisions() {
         &mut state,
         RealtimeEvent::OutputTranscriptDone(RealtimeTranscriptDone {
             text: "a substantially different upstream revision".to_string(),
+            ..Default::default()
         }),
     );
     assert_eq!(
@@ -352,6 +353,7 @@ fn emits_the_complete_item_lifecycle_when_only_a_final_transcript_arrives() {
         &mut state,
         RealtimeEvent::OutputTranscriptDone(RealtimeTranscriptDone {
             text: "final transcript".to_string(),
+            ..Default::default()
         }),
     );
     let stream = effects.transcript_stream.expect("final transcript stream");
@@ -433,6 +435,7 @@ fn does_not_replay_a_final_transcript_after_a_promotion_split() {
         &mut state,
         RealtimeEvent::OutputTranscriptDone(RealtimeTranscriptDone {
             text: "Already spoken, with an upstream revision".to_string(),
+            ..Default::default()
         }),
     );
     assert!(done.items.is_empty());
@@ -661,9 +664,11 @@ fn typed_input_seals_both_roles_but_realtime_delegation_does_not(
     for event in [
         RealtimeEvent::OutputTranscriptDone(RealtimeTranscriptDone {
             text: "assistant revised".to_string(),
+            ..Default::default()
         }),
         RealtimeEvent::InputTranscriptDone(RealtimeTranscriptDone {
             text: "user revised".to_string(),
+            ..Default::default()
         }),
     ] {
         assert!(observe_realtime(&mut state, event).items.is_empty());
