@@ -1,6 +1,7 @@
 use super::*;
 use crate::context::APPROVED_COMMAND_PREFIX_SAVED_MESSAGE_PREFIX;
 use crate::context::UserInstructions;
+use crate::context::world_state::SectionTransition;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSection;
 use base64::Engine;
@@ -112,6 +113,13 @@ fn inter_agent_assistant_msg(text: &str) -> ResponseItem {
     }
 }
 
+fn root_history() -> ContextManager {
+    ContextManager::for_session(
+        &SessionSource::Cli,
+        &ManagedFeatures::from(codex_features::Features::with_defaults()),
+    )
+}
+
 fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
     let mut h = ContextManager::new();
     // Use a generous but fixed token budget; tests only rely on truncation
@@ -122,6 +130,56 @@ fn create_history_with_items(items: Vec<ResponseItem>) -> ContextManager {
 
 fn raw_items(history: &ContextManager) -> Vec<ResponseItem> {
     history.raw_items().cloned().collect()
+}
+
+#[test]
+fn delivered_assistant_context_invalidates_reviews_without_changing_authorization() {
+    let revisions = |history: &ContextManager| {
+        let snapshot = history.conversation_history_snapshot();
+        (
+            snapshot.guardian_review_context_revision(),
+            snapshot.user_message_revision(),
+        )
+    };
+    let mut history = create_history_with_items(vec![user_msg("Yes.")]);
+    let before_delivery = history.conversation_history_snapshot();
+    let authorization = before_delivery.user_message_revision();
+    let event = RetainedContextEvent::DeliveredAssistantMessage {
+        message: codex_history::RetainedUserMessage {
+            origin: codex_history::UserInputOrigin::User,
+            turn_id: "turn".to_owned(),
+            message_id: Some("send".to_owned()),
+            text: "Deploy publicly?".to_owned(),
+            complete: true,
+            phase: None,
+        },
+        acceptance_order: history.reserve_input_order(),
+    };
+    assert!(history.record_retained_context(&event));
+    let delivered_revision = revisions(&history).0;
+    assert_ne!(
+        before_delivery.guardian_review_context_revision(),
+        delivered_revision
+    );
+    assert!(!history.record_retained_context(&event));
+    assert_eq!(revisions(&history), (delivered_revision, authorization));
+    let mut resumed = ContextManager::new();
+    resumed.restore_retained_context(Some(history.retained_context()));
+    assert_ne!(revisions(&resumed).0, delivered_revision);
+
+    let answer = RetainedContextEvent::VerifiedAnswer {
+        answer: codex_history::VerifiedAnswer {
+            turn_id: "turn".to_owned(),
+            call_id: "ask".to_owned(),
+            questions: vec![codex_history::VerifiedQuestionAnswer {
+                question: "Run tests?".to_owned(),
+                answer: "Yes.".to_owned(),
+            }],
+        },
+        acceptance_order: Some(history.reserve_input_order()),
+    };
+    assert!(history.record_retained_context(&answer));
+    assert_eq!(revisions(&history), (delivered_revision, authorization + 1));
 }
 
 #[test]
@@ -170,7 +228,7 @@ fn conversation_history_snapshot_binds_review_mode_and_hash_to_the_latest_item(
             ..Default::default()
         }),
     };
-    let mut history = ContextManager::for_session(&codex_protocol::protocol::SessionSource::Cli);
+    let mut history = root_history();
     history.replace_annotated(vec![checkpoint.clone()]);
     history.restore_review_context(
         /*retained_context*/ None,
@@ -254,7 +312,7 @@ fn conversation_history_snapshot_binds_review_mode_and_hash_to_the_latest_item(
     }]
 }); "retained assistant context")]
 fn checkpoint_retained_evidence_survives_legacy_review(saved_context: serde_json::Value) {
-    let mut history = ContextManager::for_session(&codex_protocol::protocol::SessionSource::Cli);
+    let mut history = root_history();
     history.replace_annotated(vec![ResponseItemEnvelope::new(
         serde_json::from_value(serde_json::json!({
             "type": "compaction", "id": "unknown", "encrypted_content": "opaque checkpoint"
@@ -266,9 +324,9 @@ fn checkpoint_retained_evidence_survives_legacy_review(saved_context: serde_json
     for (checkpoint, expected_mode) in [
         (None, GuardianContextMode::ThreadOwned),
         (
-            Some(GuardianHistoryCheckpoint(vec![assistant_msg(
-                "Original transcript",
-            )])),
+            Some(GuardianHistoryCheckpoint(vec![
+                assistant_msg("Original transcript").into(),
+            ])),
             GuardianContextMode::Legacy,
         ),
     ] {
@@ -290,7 +348,7 @@ fn checkpoint_retained_evidence_survives_legacy_review(saved_context: serde_json
 
 #[test]
 fn checkpoint_replayed_messages_keep_legacy_review_when_the_source_survives() {
-    let mut history = ContextManager::for_session(&codex_protocol::protocol::SessionSource::Cli);
+    let mut history = root_history();
     history.replace_annotated(vec![ResponseItemEnvelope::new(
         serde_json::from_value(serde_json::json!({
             "type": "compaction", "id": "unknown", "encrypted_content": "opaque checkpoint"
@@ -336,7 +394,7 @@ fn plaintext_checkpoint_without_backup_preserves_root_instructions(
     .expect("old instruction without ordering metadata");
     let saved_context: Option<RetainedContext> =
         saved_context.map(|value| serde_json::from_value(value).expect("legacy retained context"));
-    let mut history = ContextManager::for_session(&SessionSource::Cli);
+    let mut history = root_history();
     history.replace(vec![instruction]);
     history.restore_review_context(
         saved_context.as_ref(),
@@ -357,7 +415,7 @@ fn plaintext_checkpoint_without_backup_preserves_root_instructions(
         }),
     }];
     history.replace_compacted(compacted.clone(), Some("reviewer"));
-    let mut resumed = ContextManager::for_session(&SessionSource::Cli);
+    let mut resumed = root_history();
     resumed.replace_annotated(compacted.clone());
     resumed.restore_review_context(
         Some(history.retained_context()),
@@ -414,7 +472,7 @@ fn legacy_checkpoint_rollback_keeps_answers_before_a_same_turn_steer() {
         .verified_answers()
         .cloned()
         .collect::<Vec<_>>();
-    let mut history = ContextManager::for_session(&SessionSource::Cli);
+    let mut history = root_history();
     history.replace_annotated(checkpoint.replacement_history.take().unwrap());
     history.restore_review_context(
         checkpoint.retained_context.as_ref(),
@@ -467,10 +525,6 @@ impl WorldStateSection for TestWorldStateSection {
     const ID: &'static str = "test";
     type Snapshot = bool;
 
-    fn snapshot(&self) -> Self::Snapshot {
-        true
-    }
-
     fn matches_legacy_fragment(role: &str, text: &str) -> bool {
         role == "user" && UserInstructions::matches_text(text)
     }
@@ -478,18 +532,24 @@ impl WorldStateSection for TestWorldStateSection {
     fn render_diff(
         &self,
         previous: crate::context::world_state::PreviousSectionState<'_, Self::Snapshot>,
-    ) -> Option<Box<dyn crate::context::ContextualUserFragment>> {
+    ) -> SectionTransition<Self::Snapshot> {
+        let current = true;
         let text = match previous {
-            crate::context::world_state::PreviousSectionState::Known(true) => return None,
+            crate::context::world_state::PreviousSectionState::Known(true) => {
+                return (None, None);
+            }
             crate::context::world_state::PreviousSectionState::Unknown => "unknown",
             crate::context::world_state::PreviousSectionState::Absent
             | crate::context::world_state::PreviousSectionState::Known(false) => "test",
         };
-        Some(Box::new(UserInstructions {
-            directory: None,
-            text: text.to_string(),
-        })
-            as Box<dyn crate::context::ContextualUserFragment>)
+        (
+            Some(current),
+            Some(Box::new(UserInstructions {
+                directory: None,
+                text: text.to_string(),
+            })
+                as Box<dyn crate::context::ContextualUserFragment>),
+        )
     }
 }
 
@@ -518,6 +578,45 @@ fn world_state_baseline_deduplicates_until_history_is_replaced() {
 }
 
 #[test]
+fn world_state_transitions_persist_changed_state_and_skip_unchanged_state() {
+    use codex_extension_api::PreviousWorldStateSection;
+    use codex_extension_api::RenderedWorldStateFragment;
+    use codex_extension_api::WorldStateSectionContribution;
+
+    let world_state = |value: &'static str| {
+        let mut state = WorldState::default();
+        state.add_extension_section(WorldStateSectionContribution::new("test", move |previous| {
+            let snapshot = serde_json::json!(value);
+            if matches!(previous, PreviousWorldStateSection::Known(previous) if previous == &snapshot) {
+                return (None, None);
+            }
+            (Some(snapshot), Some(RenderedWorldStateFragment::new(
+                "developer", ("<test>", "</test>"), value,
+            )))
+        }));
+        state
+    };
+    let mut history = ContextManager::new();
+    let (_, full) = history.update_world_state(&world_state("before"));
+    let full = full.expect("full checkpoint");
+    assert!(full.full);
+
+    let (snapshot, fragments, patch) = history.render_step_world_state(&world_state("after"));
+    assert_eq!(fragments[0].body(), "after");
+    let patch = patch.expect("changed snapshot must be persisted");
+    assert!(!patch.full);
+    let mut replayed = WorldStateSnapshot::from(&full.state);
+    replayed.apply_merge_patch(&patch.state);
+    assert_eq!(snapshot, replayed);
+    history.set_world_state_baseline(snapshot.clone());
+
+    let (unchanged, fragments, patch) = history.render_step_world_state(&world_state("after"));
+    assert_eq!(unchanged, snapshot);
+    assert!(fragments.is_empty());
+    assert_eq!(patch, None);
+}
+
+#[test]
 fn world_state_reconciles_matching_legacy_history_once() {
     let item = crate::context::ContextualUserFragment::into(UserInstructions {
         directory: None,
@@ -527,7 +626,8 @@ fn world_state_reconciles_matching_legacy_history_once() {
     let mut world_state = WorldState::default();
     world_state.add_section(TestWorldStateSection);
 
-    let (fragments, rollout_item) = history.update_world_state(&world_state);
+    let (snapshot, fragments, rollout_item) = history.render_step_world_state(&world_state);
+    history.set_world_state_baseline(snapshot);
     assert_eq!(
         vec!["\n\n<INSTRUCTIONS>\nunknown\n"],
         fragments
@@ -1526,7 +1626,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
 
     // A steered message shares its source turn, but rollback must keep the earlier
     // instruction and answer as complete evidence, including after the next compaction.
-    let mut history = ContextManager::for_session(&codex_protocol::protocol::SessionSource::Exec);
+    let mut history = root_history();
     let mut expected = None;
     for (id, text) in [
         ("restriction", "Never publish publicly."),
@@ -1576,7 +1676,7 @@ fn drop_last_n_user_turns_preserves_prefix() {
 
 #[test]
 fn rollback_removes_assistant_sources_recorded_ahead_of_queued_input() {
-    let mut history = ContextManager::for_session(&codex_protocol::protocol::SessionSource::Exec);
+    let mut history = root_history();
     let original = user_msg("Staging only.");
     let mut items = [
         (original.clone(), 0),

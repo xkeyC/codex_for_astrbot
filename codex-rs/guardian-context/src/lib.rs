@@ -31,6 +31,7 @@ pub use section::ContextSection;
 pub use entry::ConversationTranscriptEntry;
 pub use entry::ConversationTranscriptEntryKind;
 pub use entry::RetainedTranscriptSource;
+pub use entry::TranscriptContent;
 pub use history::TranscriptHistory;
 pub use transcript::ConversationTranscriptConfig;
 pub use transcript::ConversationTranscriptOptions;
@@ -94,6 +95,7 @@ pub use trusted_skills::TrustedSkills;
 pub use trusted_tool::TrustedTool;
 mod reviews;
 pub use reviews::MAX_PREVIOUS_REVIEWS;
+pub use reviews::PreviousReview;
 pub use reviews::PreviousReviews;
 pub use reviews::RenderedReviewEvidence;
 pub use reviews::ReviewEvidence;
@@ -185,6 +187,16 @@ pub trait SectionHistory: Send + Sync {
     /// Bounded host-owned facts from the same snapshot as the current items.
     fn retained_context(&self) -> Option<&codex_history::RetainedContext> {
         None
+    }
+
+    /// Renders one bounded retained assistant message through the host's
+    /// contextual-fragment boundary. Hosts with no fragment layer use the
+    /// shared role-labeled rendering while preserving the same size limit.
+    fn render_retained_assistant(
+        &self,
+        message: &codex_history::RetainedUserMessage,
+    ) -> Option<GuardianRootMessage> {
+        retained_assistant_message(message)
     }
 }
 

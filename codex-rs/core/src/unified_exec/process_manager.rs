@@ -230,14 +230,9 @@ fn exec_server_params_for_request(
         sandbox.windows_sandbox_proxy_settings_mode = Some(windows_sandbox_proxy_settings_mode);
         sandbox
     });
-    // Sandbox retries and memory-backed local launches can reuse a unified-exec
-    // ID while the executor still retains the previous process.
-    let exec_server_process_id =
-        if request.exec_server_sandbox.is_some() || request.exec_server_shell_snapshot.is_some() {
-            format!("{process_id}-{}", Uuid::new_v4())
-        } else {
-            process_id.to_string()
-        };
+    // Threads sharing an executor and sandbox retries can reuse a public handle
+    // while the executor still retains its previous process.
+    let exec_server_process_id = format!("{process_id}-{}", Uuid::new_v4());
     codex_exec_server::ExecParams {
         process_id: exec_server_process_id.into(),
         metadata: tool_ctx.map(|ctx| codex_exec_server::ExecMetadata {
@@ -904,7 +899,7 @@ impl UnifiedExecProcessManager {
         };
         let _interaction_guard = locked_process.interaction_lock().lock_owned().await;
         // A queued write must observe strict review enabled while it was waiting.
-        let strict_auto_review = context.session.strict_auto_review_enabled().await;
+        let strict_auto_review = context.step_context.turn.strict_auto_review_enabled();
         let approval = {
             let store = self.process_store.lock().await;
             let entry = store
@@ -1510,7 +1505,7 @@ impl UnifiedExecProcessManager {
             .await;
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
-            shell_type: request.shell_type,
+            shell: request.shell.clone(),
             hook_command: request.hook_command.clone(),
             process_id: request.process_id,
             cwd,

@@ -4,6 +4,7 @@ use crate::McpServerRegistration;
 use crate::connection_manager::tests::create_ready_async_managed_client;
 use crate::mcp::auth::McpAuthStatusEntry;
 use crate::rmcp_client::StartupOutcomeError;
+use crate::server::McpCredentialPolicy;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AuthKeyringBackendKind;
@@ -102,6 +103,7 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         config_layer_stack: codex_config::ConfigLayerStack::default(),
         approvals_reviewer: codex_config::types::ApprovalsReviewer::default(),
         environment_cwds: HashMap::new(),
+        environment_use_mxc: HashMap::new(),
         server_permission_profiles: HashMap::new(),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
@@ -131,7 +133,7 @@ pub(crate) fn test_elicitation_config(
 }
 
 #[test]
-fn ema_catalog_supports_configured_installed_and_selected_plugins_without_widening_policy() {
+fn ema_catalog_allows_only_configured_servers_without_widening_policy() {
     let server: McpServerConfig = serde_json::from_value(serde_json::json!({
         "url": "https://resource.example/mcp", "auth": "ema_auth",
         "oauth": { "client_id": "resource-client", "authorization_server_issuer": "https://as.example" }
@@ -152,6 +154,7 @@ fn ema_catalog_supports_configured_installed_and_selected_plugins_without_wideni
         "selected".into(),
         plugin,
         /*selection_order*/ 0,
+        codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
         server,
     ));
     let mut config = test_mcp_config(PathBuf::new());
@@ -177,11 +180,9 @@ fn ema_catalog_supports_configured_installed_and_selected_plugins_without_wideni
         });
         let servers = effective_mcp_servers(&config, /*auth*/ None);
         for name in ["configured", "installed", "selected"] {
-            assert_eq!(servers[name].enabled(), xaa_enabled && !denied, "{name}");
-            assert_eq!(
-                servers[name].config().oauth_idp(),
-                xaa_enabled.then_some(&idp)
-            );
+            let eligible = name == "configured" && xaa_enabled;
+            assert_eq!(servers[name].enabled(), eligible && !denied, "{name}");
+            assert_eq!(servers[name].config().oauth_idp(), eligible.then_some(&idp));
             assert_eq!(servers[name].config().auth, McpServerAuth::EmaAuth);
         }
     }
@@ -216,6 +217,7 @@ fn mcp_server_permissions_handle_unattached_and_threadless_servers() {
         "selected".to_string(),
         McpPluginAttribution::new("selected@test".to_string(), "Selected".to_string()),
         /*selection_order*/ 0,
+        codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID,
         selected_server,
     ));
     config.mcp_server_catalog = catalog.build();
@@ -394,6 +396,7 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
             "Executor GitHub".to_string(),
         ),
         /*selection_order*/ 0,
+        "executor-1",
         codex_apps_mcp_server_config(
             "https://github.example",
             /*apps_mcp_product_sku*/ None,
@@ -552,6 +555,55 @@ fn codex_apps_server_config_forwards_originator_and_configured_product_sku_heade
 }
 
 #[test]
+fn effective_mcp_servers_preserve_executor_credential_policy() {
+    let mut config = test_mcp_config(PathBuf::new());
+    let server: McpServerConfig = serde_json::from_value(serde_json::json!({
+        "url": "https://executor.example/mcp",
+        "environment_id": "remote",
+        "bearer_token_env_var": "MCP_EXECUTOR_CREDENTIAL_CANARY",
+    }))
+    .expect("valid MCP server config");
+    let mut catalog = ResolvedMcpCatalog::builder();
+    catalog.register(McpServerRegistration::from_executor_config(
+        "executor".to_string(),
+        server.clone(),
+    ));
+    catalog.register(McpServerRegistration::from_config(
+        "host".to_string(),
+        server,
+    ));
+    config.mcp_server_catalog = catalog.build();
+    let effective = effective_mcp_servers(&config, /*auth*/ None);
+
+    assert_eq!(
+        effective["executor"].credential_policy(),
+        McpCredentialPolicy::ExecutorOnly,
+    );
+    assert_eq!(
+        effective["host"].credential_policy(),
+        McpCredentialPolicy::HostFallbackAllowed,
+    );
+}
+
+#[test]
+#[should_panic(expected = "materialized MCP server must have a catalog registration")]
+fn effective_mcp_servers_require_catalog_registration() {
+    let config = test_mcp_config(PathBuf::new());
+    let server: McpServerConfig = serde_json::from_value(serde_json::json!({
+        "url": "https://executor.example/mcp",
+        "environment_id": "remote",
+        "bearer_token_env_var": "MCP_EXECUTOR_CREDENTIAL_CANARY",
+    }))
+    .expect("valid MCP server config");
+
+    effective_mcp_servers_from_configured(
+        HashMap::from([("unregistered".to_string(), server)]),
+        &config,
+        /*auth*/ None,
+    );
+}
+
+#[test]
 fn effective_mcp_servers_preserve_chatgpt_auth_for_staging() {
     for url in [
         "https://chatgpt-staging.com",
@@ -562,6 +614,12 @@ fn effective_mcp_servers_preserve_chatgpt_auth_for_staging() {
         let server = codex_apps_mcp_server_config(
             url, /*apps_mcp_product_sku*/ None, /*originator*/ None,
         );
+        let mut catalog = ResolvedMcpCatalog::builder();
+        catalog.register(McpServerRegistration::from_config(
+            "staging".to_string(),
+            server.clone(),
+        ));
+        config.mcp_server_catalog = catalog.build();
         let configured = HashMap::from([("staging".to_string(), server)]);
         let effective =
             effective_mcp_servers_from_configured(configured, &config, /*auth*/ None);

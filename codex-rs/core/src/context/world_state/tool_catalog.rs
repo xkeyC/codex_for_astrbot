@@ -9,6 +9,7 @@
 //! again for the next) comes back by name only.
 
 use super::PreviousSectionState;
+use super::SectionTransition;
 use super::WorldStateContextFragment;
 use super::WorldStateSection;
 use crate::context::ContextualUserFragment;
@@ -228,11 +229,10 @@ impl ToolCatalogState {
     }
 }
 
-impl WorldStateSection for ToolCatalogState {
-    const ID: &'static str = "tool_catalog";
-    type Snapshot = ToolCatalogSnapshot;
-
-    fn snapshot(&self) -> Self::Snapshot {
+impl ToolCatalogState {
+    /// The catalog as stored for the next turn's comparison, read after
+    /// rendering (a whole rendering forgets what was remembered).
+    fn snapshot(&self) -> ToolCatalogSnapshot {
         let mut snapshot = self.catalog.clone();
         if self.rendered_whole.load(Ordering::Relaxed) {
             snapshot.remembered.clear();
@@ -241,15 +241,9 @@ impl WorldStateSection for ToolCatalogState {
         snapshot
     }
 
-    fn should_persist(&self) -> bool {
-        !self.catalog.groups.is_empty()
-            || self.catalog.omitted > 0
-            || self.had_previous && !self.rendered_whole.load(Ordering::Relaxed)
-    }
-
-    fn render_diff(
+    fn render_fragment(
         &self,
-        previous: PreviousSectionState<'_, Self::Snapshot>,
+        previous: PreviousSectionState<'_, ToolCatalogSnapshot>,
     ) -> Option<Box<dyn ContextualUserFragment>> {
         let current = &self.catalog;
         let body = match previous {
@@ -274,6 +268,25 @@ impl WorldStateSection for ToolCatalogState {
             ),
             content_kind: ContentItemKind("tools.catalog".to_string()),
         }))
+    }
+}
+
+impl WorldStateSection for ToolCatalogState {
+    const ID: &'static str = "tool_catalog";
+    type Snapshot = ToolCatalogSnapshot;
+
+    fn should_persist(&self) -> bool {
+        !self.catalog.groups.is_empty()
+            || self.catalog.omitted > 0
+            || self.had_previous && !self.rendered_whole.load(Ordering::Relaxed)
+    }
+
+    fn render_diff(
+        &self,
+        previous: PreviousSectionState<'_, Self::Snapshot>,
+    ) -> SectionTransition<Self::Snapshot> {
+        let fragment = self.render_fragment(previous);
+        (Some(self.snapshot()), fragment)
     }
 }
 

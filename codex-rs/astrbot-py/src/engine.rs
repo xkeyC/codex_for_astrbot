@@ -27,7 +27,7 @@ use codex_core::passthrough_image_store;
 use codex_core::resolve_installation_id;
 use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::ExecServerRuntimePaths;
+use codex_exec_server::ExecServerRuntimeOptions;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_image_generation_extension::SavedImage;
@@ -242,7 +242,7 @@ impl Engine {
         let environment_manager = Arc::new(match options.codex_self_exe.clone() {
             Some(exe) => EnvironmentManager::from_codex_home(
                 config.codex_home.clone(),
-                Some(ExecServerRuntimePaths::from_optional_paths(
+                Some(ExecServerRuntimeOptions::from_optional_paths(
                     Some(exe),
                     None,
                 )?),

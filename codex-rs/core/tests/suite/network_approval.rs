@@ -299,54 +299,81 @@ async fn strict_auto_review_routes_network_approval_to_guardian_when_user_review
         }),
         ..Default::default()
     };
-    let responses = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-strict-network-permissions"),
-                ev_function_call(
+    // Guardian and parent requests can arrive in either order after the command yields.
+    // Only Guardian requests may consume these decisions.
+    let mut guardian_responses = Vec::new();
+    for response_id in ["strict-command-guardian", "strict-network-guardian"] {
+        guardian_responses.push(
+            mount_sse_once_match(
+                &server,
+                is_guardian_request,
+                sse(vec![
+                    ev_response_created(response_id),
+                    ev_assistant_message(
+                        response_id,
+                        r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"The strict-review request is safe."}"#,
+                    ),
+                    ev_completed(response_id),
+                ]),
+            )
+            .await,
+        );
+    }
+    let _parent = wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/responses"))
+        .and(|request: &wiremock::Request| !is_guardian_request(request))
+        .respond_with(move |request: &wiremock::Request| {
+            let body: Value = serde_json::from_slice(
+                &decoded_request_body(request).expect("decode parent request"),
+            )
+            .expect("parse parent request");
+            let input = body["input"].as_array().expect("parent input");
+            let output = input
+                .iter()
+                .rev()
+                .find(|item| item["type"] == "function_call_output");
+            let response_id = format!("strict-parent-{}", input.len());
+            let event = match output {
+                None => ev_function_call(
                     permission_call_id,
                     "request_permissions",
-                    &serde_json::to_string(&json!({
+                    &json!({
                         "reason": "Require automatic review for the rest of this turn",
                         "permissions": requested_permissions,
-                    }))?,
+                    })
+                    .to_string(),
                 ),
-                ev_completed("resp-strict-network-permissions"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-strict-network-command"),
-                ev_function_call(
+                Some(output) if output["call_id"] == permission_call_id => ev_function_call(
                     network_call_id,
                     "exec_command",
-                    &serde_json::to_string(&network_fetch_args(LOCAL_ENVIRONMENT_ID))?,
+                    &network_fetch_args(LOCAL_ENVIRONMENT_ID).to_string(),
                 ),
-                ev_completed("resp-strict-network-command"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-strict-command-guardian"),
-                ev_assistant_message(
-                    "msg-strict-command-guardian",
-                    r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"The strict-review command is safe."}"#,
-                ),
-                ev_completed("resp-strict-command-guardian"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-strict-network-guardian"),
-                ev_assistant_message(
-                    "msg-strict-network-guardian",
-                    r#"{"risk_level":"low","user_authorization":"high","outcome":"allow","rationale":"The strict-review network request is safe."}"#,
-                ),
-                ev_completed("resp-strict-network-guardian"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-strict-network-complete"),
-                ev_assistant_message("msg-strict-network-complete", "reviewed"),
-                ev_completed("resp-strict-network-complete"),
-            ]),
-        ],
-    )
-    .await;
+                Some(output) => {
+                    let output = output["output"].as_str().expect("process output");
+                    if let Some(session_id) = output
+                        .lines()
+                        .find_map(|line| line.strip_prefix("Process running with session ID "))
+                    {
+                        ev_function_call(
+                            &response_id,
+                            "write_stdin",
+                            &json!({
+                                "session_id": session_id.parse::<i32>().expect("session id"),
+                                "chars": "",
+                                "yield_time_ms": 1_000,
+                            })
+                            .to_string(),
+                        )
+                    } else {
+                        assert!(output.contains("Process exited with code"), "{output}");
+                        ev_assistant_message("strict-parent-complete", "reviewed")
+                    }
+                }
+            };
+            sse_response(sse(vec![event, ev_completed(&response_id)]))
+        })
+        .mount_as_scoped(&server)
+        .await;
 
     submit_managed_network_turn(
         &test,
@@ -376,7 +403,24 @@ async fn strict_auto_review_routes_network_approval_to_guardian_when_user_review
         .await?;
     wait_for_completion_without_network_prompt(&test).await;
 
-    let actions = guardian_network_actions(&responses)?;
+    assert_eq!(
+        guardian_responses
+            .iter()
+            .flat_map(ResponseMock::requests)
+            .filter(|request| {
+                request.body_json()["client_metadata"]["x-openai-subagent"] == "guardian"
+            })
+            .count(),
+        2,
+        "the command and network request must each receive Guardian review",
+    );
+    let actions = guardian_responses
+        .iter()
+        .map(guardian_network_actions)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
     assert_eq!(actions.len(), 1);
     assert_eq!(
         actions[0]
@@ -2520,6 +2564,10 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
         ("USER_DENIED", true, Some(false)),
     ] {
         let mut builder = test_codex().with_config(move |config| {
+            config
+                .features
+                .disable(Feature::NetworkProxy)
+                .expect("test config should allow feature update");
             for feature in [Feature::UnifiedExec, Feature::ExecPermissionApprovals] {
                 config
                     .features
@@ -2551,6 +2599,7 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
         });
         let test = builder.build_with_remote_and_local_env(&server).await?;
         assert!(!test.config.managed_network_requirements_enabled());
+        assert!(!test.config.features.enabled(Feature::NetworkProxy));
         assert_eq!(
             test.session_configured.network_proxy.is_some(),
             configured_controller
@@ -2593,6 +2642,8 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             ("DENIED", "owner-only.invalid", "HTTP/1.1 403"),
             ("REVIEWED", "owner-only.invalid", "HTTP/1.1 502"),
             ("OFFLINE", "owner-only.invalid", "ROOTLESS_OWNER_OFFLINE"),
+            ("REQUIRED_ALLOWED", NETWORK_TEST_HOST, "HTTP/1.1 502"),
+            ("REQUIRED_DENIED", "owner-only.invalid", "HTTP/1.1 403"),
             ("GRANTED_DENIED", "owner-only.invalid", "HTTP/1.1 403"),
             (
                 "LOCAL_GRANTED",
@@ -2623,12 +2674,14 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
                 suffix,
                 "ESCALATED" | "ESCALATION_DENIED" | "ESCALATED_DENY_READ"
             );
-            let restricted = matches!(suffix, "OFFLINE" | "GRANTED_DENIED");
+            let requires_proxy = matches!(suffix, "REQUIRED_ALLOWED" | "REQUIRED_DENIED");
+            let restricted = requires_proxy || matches!(suffix, "OFFLINE" | "GRANTED_DENIED");
             if scenario != "ROOTLESS" && restricted {
                 continue;
             }
             let marker = format!("{scenario}_OWNER_{suffix}");
             let mut proxy_config = NetworkProxyConfig {
+                enabled: requires_proxy,
                 allow_local_binding: match suffix {
                     "LOCAL_DENIED" => Some(false),
                     "LOCAL_OMITTED" => None,
@@ -2689,10 +2742,27 @@ async fn owner_network_policy_follows_the_selected_remote_command() -> Result<()
             });
             remote.config = EnvironmentConfigState::Ready(owner_config);
 
-            // Restricted owners run offline until an approved grant enables their filtered proxy.
+            // Traffic policy alone leaves restricted owners offline. Required proxies and
+            // approved network grants activate the filtered route without a controller proxy.
             let command = if suffix == "OFFLINE" {
                 format!(
                     "python3 -c \"import socket; sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); sock.connect(('198.51.100.1', 9))\" 2>/dev/null || printf {marker}"
+                )
+            } else if requires_proxy {
+                let direct_probe = r#"python3 - <<'PYTHON'
+import errno, socket
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+try:
+    sock.connect(('198.51.100.1', 9))
+except OSError as error:
+    assert error.errno in (errno.ENETUNREACH, errno.EACCES, errno.EPERM), error
+    print('OWNER_DIRECT_NETWORK_BLOCKED')
+else:
+    raise AssertionError('direct network unexpectedly allowed')
+PYTHON"#;
+                format!(
+                    "{direct_probe}\n{}",
+                    remote_network_proxy_request_command(&marker)
                 )
             } else if suffix == "ESCALATED_DENY_READ" {
                 let read_probe = r#"python3 - <<'PYTHON'
@@ -2721,6 +2791,7 @@ PYTHON"#;
                 remote_network_proxy_request_command(&marker)
             };
             let mut args = network_exec_args(&command);
+            args.as_object_mut().unwrap().remove("shell");
             args["environment_id"] = json!(REMOTE_ENVIRONMENT_ID);
             if escalated {
                 args["sandbox_permissions"] = json!("require_escalated");
@@ -2818,6 +2889,9 @@ PYTHON"#;
                 output.contains(expected),
                 "unexpected network output for {marker}: {output}"
             );
+            if requires_proxy {
+                assert!(output.contains("OWNER_DIRECT_NETWORK_BLOCKED"), "{output}");
+            }
             if suffix == "ESCALATION_DENIED" {
                 assert!(!output.contains(":unproxied"));
             } else if suffix == "ESCALATED_DENY_READ" {

@@ -74,7 +74,11 @@ async fn images_are_uploaded_once_and_referenced_by_file_id() {
     assert_eq!(uploaded.load(Ordering::SeqCst), 2);
     assert_eq!(
         file_ids(&first),
-        ["file-0-image/png-3", "file-1-image/jpeg-3", "file-0-image/png-3"]
+        [
+            "file-0-image/png-3",
+            "file-1-image/jpeg-3",
+            "file-0-image/png-3"
+        ]
     );
     assert!(!serde_json::to_string(&first).unwrap().contains("base64"));
 

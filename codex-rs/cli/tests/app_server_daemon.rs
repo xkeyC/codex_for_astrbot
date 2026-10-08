@@ -10,6 +10,7 @@ use std::time::Instant;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::ensure;
+use codex_utils_cargo_bin::copy_executable;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -40,7 +41,7 @@ impl TestDaemon {
         // Preserve the installed path without invalidating the shared CLI's Rosetta cache.
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
         {
-            std::fs::copy(&codex_source, &managed)?;
+            copy_executable(&codex_source, &managed)?;
             // Translate the fixture before timed daemon capability and readiness checks.
             ensure!(
                 Command::new(&managed)
@@ -53,8 +54,9 @@ impl TestDaemon {
             );
         }
         #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
-        std::fs::hard_link(&codex_source, &managed)
-            .or_else(|_| std::fs::copy(&codex_source, managed).map(|_| ()))?;
+        if std::fs::hard_link(&codex_source, &managed).is_err() {
+            copy_executable(&codex_source, &managed)?;
+        }
         std::fs::write(standalone.join("auto-update-version"), &release_name)?;
         std::os::unix::fs::symlink(
             PathBuf::from("releases").join(release_name),
@@ -110,6 +112,63 @@ impl Drop for TestDaemon {
             let _ = signal(pid, libc::SIGTERM);
         }
     }
+}
+
+#[test]
+fn managed_daemon_restarts_from_deleted_working_directory() -> Result<()> {
+    let daemon = TestDaemon::new()?;
+    let project = daemon.home.path().join("project");
+    std::fs::create_dir(&project)?;
+    let started = daemon
+        .command()
+        .current_dir(&project)
+        .args(["app-server", "daemon", "start"])
+        .output()?;
+    ensure!(
+        started.status.success(),
+        "{}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let old_pid = daemon.pid("app-server.pid")?;
+    let old_updater_pid = daemon.pid("app-server-updater.pid")?;
+    signal(old_updater_pid, libc::SIGTERM)?;
+    wait_for_exit(old_updater_pid)?;
+
+    // Delete the restart caller's cwd without changing the test process's cwd.
+    let restarted = Command::new("/bin/sh")
+        .args([
+            "-c",
+            "rmdir \"$1\" && exec \"$2\" app-server daemon restart",
+            "restart",
+        ])
+        .arg(&project)
+        .arg(&daemon.codex)
+        .current_dir(&project)
+        .env("CODEX_HOME", daemon.home.path())
+        .output()?;
+    ensure!(
+        restarted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&restarted.stderr)
+    );
+    let restarted: Value = serde_json::from_slice(&restarted.stdout)?;
+    assert_eq!(restarted["status"], "restarted");
+    assert_ne!(daemon.pid("app-server.pid")?, old_pid);
+    assert_ne!(daemon.pid("app-server-updater.pid")?, old_updater_pid);
+    assert_eq!(daemon.lifecycle("version")?["status"], "running");
+    let updater_socket = daemon
+        .home
+        .path()
+        .join("app-server-daemon/app-server-updater.sock");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while std::os::unix::net::UnixStream::connect(&updater_socket).is_err() {
+        ensure!(
+            Instant::now() < deadline,
+            "replacement updater did not become ready"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
 }
 
 fn signal(pid: u32, signal: libc::c_int) -> Result<()> {
@@ -499,7 +558,7 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
     for directory in ["bin", "codex-path", "codex-resources"] {
         std::fs::create_dir_all(package.join(directory))?;
     }
-    std::fs::copy(&daemon.codex, package.join("bin/codex"))?;
+    copy_executable(&daemon.codex, &package.join("bin/codex"))?;
     daemon.codex = package.join("bin/codex");
     for helper in [
         "bin/codex-code-mode-host",
@@ -540,22 +599,11 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
         br#"{"shutdownGraceSeconds":0}"#,
     )?;
     let cli_before = daemon.codex.canonicalize()?;
-    let mut command = daemon.command();
-    command.args(["app-server", "daemon", action]);
-    // A freshly copied executable can briefly remain busy on Linux CI workers.
-    let mut retries = 0;
-    let result = loop {
-        let result = command.output();
-        if !result
-            .as_ref()
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::ExecutableFileBusy)
-            || retries == 2
-        {
-            break result?;
-        }
-        retries += 1;
-        std::thread::sleep(Duration::from_millis(/*millis*/ 10));
-    };
+    let result = daemon
+        .command()
+        .args(["app-server", "daemon", action])
+        .output()
+        .context("failed to launch packaged daemon fixture")?;
     ensure!(
         result.status.success(),
         "{}",

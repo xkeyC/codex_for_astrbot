@@ -208,9 +208,9 @@ pub(crate) async fn build_guardian_prompt_items_with_parent_turn(
     let profile = ContextProfile::synchronous();
     let mut transcript = profile.render_transcript(transcript_entries, offset);
     if transcript_entries.is_empty() {
-        transcript
-            .items
-            .push(Budgeted::required(placeholder.to_owned()));
+        transcript.items.push(Budgeted::required(
+            codex_guardian_context::TranscriptContent::Text(placeholder.to_owned()),
+        ));
     }
     let context = sections.compose(presentation, transcript)?;
     Ok(GuardianPromptItems {
@@ -229,14 +229,21 @@ pub(crate) fn render_guardian_transcript_entries(
         ContextProfile::synchronous().render_transcript(entries, /*entry_number_offset*/ 0);
     if entries.is_empty() {
         transcript.items.push(Budgeted::required(
-            "<no retained transcript entries>".to_owned(),
+            codex_guardian_context::TranscriptContent::Text(
+                "<no retained transcript entries>".to_owned(),
+            ),
         ));
     }
     (
         transcript
             .items
             .into_iter()
-            .map(|item| item.content)
+            .map(|item| match item.content {
+                codex_guardian_context::TranscriptContent::Text(text) => text,
+                codex_guardian_context::TranscriptContent::AgentMessage(_) => {
+                    panic!("expected text transcript")
+                }
+            })
             .collect(),
         transcript.omission_note,
     )
@@ -296,6 +303,14 @@ impl SectionHistory for GuardianReviewHistory<'_> {
     {
         self.0.review_items_with_sources()
     }
+
+    fn render_retained_assistant(
+        &self,
+        message: &codex_history::RetainedUserMessage,
+    ) -> Option<GuardianRootMessage> {
+        crate::context::render_retained_assistant_context(message)
+            .map(GuardianRootMessage::Assistant)
+    }
 }
 
 struct FilteredGuardianHistory<'a>(&'a dyn SectionHistory);
@@ -318,6 +333,13 @@ impl SectionHistory for FilteredGuardianHistory<'_> {
 
     fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
         Box::new(self.items_with_sources().map(|(item, _)| item))
+    }
+
+    fn render_retained_assistant(
+        &self,
+        message: &codex_history::RetainedUserMessage,
+    ) -> Option<GuardianRootMessage> {
+        self.0.render_retained_assistant(message)
     }
 }
 

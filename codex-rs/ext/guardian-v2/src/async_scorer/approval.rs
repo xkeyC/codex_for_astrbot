@@ -150,7 +150,7 @@ async fn cached_evidence(
         return Err(GuardianReviewReason::ScoringFailure);
     }
     let context_mode = GuardianContextMode::from_history(history.as_ref());
-    if context_mode == GuardianContextMode::ThreadOwned {
+    if context_mode != GuardianContextMode::Legacy {
         let sampler = store
             .get::<LunaSampler>()
             .ok_or(GuardianReviewReason::MissingScore)?;
@@ -199,11 +199,8 @@ async fn cached_evidence(
         record_fast_decision(metrics, "deferred", "scoring_failure");
         return Err(GuardianReviewReason::ScoringFailure);
     }
-    if !current.local.retained_context_complete
-        || current
-            .root
-            .is_some_and(|root| !root.retained_context_complete)
-    {
+    // Root omissions remain visible to the classifier but do not veto a matching cached score.
+    if !current.local.retained_context_complete {
         record_fast_decision(metrics, "deferred", "incomplete_authorization");
         return Err(GuardianReviewReason::Policy);
     }

@@ -100,6 +100,22 @@ fn managed_hooks_requirements_default_interrupt_to_empty() {
 }
 
 #[test]
+fn mcp_oauth_login_response_accepts_older_servers_without_login_id() {
+    let response = serde_json::from_value::<McpServerOauthLoginResponse>(json!({
+        "authorizationUrl": "https://example.com/authorize",
+    }))
+    .expect("older login response should deserialize");
+
+    assert_eq!(
+        response,
+        McpServerOauthLoginResponse {
+            authorization_url: "https://example.com/authorize".to_string(),
+            login_id: None,
+        }
+    );
+}
+
+#[test]
 fn external_agent_config_detect_response_defaults_connectors_for_older_servers() {
     let response = serde_json::from_value::<ExternalAgentConfigDetectResponse>(json!({
         "items": [],
@@ -400,7 +416,7 @@ fn thread_items_list_round_trips() {
     let params = ThreadItemsListParams {
         thread_id: "thr_123".to_string(),
         turn_id: Some("turn_456".to_string()),
-        cursor: Some("cursor_1".to_string()),
+        cursor: Some(ThreadItemsListCursor::Opaque("cursor_1".to_string())),
         limit: Some(50),
         sort_direction: Some(SortDirection::Asc),
     };
@@ -415,6 +431,26 @@ fn thread_items_list_round_trips() {
             "sortDirection": "asc",
         })
     );
+    for cursor in [
+        json!("cursor_1"),
+        json!({"type": "item", "itemId": "item-1"}),
+        serde_json::Value::Null,
+    ] {
+        let mut value = serde_json::to_value(&params).unwrap();
+        value["cursor"] = cursor;
+        let request = serde_json::from_value::<ThreadItemsListParams>(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), value);
+    }
+    for invalid in [
+        json!({"type": "other", "itemId": "item-1"}),
+        json!({"type": "item"}),
+        json!({"type": "item", "itemId": 1}),
+        json!(42),
+    ] {
+        let mut value = serde_json::to_value(&params).unwrap();
+        value["cursor"] = invalid;
+        assert!(serde_json::from_value::<ThreadItemsListParams>(value).is_err());
+    }
     for (started_at_ms, completed_at_ms) in [
         (Some(1_789_855_978_123), Some(1_789_855_979_456)),
         (Some(1_789_855_978_123), None),
@@ -4742,6 +4778,67 @@ fn core_error_info_converts_to_camel_case() {
             serde_json::to_value(CodexErrorInfo::from(core)).unwrap(),
             expected
         );
+    }
+}
+
+/// The catchall must keep the existing `other` string stable in both directions.
+#[test]
+fn codex_error_info_other_round_trips_as_string() {
+    assert_eq!(
+        serde_json::to_value(CodexErrorInfo::Other).unwrap(),
+        json!("other")
+    );
+    assert_eq!(
+        serde_json::from_value::<CodexErrorInfo>(json!("other")).unwrap(),
+        CodexErrorInfo::Other
+    );
+}
+
+/// Future unit variants must not prevent older clients from handling errors.
+#[test]
+fn codex_error_info_deserializes_unknown_string_as_other() {
+    assert_eq!(
+        serde_json::from_value::<CodexErrorInfo>(json!("futureError")).unwrap(),
+        CodexErrorInfo::Other
+    );
+}
+
+/// Future structured variants must fall back without retaining their unknown payload.
+#[test]
+fn codex_error_info_deserializes_unknown_object_as_other() {
+    assert_eq!(
+        serde_json::from_value::<CodexErrorInfo>(json!({
+            "futureError": {
+                "detail": "unknown",
+                "retryAfterSeconds": 30,
+            }
+        }))
+        .unwrap(),
+        CodexErrorInfo::Other
+    );
+}
+
+/// The catchall must not replace known structured variants with `Other`.
+#[test]
+fn codex_error_info_deserializes_known_object_without_falling_back() {
+    assert_eq!(
+        serde_json::from_value::<CodexErrorInfo>(json!({
+            "httpConnectionFailed": {
+                "httpStatusCode": 503,
+            }
+        }))
+        .unwrap(),
+        CodexErrorInfo::HttpConnectionFailed {
+            http_status_code: Some(503),
+        }
+    );
+}
+
+/// Only the two supported error wire shapes may reach the catchall.
+#[test]
+fn codex_error_info_rejects_unsupported_wire_shapes() {
+    for value in [json!(null), json!(true), json!(42), json!([])] {
+        assert!(serde_json::from_value::<CodexErrorInfo>(value).is_err());
     }
 }
 

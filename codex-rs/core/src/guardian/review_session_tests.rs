@@ -85,6 +85,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
             /*reference_context_item*/ None,
             /*world_state_baseline*/ None,
             crate::compact::CompactedHistoryMetadata {
+                input_goal_ids: Default::default(),
                 message: String::new(),
                 window_number,
                 window_ids,
@@ -193,6 +194,7 @@ fn turn_aborted_event(turn_id: &str) -> Event {
             turn_id: Some(turn_id.to_string()),
             started_at: None,
             reason: TurnAbortReason::Interrupted,
+            error: None,
             completed_at: None,
             duration_ms: None,
         }),

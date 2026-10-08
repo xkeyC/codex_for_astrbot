@@ -65,6 +65,7 @@ use codex_config::McpServerTransportConfig;
 use codex_config::McpStartupReadiness;
 use codex_diagnostics::Gauge;
 use codex_diagnostics::GaugeGuard;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
@@ -772,6 +773,7 @@ impl McpConnectionSet {
 
                 (server_name, outcome)
             };
+            let startup = AuthStorageOriginator::current().scope(startup);
             if defer_startup {
                 // Dormant servers must not hold the initial startup summary open.
                 tokio::spawn(startup);
@@ -893,15 +895,18 @@ impl McpConnectionSet {
             return Vec::new();
         }
 
+        let originator = AuthStorageOriginator::current();
         match tokio::task::spawn_blocking(move || {
-            candidates
-                .into_iter()
-                .filter_map(|(server_name, identity, config)| {
-                    identity
-                        .oauth_credentials_changed(&server_name, &config)
-                        .then_some(server_name)
-                })
-                .collect()
+            originator.sync_scope(|| {
+                candidates
+                    .into_iter()
+                    .filter_map(|(server_name, identity, config)| {
+                        identity
+                            .oauth_credentials_changed(&server_name, &config)
+                            .then_some(server_name)
+                    })
+                    .collect()
+            })
         })
         .await
         {
@@ -1049,9 +1054,12 @@ impl McpConnectionSet {
     /// Returns presentation metadata from the current connection.
     /// Codex Apps metadata may come from its existing cache; regular MCP server information is
     /// connection-specific, so pending regular clients are awaited.
-    pub(crate) async fn list_available_server_infos(&self) -> HashMap<String, McpServerInfo> {
+    pub(crate) async fn list_available_server_infos(
+        &self,
+        include_server: impl Fn(&str) -> bool,
+    ) -> HashMap<String, McpServerInfo> {
         let mut server_infos = HashMap::new();
-        for (server_name, view) in &self.servers {
+        for (server_name, view) in self.servers.iter().filter(|(name, _)| include_server(name)) {
             let client = &view.connection.client;
             if !client.startup_complete.load(Ordering::Acquire)
                 && let Some(server_info) = client.cached_server_info.clone()

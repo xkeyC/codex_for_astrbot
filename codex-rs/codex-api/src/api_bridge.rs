@@ -28,6 +28,7 @@ pub fn map_api_error(err: ApiError) -> CodexErr {
         ApiError::Transport(_)
         | ApiError::Api { .. }
         | ApiError::Stream(_)
+        | ApiError::ContentFilter
         | ApiError::ContextWindowExceeded
         | ApiError::QuotaExceeded
         | ApiError::UsageNotIncluded
@@ -56,6 +57,7 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
             CodexErr::new(CodexErrorDetails::RateLimitExceeded(message))
         }
         ApiError::Stream(msg) => CodexErr::Stream(msg),
+        ApiError::ContentFilter => CodexErr::new(CodexErrorDetails::ContentFilter),
         ApiError::ServerOverloaded { .. } => CodexErr::ServerOverloaded,
         ApiError::FlexUnavailable => CodexErr::new(CodexErrorDetails::FlexUnavailable),
         ApiError::Api { status, message } => {
@@ -204,6 +206,12 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                             return CodexErr::UsageLimitReached(UsageLimitReachedError {
                                 plan_type: err.error.plan_type,
                                 resets_at,
+                                limit_window_minutes: err
+                                    .error
+                                    .limit_window_minutes
+                                    .as_ref()
+                                    .and_then(Value::as_u64)
+                                    .and_then(|minutes| u16::try_from(minutes).ok()),
                                 rate_limits: rate_limits.map(Box::new),
                                 promo_message,
                                 rate_limit_reached_type,
@@ -340,4 +348,5 @@ struct UsageErrorBody {
     error_type: Option<String>,
     plan_type: Option<PlanType>,
     resets_at: Option<i64>,
+    limit_window_minutes: Option<Value>,
 }

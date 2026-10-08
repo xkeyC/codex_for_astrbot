@@ -2,14 +2,12 @@
 //! Visible time pauses while hidden. Fresh conversations start settled and can replay on a click.
 
 mod geometry;
-mod greetings;
 mod lighting;
 mod paths;
 mod policy;
 mod renderer;
 mod sequence;
 
-use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
@@ -24,7 +22,6 @@ use ratatui::style::Color;
 
 use crate::motion::MotionMode;
 use crate::terminal_palette;
-pub(crate) use greetings::Greeting;
 use lighting::Lighting;
 pub(crate) use policy::Presentation;
 pub(crate) use policy::is_startup_cell;
@@ -45,9 +42,6 @@ pub(crate) enum ComposerState {
 #[derive(Default)]
 pub(crate) struct EmptyStateAnimation {
     eligible: bool,
-    // Initialized once for fresh threads; never initialized for a resumed or forked thread.
-    // Headers retain the selection after the temporary blossom is dismissed.
-    pub(crate) greeting: Arc<OnceLock<Greeting>>,
     spin_elapsed: Duration,
     last_frame: Option<Instant>,
     fade_elapsed: Duration,
@@ -67,7 +61,6 @@ impl EmptyStateAnimation {
     pub(crate) fn start_fresh(&mut self) {
         self.cancel_replay();
         self.eligible = true;
-        self.greeting.get_or_init(Greeting::choose);
         self.spin_elapsed = Duration::ZERO;
         self.last_frame = None;
         self.fade_elapsed = Duration::ZERO;
@@ -75,16 +68,12 @@ impl EmptyStateAnimation {
         self.opacity = 1.0;
     }
 
-    /// Keep the provisional pose and phrase in headers already bound to the live thread.
+    /// Keep the provisional pose when handing off to the live thread.
     pub(crate) fn continue_from(&mut self, source: &mut Self) {
         let mut previous = std::mem::take(source);
         if !previous.is_eligible() {
             previous.start_fresh();
         }
-        if let Some(greeting) = previous.greeting.get() {
-            let _ = self.greeting.set(*greeting);
-        }
-        previous.greeting = Arc::clone(&self.greeting);
         *self = previous;
     }
 
@@ -175,7 +164,12 @@ impl EmptyStateAnimation {
         let phase =
             self.spin_elapsed.min(sequence::SPIN_DURATION).as_secs_f64() / sequence::LOOP_SECONDS;
         let settling = !finished && static_mark && self.fade_elapsed < sequence::STATIC_FADE;
-        self.opacity = if finished {
+        self.opacity = if finished && self.replaying {
+            sequence::static_opacity(
+                self.spin_elapsed - sequence::SPIN_DURATION,
+                /*from*/ 1.0,
+            )
+        } else if finished {
             1.0
         } else if static_mark {
             sequence::static_opacity(self.fade_elapsed, self.fade_from)
@@ -188,7 +182,10 @@ impl EmptyStateAnimation {
                     * sequence::progress(self.fade_elapsed, sequence::STATIC_FADE) as f32;
         }
         self.paint_frame(area, buffer, phase, self.opacity);
-        (!finished && (!static_mark || settling)).then_some(FRAME_INTERVAL)
+        ((!finished && (!static_mark || settling))
+            || (self.replaying
+                && self.spin_elapsed < sequence::SPIN_DURATION + sequence::STATIC_FADE))
+            .then_some(FRAME_INTERVAL)
     }
 
     /// Draw only in space the caller has cleared and owns. The centered blossom returns
@@ -228,7 +225,7 @@ impl EmptyStateAnimation {
             if let Some(delay) = self.render_in(stage, buffer, Presentation::Animated) {
                 return Some(delay);
             }
-            // Paint the idle pose over the final full-color frame in the same update.
+            // The replay has faded back to the idle pose and no longer needs redraws.
             self.replaying = false;
         }
         self.paint_frame(stage, buffer, SETTLED_BLOSSOM, sequence::STATIC_OPACITY);

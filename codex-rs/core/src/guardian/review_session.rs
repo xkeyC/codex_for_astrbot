@@ -38,7 +38,6 @@ use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::openai_models::InputModality;
@@ -177,7 +176,7 @@ pub struct GuardianReviewSessionReuseKey {
     // history rewrites that invalidate existing reviewer context.
     parent_history_version: u64,
     parent_reset_version: u64,
-    root_authorization_version: Option<crate::codex_thread::GuardianAuthorizationVersion>,
+    root_review_version: Option<(crate::codex_thread::GuardianAuthorizationVersion, u64)>,
     node_repl_auto_review_required: bool,
     node_repl_policy: String,
     model: Option<String>,
@@ -212,13 +211,13 @@ impl GuardianReviewSessionReuseKey {
         context_mode: GuardianContextMode,
     ) -> Self {
         Self {
-            root_authorization_version: None,
+            root_review_version: None,
             parent_reset_version: 0,
             parent_history_version: match ReviewContextPolicy::for_context(
                 context_mode,
                 &spawn_config.features,
             ) {
-                ReviewContextPolicy::Legacy => 0,
+                ReviewContextPolicy::Legacy | ReviewContextPolicy::Independent => 0,
                 ReviewContextPolicy::LegacyWithCheckpointReuse
                 | ReviewContextPolicy::ThreadOwned => parent_history_version,
             },
@@ -491,7 +490,7 @@ async fn run_review_on_session(
 
             let parent_history = params.parent_history.conversation_history_snapshot();
             let history = if GuardianContextMode::from_history(parent_history.as_ref())
-                == GuardianContextMode::ThreadOwned
+                != GuardianContextMode::Legacy
             {
                 parent_history
             } else {
@@ -580,10 +579,13 @@ async fn run_review_on_session(
                             }
                         }
                     });
-                    let prompt: ResponseItem =
-                        ResponseInputItem::from(prompt_items.context.clone().into_user_inputs()?)
-                            .into();
-                    let prompt_tokens = crate::context_manager::estimate_item_token_count(&prompt);
+                    let prompt_tokens = prompt_items
+                        .context
+                        .clone()
+                        .into_messages()
+                        .iter()
+                        .map(crate::context_manager::estimate_item_token_count)
+                        .fold(0i64, i64::saturating_add);
                     let base_instructions = review_session.session.get_base_instructions().await;
                     let history_tokens = reviewer_history
                         .estimate_token_count_with_base_instructions(&base_instructions)
@@ -599,7 +601,20 @@ async fn run_review_on_session(
                 }
             }
 
-            let items = prompt_items.context.clone().into_user_inputs()?;
+            let items = match prompt_items.context.clone().into_user_inputs() {
+                Ok(items) => items,
+                Err(codex_guardian_context::SectionError::UnsupportedDelivery {
+                    section: "conversation_transcript",
+                }) => {
+                    // Final admission replaces this turn-start marker with the complete,
+                    // budgeted context, including native encrypted agent-message evidence.
+                    vec![codex_protocol::user_input::UserInput::Text {
+                        text: super::prompt::GUARDIAN_TRANSCRIPT_START.to_owned(),
+                        text_elements: Vec::new(),
+                    }]
+                }
+                Err(error) => return Err(error.into()),
+            };
             Ok::<_, anyhow::Error>((prompt_items, items))
         }),
     )

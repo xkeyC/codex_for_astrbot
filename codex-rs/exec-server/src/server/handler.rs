@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::ExecServerRuntimePaths;
+use crate::ExecServerRuntimeOptions;
 use crate::client::http_client::PendingRouteAwareHttpBodyStream;
 use crate::client::http_client::RouteAwareHttpClient;
 use crate::client::http_client::RouteAwareHttpRequestRunner;
@@ -50,6 +50,8 @@ use crate::protocol::FsRemoveParams;
 use crate::protocol::FsRemoveResponse;
 use crate::protocol::FsWalkParams;
 use crate::protocol::FsWalkResponse;
+use crate::protocol::FsWriteBlockParams;
+use crate::protocol::FsWriteBlockResponse;
 use crate::protocol::FsWriteFileParams;
 use crate::protocol::FsWriteFileResponse;
 use crate::protocol::HTTP_REQUEST_METHOD;
@@ -83,7 +85,7 @@ pub(crate) struct ExecServerHandler {
     background_task_shutdown: CancellationToken,
     background_tasks: TaskTracker,
     file_system: FileSystemHandler,
-    runtime_paths: ExecServerRuntimePaths,
+    runtime_paths: ExecServerRuntimeOptions,
     http_client: RouteAwareHttpClient,
     initialize_requested: AtomicBool,
     initialized: AtomicBool,
@@ -93,7 +95,7 @@ impl ExecServerHandler {
     pub(crate) fn new(
         session_registry: Arc<SessionRegistry>,
         notifications: RpcNotificationSender,
-        runtime_paths: ExecServerRuntimePaths,
+        runtime_paths: ExecServerRuntimeOptions,
         http_client_factory: HttpClientFactory,
     ) -> Self {
         Self {
@@ -338,6 +340,14 @@ impl ExecServerHandler {
     ) -> Result<FsReadBlockResponse, JSONRPCErrorError> {
         self.require_initialized_for("filesystem")?;
         self.file_system.read_block(params).await
+    }
+
+    pub(crate) async fn fs_write_block(
+        &self,
+        params: FsWriteBlockParams,
+    ) -> Result<FsWriteBlockResponse, JSONRPCErrorError> {
+        self.require_initialized_for("filesystem")?;
+        self.file_system.write_block(params).await
     }
 
     pub(crate) async fn fs_close(

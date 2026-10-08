@@ -4,6 +4,7 @@
 //! initializing the server, listing raw tools, applying per-server tool filters,
 //! and exposing cached Codex Apps tools while a client is still connecting.
 //! Initialization capabilities survive tool-discovery failures and reset on a new attempt.
+//! Executor-discovered environment credentials remain executor-bound across those attempts.
 //! Higher-level aggregation and resource/tool APIs live in
 //! [`crate::connection_manager`].
 
@@ -36,6 +37,7 @@ use crate::pagination::collect_paginated_with_limit;
 use crate::runtime::McpRuntimeContext;
 use crate::runtime::emit_duration;
 use crate::server::EffectiveMcpServer;
+use crate::server::McpCredentialPolicy;
 use crate::server::has_explicit_http_authorization;
 use crate::tool_catalog_cache::McpToolCatalogCacheContext;
 use crate::tool_catalog_cache::McpToolCatalogFetchTicket;
@@ -55,6 +57,7 @@ use codex_connectors::ConnectorRuntimeContext;
 use codex_connectors::ConnectorRuntimeFetchSource;
 use codex_exec_server::Environment;
 use codex_login::AuthChangeState;
+use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::protocol::Event;
@@ -284,6 +287,7 @@ fn codex_apps_reconnect_backoff(consecutive_failures: u32) -> Duration {
 
 #[derive(Clone)]
 struct ManagedClientStartup {
+    originator: AuthStorageOriginator,
     server_name: String,
     server: EffectiveMcpServer,
     store_mode: OAuthCredentialsStoreMode,
@@ -314,6 +318,7 @@ impl ManagedClientStartup {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         let Self {
+            originator,
             server_name,
             server,
             store_mode,
@@ -341,7 +346,7 @@ impl ManagedClientStartup {
             .startup_timeout_sec
             .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
         let cancel_token_for_fut = cancel_token;
-        async move {
+        let startup = async move {
             let tool_catalog_fetch_ticket = tool_catalog_cache_context
                 .as_ref()
                 .map(McpToolCatalogCacheContext::begin_fetch);
@@ -418,10 +423,8 @@ impl ManagedClientStartup {
 
             startup_complete.store(true, Ordering::Release);
             outcome
-        }
-        .in_current_span()
-        .boxed()
-        .shared()
+        };
+        originator.scope(startup).in_current_span().boxed().shared()
     }
 }
 
@@ -478,6 +481,7 @@ impl AsyncManagedClient {
         let startup_complete = Arc::new(AtomicBool::new(false));
         let server_capabilities = Arc::new(StdMutex::new(None));
         let startup = Arc::new(ManagedClientStartup {
+            originator: AuthStorageOriginator::current(),
             server_name,
             server,
             store_mode,
@@ -870,10 +874,17 @@ fn is_untrusted_connector_meta_key(key: &str) -> bool {
 fn resolve_bearer_token(
     server_name: &str,
     bearer_token_env_var: Option<&str>,
+    credential_policy: McpCredentialPolicy,
 ) -> Result<Option<String>> {
     let Some(env_var) = bearer_token_env_var else {
         return Ok(None);
     };
+
+    if credential_policy == McpCredentialPolicy::ExecutorOnly {
+        return Err(anyhow!(
+            "MCP server '{server_name}' requires executor-side environment credential resolution; update the executor to a version that supports it (host fallback is disabled)"
+        ));
+    }
 
     match env::var(env_var) {
         Ok(value) => {
@@ -1167,6 +1178,23 @@ pub(crate) async fn make_rmcp_client(
     protocol_mode: McpProtocolMode,
 ) -> Result<RmcpClient, StartupOutcomeError> {
     let config = server.config().clone();
+    if server.credential_policy() == McpCredentialPolicy::ExecutorOnly {
+        // Executor HTTP declarations cannot acquire host header helpers through
+        // cached registration materialization.
+        let valid_transport = matches!(
+            &config.transport,
+            McpServerTransportConfig::StreamableHttp {
+                env_http_headers,
+                http_headers_helper: None,
+                ..
+            } if env_http_headers.as_ref().is_none_or(HashMap::is_empty)
+        );
+        if config.is_local_environment() || !valid_transport {
+            return Err(StartupOutcomeError::from(anyhow!(
+                "executor-discovered MCP server '{server_name}' requires a remote HTTP transport without host environment headers or helpers"
+            )));
+        }
+    }
     if matches!(config.auth, McpServerAuth::EmaAuth) {
         return Err(StartupOutcomeError::from(anyhow!(
             "EMA MCP connections are not enabled in this version"
@@ -1271,9 +1299,13 @@ pub(crate) async fn make_rmcp_client(
                     Some(StreamableHttpBearerToken::ProvidedByHttpClient),
                 )
             } else {
-                let token = resolve_bearer_token(server_name, bearer_token_env_var.as_deref())
-                    .map_err(StartupOutcomeError::from)?
-                    .map(StreamableHttpBearerToken::Resolved);
+                let token = resolve_bearer_token(
+                    server_name,
+                    bearer_token_env_var.as_deref(),
+                    server.credential_policy(),
+                )
+                .map_err(StartupOutcomeError::from)?
+                .map(StreamableHttpBearerToken::Resolved);
                 (http_client, token)
             };
             let redirect_mode = if server.is_agent_plugin() {
@@ -1476,3 +1508,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "rmcp_client_credential_policy_tests.rs"]
+mod credential_policy_tests;

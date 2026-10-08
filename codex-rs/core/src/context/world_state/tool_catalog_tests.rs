@@ -30,6 +30,7 @@ fn render(
 ) -> Option<String> {
     state
         .render_diff(previous)
+        .1
         .map(|fragment| fragment.render())
 }
 

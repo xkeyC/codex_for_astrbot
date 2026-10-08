@@ -683,7 +683,7 @@ impl LocalInfraConversation {
         if let Some(turn) = self.turn.take().filter(|_| !self.compacting)
             && let Some(sess) = self.sess.upgrade()
         {
-            sess.abort_turn_if_active(&turn, TurnAbortReason::Interrupted)
+            sess.abort_turn_if_active(&turn, TurnAbortReason::Interrupted, /*error*/ None)
                 .await;
         }
         // The writer ends once what was sent (a session.stop) is out.
@@ -892,7 +892,7 @@ impl LocalInfraConversation {
         };
         if let Some(turn) = self.turn.take() {
             // Only this conversation's own turn (another may have started).
-            sess.abort_turn_if_active(&turn, TurnAbortReason::Interrupted)
+            sess.abort_turn_if_active(&turn, TurnAbortReason::Interrupted, /*error*/ None)
                 .await;
             self.compacting = false;
         }
@@ -1207,7 +1207,8 @@ impl LocalInfraConversation {
         let Some(turn) = self.turn.clone().filter(|_| !text.is_empty()) else {
             return;
         };
-        self.open_responses.insert(item_id.to_string(), turn.clone());
+        self.open_responses
+            .insert(item_id.to_string(), turn.clone());
         if let Some(heard) = self.answer_heard_at.take() {
             // The model's first words of the reply (the turn's LLM time).
             info!(after_ms = heard.elapsed().as_millis() as u64, turn = %turn, "local-infra voice reply's first text");

@@ -52,6 +52,7 @@ pub(crate) fn is_default_proxy_bypass_host(host: &str) -> bool {
     }
 }
 
+/// Classifies IP literals excluded from public network destinations; does not resolve DNS.
 pub fn is_non_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_non_public_ipv4(ip),
@@ -88,6 +89,18 @@ fn ipv4_in_cidr(ip: Ipv4Addr, base: [u8; 4], prefix: u8) -> bool {
         u32::MAX << (32 - prefix)
     };
     (ip & mask) == (base & mask)
+}
+
+/// Private unicast ranges that may be reachable through an upstream VPN proxy.
+/// Loopback, link-local, and other special-use addresses retain their normal routing.
+pub(crate) fn is_private_network_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_private() || ipv4_in_cidr(ip, [100, 64, 0, 0], /*prefix*/ 10),
+        IpAddr::V6(ip) => match ip.to_ipv4() {
+            Some(ip) => is_private_network_ip(IpAddr::V4(ip)),
+            None => ip.is_unique_local(),
+        },
+    }
 }
 
 fn is_non_public_ipv6(ip: Ipv6Addr) -> bool {

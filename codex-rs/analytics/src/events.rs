@@ -400,6 +400,7 @@ pub enum GuardianReviewedAction {
 
 #[derive(Clone, Serialize)]
 pub struct GuardianReviewEventParams {
+    pub guardian_context_mode: Option<&'static str>,
     pub thread_id: String,
     pub turn_id: String,
     pub review_id: String,
@@ -479,6 +480,7 @@ impl GuardianReviewTrackContext {
         completed_at_ms: u64,
     ) -> GuardianReviewEventParams {
         GuardianReviewEventParams {
+            guardian_context_mode: result.guardian_context_mode,
             thread_id: self.thread_id.clone(),
             turn_id: self.turn_id.clone(),
             review_id: self.review_id.clone(),
@@ -531,6 +533,7 @@ impl GuardianReviewTrackContext {
 
 #[derive(Debug)]
 pub struct GuardianReviewAnalyticsResult {
+    pub guardian_context_mode: Option<&'static str>,
     pub decision: GuardianReviewDecision,
     pub terminal_status: GuardianReviewTerminalStatus,
     pub failure_reason: Option<GuardianReviewFailureReason>,
@@ -556,6 +559,7 @@ pub struct GuardianReviewAnalyticsResult {
 impl GuardianReviewAnalyticsResult {
     pub fn without_session() -> Self {
         Self {
+            guardian_context_mode: None,
             decision: GuardianReviewDecision::Denied,
             terminal_status: GuardianReviewTerminalStatus::FailedClosed,
             failure_reason: None,
@@ -1025,6 +1029,7 @@ pub(crate) struct CodexCompactionEventParams {
     pub(crate) status: CompactionStatus,
     pub(crate) codex_error_kind: Option<CodexErrKind>,
     pub(crate) codex_error_http_status_code: Option<u16>,
+    pub(crate) usage_limit_window_minutes: Option<u16>,
     pub(crate) active_context_tokens_before: i64,
     pub(crate) active_context_tokens_after: i64,
     pub(crate) retained_image_count: Option<usize>,
@@ -1110,6 +1115,8 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) turn_error: Option<CodexErrorInfo>,
     pub(crate) codex_error_kind: Option<CodexErrKind>,
     pub(crate) codex_error_http_status_code: Option<u16>,
+    /// The server-selected window responsible for a usage limit, when known.
+    pub(crate) usage_limit_window_minutes: Option<u16>,
     pub(crate) steer_count: Option<usize>,
     pub(crate) total_tool_call_count: Option<usize>,
     pub(crate) shell_command_count: Option<usize>,
@@ -1389,6 +1396,7 @@ pub(crate) fn codex_compaction_event_params(
         status: input.status,
         codex_error_kind: input.codex_error_kind,
         codex_error_http_status_code: input.codex_error_http_status_code,
+        usage_limit_window_minutes: input.usage_limit_window_minutes,
         active_context_tokens_before: input.active_context_tokens_before,
         active_context_tokens_after: input.active_context_tokens_after,
         retained_image_count: input.retained_image_count,

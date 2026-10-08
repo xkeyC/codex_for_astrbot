@@ -158,7 +158,6 @@ use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -337,6 +336,7 @@ mod backend_banners;
 mod compaction;
 mod luna_reserve_model;
 mod luna_reserve_return;
+mod security_setup;
 pub(crate) use backend_banners::AutomaticModelSwitchReason;
 mod protocol;
 mod protocol_requests;
@@ -403,6 +403,7 @@ use self::turn_lifecycle::TurnLifecycleState;
 mod usage;
 mod user_messages;
 mod working_directory;
+use self::user_messages::MessageDelivery;
 use self::user_messages::PendingSteer;
 #[cfg(test)]
 use self::user_messages::PendingSteerCompareKey;
@@ -514,7 +515,7 @@ pub(crate) enum ExternalEditorState {
 pub(crate) struct ChatWidget {
     pub(crate) empty_state_animation:
         std::cell::RefCell<crate::empty_state_animation::EmptyStateAnimation>,
-    pub(crate) cyber_policy_notice: crate::daybreak::NoticeCache,
+    pub(crate) daybreak_enabled: bool,
     app_event_tx: AppEventSender,
     codex_op_target: CodexOpTarget,
     bottom_pane: BottomPane,
@@ -574,11 +575,15 @@ pub(crate) struct ChatWidget {
     clock_format: crate::clock_format::ClockFormat,
     usage_notice_state: usage_notice::UsageNoticeState,
     backend_banner_state: backend_banners::BackendBannerState,
+    pub(crate) security_setup_request_id: uuid::Uuid,
+    security_setup_presented: bool,
+    security_setup_identity: Option<crate::security_setup::Identity>,
+    security_setup_dismissed: bool,
     automatic_model_switch_state: backend_banners::AutomaticModelSwitchState,
     backend_banner_notice_model: Option<String>,
     // Remember the account's Reserve entry notice across chats and transient banner refreshes.
     luna_reserve_notice_account_id: Option<String>,
-    warning_display_state: WarningDisplayState,
+    pub(crate) warning_display_state: WarningDisplayState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     add_credits_nudge_email_in_flight: Option<rate_limits::PendingCreditsNudge>,
     adaptive_chunking: AdaptiveChunkingPolicy,
@@ -1351,6 +1356,14 @@ impl ChatWidget {
         {
             self.on_user_message_display(display);
         }
+        if let Some(client_id) = client_id
+            && self.input_queue.queued_user_messages.iter().any(|message| {
+                matches!(&message.delivery, MessageDelivery::Unconfirmed(Some(id)) if id == client_id)
+            })
+        {
+            self.reconcile_recovered_messages(&[client_id.to_string()]);
+            self.maybe_send_next_queued_input();
+        }
     }
 
     fn on_user_message_display(&mut self, display: UserMessageDisplay) {
@@ -1482,13 +1495,10 @@ impl ChatWidget {
 
     /// Build a placeholder header cell while the session is configuring.
     fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
-        let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
         Box::new(
-            history_cell::SessionHeaderHistoryCell::new_with_style(
+            history_cell::SessionHeaderHistoryCell::new(
                 DEFAULT_MODEL_DISPLAY_NAME.to_string(),
-                placeholder_style,
                 /*reasoning_effort*/ None,
-                /*show_fast_status*/ false,
                 config.cwd.to_path_buf(),
                 CODEX_CLI_VERSION,
             )

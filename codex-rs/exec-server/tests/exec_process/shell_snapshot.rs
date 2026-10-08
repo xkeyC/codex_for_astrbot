@@ -9,11 +9,91 @@ enum SnapshotSandbox {
     DenyFdPath,
 }
 
+pub(super) struct StartupProcesses(pub(super) std::path::PathBuf);
+
+impl Drop for StartupProcesses {
+    fn drop(&mut self) {
+        if let Ok(contents) = std::fs::read_to_string(&self.0) {
+            for pid in contents
+                .split_whitespace()
+                .filter_map(|pid| pid.parse::<i32>().ok())
+            {
+                if pid > 0 {
+                    // SAFETY: these PIDs were written by our startup profile.
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                }
+            }
+        }
+    }
+}
+
+#[test_case("bash"; "bash")]
+#[cfg_attr(target_os = "macos", test_case("zsh"; "zsh"))]
+#[tokio::test]
+async fn shell_snapshot_preserves_successful_startup_output_and_services(
+    shell: &str,
+) -> Result<()> {
+    let context = create_process_context(/*use_remote*/ false).await?;
+    let home = TempDir::new()?;
+    let _service = StartupProcesses(home.path().join("service-pid"));
+    std::fs::write(
+        home.path().join(format!(".{shell}rc")),
+        "printf x >> \"$HOME/captures\"\n/bin/sleep 30 >/dev/null 2>&1 &\nexport SNAPSHOT_SERVICE_PID=$!\nprintf '%s' \"$SNAPSHOT_SERVICE_PID\" > \"$HOME/service-pid\"\nexec > >(/bin/sleep 0.2; /bin/cat)\nprofile_helper() { printf 'captured:%s' \"$1\"; }\n",
+    )?;
+    for index in 0..2 {
+        let started = context
+            .backend
+            .start(ExecParams {
+                metadata: Default::default(),
+                process_id: format!("startup-capture-{index}").into(),
+                argv: vec![
+                    format!("/bin/{shell}"),
+                    "-lc".to_string(),
+                    format!(
+                        "[ \"$SNAPSHOT_SERVICE_PID\" = \"$(/bin/cat \"$HOME/service-pid\")\" ] || exit 41\ncase \"$(/bin/ps -o stat= -p \"$SNAPSHOT_SERVICE_PID\")\" in ''|*Z*) exit 42;; esac\nprofile_helper {index}"
+                    ),
+                ],
+                cwd: PathUri::from_host_native_path(home.path())?,
+                env: HashMap::from([
+                    (
+                        "HOME".to_string(),
+                        home.path().to_string_lossy().into_owned(),
+                    ),
+                    ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+                ]),
+                env_policy: None,
+                shell_snapshot: Some(ShellSnapshotRequest {
+                    scope_id: "startup-capture".to_string(),
+                    shell: ShellInfo {
+                        name: shell.to_string(),
+                        path: format!("/bin/{shell}"),
+                    },
+                }),
+                tty: false,
+                pipe_stdin: false,
+                arg0: Some("codex-linux-sandbox".to_string()),
+                sandbox: None,
+                enforce_managed_network: false,
+                managed_network: None,
+                network_proxy: None,
+            })
+            .await?;
+        assert_eq!(
+            collect_process_output_from_events(started.process).await?,
+            (format!("captured:{index}"), String::new(), Some(0), true)
+        );
+    }
+    assert_eq!(std::fs::read_to_string(home.path().join("captures"))?, "x");
+    Ok(())
+}
+
 #[test_case("bash", false, SnapshotSandbox::None; "bash")]
 #[test_case("bash", true, SnapshotSandbox::None; "bash_tty")]
 #[cfg_attr(target_os = "macos", test_case("zsh", false, SnapshotSandbox::None; "zsh"))]
 #[cfg_attr(target_os = "macos", test_case("zsh", true, SnapshotSandbox::None; "zsh_tty"))]
 #[test_case("bash", false, SnapshotSandbox::DenyFdPath; "blocked_descriptor_path")]
+#[cfg_attr(target_os = "macos", test_case("zsh", false, SnapshotSandbox::DenyFdPath; "zsh_blocked_descriptor_path"))]
+#[cfg_attr(target_os = "macos", test_case("zsh", true, SnapshotSandbox::DenyFdPath; "zsh_blocked_descriptor_path_tty"))]
 #[test_case("bash", false, SnapshotSandbox::WorkspaceWrite; "bash_protected_transport")]
 #[test_case("bash", true, SnapshotSandbox::WorkspaceWrite; "bash_protected_transport_tty")]
 #[cfg_attr(target_os = "macos", test_case("zsh", false, SnapshotSandbox::WorkspaceWrite; "zsh_protected_transport"))]
@@ -38,7 +118,7 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
         let (exe, linux_sandbox) = current_test_binary_helper_paths()?;
         let environment = Environment::create(
             /*exec_server_url*/ None,
-            codex_exec_server::ExecServerRuntimePaths::new(exe, linux_sandbox)?,
+            codex_exec_server::ExecServerRuntimeOptions::new(exe, linux_sandbox)?,
             codex_http_client::HttpClientFactory::new(
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
@@ -66,10 +146,15 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
     } else {
         format!("case \"{source}\" in /dev/fd/*) ;; *) return 42 ;; esac; ")
     };
+    let aliases = if shell == "zsh" {
+        "module_path=()\nsetopt RC_QUOTES\nalias snapshot_quoted=\"printf '%s|' 'one''two'\"\nalias eval='exit 44'\nalias case='exit 45'\n"
+    } else {
+        ""
+    };
     std::fs::write(
         home.path().join(format!(".{shell}rc")),
         format!(
-            "printf x >> \"$HOME/captures\"\nprofile_helper() {{ {source_check}local payload='{payload}'; [ \"${{#payload}}\" = {payload_len} ] || return 43; printf 'restored:%s' \"$1\"; }}\nexec() {{ exit 41; }}\nset -u\n"
+            "printf x >> \"$HOME/captures\"\nprofile_helper() {{ {source_check}local payload='{payload}'; [ \"${{#payload}}\" = {payload_len} ] || return 43; printf 'restored:%s' \"$1\"; }}\nexec() {{ exit 41; }}\nset -u\n{aliases}"
         ),
     )?;
     let protected_file =
@@ -81,7 +166,13 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
     } else {
         ""
     };
-    let command = format!("{command}IFS= read -r line; profile_helper \"$line\"; exit 7");
+    let replay_checks = if shell == "zsh" {
+        "eval snapshot_quoted\n[[ -o rcquotes ]] || exit 46\n"
+    } else {
+        ""
+    };
+    let command =
+        format!("{command}IFS= read -r line\n{replay_checks}profile_helper \"$line\"; exit 7");
     let sandbox = if use_sandbox {
         let mut policy = FileSystemSandboxPolicy::read_only();
         policy.entries.push(FileSystemSandboxEntry::new(
@@ -161,6 +252,12 @@ async fn shell_snapshot_concurrent_replays_keep_independent_readers(
                 output.ends_with(&format!("restored:input-{index}")),
                 "{output:?}"
             );
+            if shell == "zsh" {
+                assert!(
+                    output.ends_with(&format!("one'two|restored:input-{index}")),
+                    "{output:?}"
+                );
+            }
             assert_eq!((errors, status, closed), (String::new(), Some(7), true));
             Ok::<_, anyhow::Error>(())
         }

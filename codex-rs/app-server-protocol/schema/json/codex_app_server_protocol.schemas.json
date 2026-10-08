@@ -4843,6 +4843,26 @@
           "properties": {
             "method": {
               "enum": [
+                "thread/prediction/updated"
+              ],
+              "title": "Thread/prediction/updatedNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadPredictionUpdatedNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "Thread/prediction/updatedNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "thread/goal/cleared"
               ],
               "title": "Thread/goal/clearedNotificationMethod",
@@ -8405,8 +8425,7 @@
         "type": "string"
       },
       "CodexErrorInfo": {
-        "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
-        "oneOf": [
+        "anyOf": [
           {
             "enum": [
               "contextWindowExceeded",
@@ -8417,6 +8436,7 @@
               "serverOverloaded",
               "cyberPolicy",
               "misalignmentPolicyViolation",
+              "tooManyDenials",
               "internalServerError",
               "unauthorized",
               "badRequest",
@@ -8542,8 +8562,15 @@
             ],
             "title": "ActiveTurnNotSteerableCodexErrorInfo",
             "type": "object"
+          },
+          {
+            "type": [
+              "string",
+              "object"
+            ]
           }
-        ]
+        ],
+        "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant."
       },
       "CodexResponseHandoffMode": {
         "enum": [
@@ -10713,7 +10740,7 @@
         "type": "object"
       },
       "CyberAccessProgram": {
-        "description": "Requested cyber treatment for a ChatGPT-authenticated Codex turn. Authorization and model-tier restrictions remain server-owned.",
+        "description": "Requested cyber treatment for an OpenAI model turn. Authorization and model-tier restrictions remain server-owned.",
         "enum": [
           "standard",
           "daybreakBlue",
@@ -13940,6 +13967,13 @@
               "null"
             ]
           },
+          "serverName": {
+            "description": "Limit discovery to one server. With a thread ID, reuse that thread's MCP connection.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "threadId": {
             "type": [
               "string",
@@ -14832,6 +14866,13 @@
               "null"
             ]
           },
+          "loginId": {
+            "description": "Identifies the explicit login attempt. Older servers omit this field.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -14903,6 +14944,14 @@
         "properties": {
           "authorizationUrl": {
             "type": "string"
+          },
+          "loginId": {
+            "default": null,
+            "description": "Identifies this login attempt across the response and completion notification. Older servers omit this field; current servers always return it.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -21519,6 +21568,17 @@
       "ThreadGoalClearParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadGoalMutationOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Missing provenance does not supply user authorization."
+          },
           "threadId": {
             "type": "string"
           }
@@ -21585,6 +21645,14 @@
         "title": "ThreadGoalGetResponse",
         "type": "object"
       },
+      "ThreadGoalMutationOrigin": {
+        "description": "Distinguishes explicit user actions from automatic goal lifecycle mutations.",
+        "enum": [
+          "user",
+          "automatic"
+        ],
+        "type": "string"
+      },
       "ThreadGoalSetParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -21593,6 +21661,17 @@
               "string",
               "null"
             ]
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadGoalMutationOrigin"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Missing provenance does not supply user authorization."
           },
           "status": {
             "anyOf": [
@@ -22591,15 +22670,55 @@
         ],
         "type": "object"
       },
+      "ThreadItemsListAnchor": {
+        "description": "An exclusive item position within the requested visible turn.",
+        "oneOf": [
+          {
+            "properties": {
+              "itemId": {
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "item"
+                ],
+                "title": "ItemThreadItemsListAnchorType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "itemId",
+              "type"
+            ],
+            "title": "ItemThreadItemsListAnchor",
+            "type": "object"
+          }
+        ]
+      },
+      "ThreadItemsListCursor": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/definitions/v2/ThreadItemsListAnchor"
+          }
+        ],
+        "description": "Starting position for an item-history page."
+      },
       "ThreadItemsListParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "cursor": {
-            "description": "Opaque cursor to pass to the next call to continue after the last item.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ThreadItemsListCursor"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque continuation cursor or an exclusive item anchor in the requested visible turn. An item anchor requires a non-empty `turnId`; ascending (the default) returns items after it, and descending returns items before it. Continue with the returned string cursor."
           },
           "limit": {
             "description": "Optional item page size.",
@@ -22956,6 +23075,69 @@
           "threadId"
         ],
         "title": "ThreadNameUpdatedNotification",
+        "type": "object"
+      },
+      "ThreadPredictionResult": {
+        "oneOf": [
+          {
+            "properties": {
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "enum": [
+                  "completed"
+                ],
+                "title": "CompletedThreadPredictionResultType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "CompletedThreadPredictionResult",
+            "type": "object"
+          },
+          {
+            "properties": {
+              "type": {
+                "enum": [
+                  "failed"
+                ],
+                "title": "FailedThreadPredictionResultType",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "title": "FailedThreadPredictionResult",
+            "type": "object"
+          }
+        ]
+      },
+      "ThreadPredictionUpdatedNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "result": {
+            "$ref": "#/definitions/v2/ThreadPredictionResult"
+          },
+          "sourceTurnId": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "sourceTurnId",
+          "threadId"
+        ],
+        "title": "ThreadPredictionUpdatedNotification",
         "type": "object"
       },
       "ThreadProjectUpdatedNotification": {
@@ -25196,7 +25378,7 @@
                 "type": "null"
               }
             ],
-            "description": "Only populated when the Turn's status is failed."
+            "description": "Error associated with a failed or interrupted turn."
           },
           "id": {
             "description": "Identifier for this turn. Codex-generated turn IDs are UUIDv7.",

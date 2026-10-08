@@ -13,6 +13,7 @@ doctest = false
 workspace = true
 
 [dependencies]
+blake3 = { workspace = true }
 codex-analytics = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
@@ -32,7 +33,7 @@ schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 toml = { workspace = true }
 tracing = { workspace = true }
 

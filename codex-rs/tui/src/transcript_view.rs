@@ -86,6 +86,7 @@ struct VisibleRow {
 /// Shared scrolling and interaction state for compact and detailed transcript presentations.
 pub(crate) struct TranscriptView {
     pub(crate) copy_on_select: bool,
+    pub(crate) primary_selection: bool,
     position: Position,
     follow_control: follow_control::FollowControl,
     copy_feedback: Option<composer_gap::CopyFeedback>,
@@ -118,6 +119,7 @@ impl Default for TranscriptView {
     fn default() -> Self {
         Self {
             copy_on_select: false,
+            primary_selection: false,
             position: Position::Latest,
             follow_control: follow_control::FollowControl::default(),
             copy_feedback: None,
@@ -287,8 +289,12 @@ impl TranscriptView {
         expanded: bool,
         lines: impl FnOnce(u16) -> Option<ActivityTranscriptLines>,
     ) -> bool {
+        let shortcut = self
+            .disclosure
+            .keymap
+            .primary_hint(crate::keymap::KeymapContext::Global, "open_transcript");
         self.sync_live_layout(width, key, |width| {
-            lines(width).map(|lines| layout::activity_layout(lines, width, expanded))
+            lines(width).map(|lines| layout::activity_layout(lines, width, expanded, shortcut))
         })
     }
 

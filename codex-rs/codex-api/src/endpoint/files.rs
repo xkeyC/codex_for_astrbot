@@ -70,10 +70,8 @@ impl<T: HttpTransport> FilesClient<T> {
                 },
             )
             .await?;
-        let file: UploadedFile =
-            serde_json::from_slice(&resp.body).map_err(|err| ApiError::Stream(format!(
-                "unexpected files API answer: {err}"
-            )))?;
+        let file: UploadedFile = serde_json::from_slice(&resp.body)
+            .map_err(|err| ApiError::Stream(format!("unexpected files API answer: {err}")))?;
         Ok(file.id)
     }
 }

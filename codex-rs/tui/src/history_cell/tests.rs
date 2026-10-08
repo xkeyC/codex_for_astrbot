@@ -405,7 +405,7 @@ fn proposed_plan_cell_preserves_wrapped_table_web_links() {
 
 #[test]
 fn composite_cell_preserves_child_web_links() {
-    let destination = "https://chatgpt.com/codex/settings/usage";
+    let destination = "https://chatgpt.com/settings/usage";
     let cell = CompositeHistoryCell::new(vec![
         Box::new(PlainHistoryCell::new(vec![Line::from("/status")])),
         Box::new(WebHyperlinkHistoryCell::new(vec![Line::from(destination)])),
@@ -603,6 +603,7 @@ fn image_generation_call_renders_saved_path() {
 
 fn session_configured_event(model: &str) -> ThreadSessionState {
     ThreadSessionState {
+        daybreak_enabled: false,
         windows_sandbox_host: crate::app::WindowsSandboxHost::Local,
         thread_id: ThreadId::new(),
         forked_from_id: None,
@@ -620,7 +621,6 @@ fn session_configured_event(model: &str) -> ThreadSessionState {
         instruction_source_paths: Vec::new(),
         reasoning_effort: None,
         collaboration_mode: None,
-        personality: None,
         message_history: None,
         network_proxy: None,
         rollout_path: Some(PathBuf::new()),
@@ -696,7 +696,7 @@ fn final_message_separator_preserves_runtime_metrics_for_short_turns() {
     let rendered = render_lines(&cell.display_lines(/*width*/ 600));
 
     assert_eq!(rendered.len(), 1);
-    assert!(rendered[0].starts_with("  Local tools:"));
+    assert!(rendered[0].starts_with("  Worked for 12s • Local tools:"));
     assert!(rendered[0].contains("Local tools: 3 calls (2.5s)"));
     assert!(rendered[0].contains("Inference: 2 calls (1.2s)"));
     assert!(rendered[0].contains("WebSocket: 1 events send (700ms)"));
@@ -747,7 +747,6 @@ async fn session_info_uses_availability_nux_tooltip_override() {
         /*is_first_event*/ false,
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -771,7 +770,6 @@ async fn session_info_availability_nux_tooltip_snapshot() {
         /*is_first_event*/ false,
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -793,7 +791,6 @@ async fn session_info_preserves_styled_tooltip_links() {
                 .to_string(),
         ),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let lines = cell.transcript_hyperlink_lines(/*width*/ 30);
@@ -843,7 +840,6 @@ async fn session_info_first_event_suppresses_tooltips_and_nux() {
         /*is_first_event*/ true,
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -864,7 +860,6 @@ async fn session_info_hides_tooltips_when_disabled() {
         /*is_first_event*/ false,
         Some("Model just became available".to_string()),
         Some(PlanType::Free),
-        /*show_fast_status*/ false,
     );
 
     let rendered = render_transcript(&cell).join("\n");
@@ -920,9 +915,17 @@ fn cyber_policy_error_event_astra_snapshot() {
 }
 
 #[test]
-fn cyber_policy_error_event_limited_snapshot() {
-    let cell = new_cyber_policy_error_event(crate::daybreak::Notice::Limited);
-    let rendered = render_lines(&cell.display_lines(/*width*/ 80)).join("\n");
+fn cyber_policy_error_event_available_snapshot() {
+    let rendered = [
+        crate::daybreak::Notice::Disabled,
+        crate::daybreak::Notice::Enabled,
+    ]
+    .into_iter()
+    .map(|notice| {
+        render_lines(&new_cyber_policy_error_event(notice).display_lines(/*width*/ 80)).join("\n")
+    })
+    .collect::<Vec<_>>()
+    .join("\n\n");
     insta::assert_snapshot!(rendered);
 }
 
@@ -1526,7 +1529,7 @@ fn code_mode_tool_call_uses_title_and_preserves_full_transcript() {
       └ 012345678901234567890123456789012345
         678901234567890123456789012345678901
         234567890123456789012345678901234567
-        +1 line (ctrl+t to view transcript)
+        +1 line (⌃t to view transcript)
 
     transcript:
     • Called node_repl.js({"title":"Inspect Spotify workspace","code":"await tools.exec_command({ cmd: 'git status' })"})
@@ -1850,52 +1853,11 @@ fn completed_mcp_tool_call_multiple_outputs_inline_snapshot() {
 }
 
 #[test]
-fn session_header_includes_reasoning_level_when_present() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-4o".to_string(),
-        Some(ReasoningEffortConfig::High),
-        /*show_fast_status*/ true,
-        std::env::temp_dir(),
-        "test",
-    );
-
-    let lines = render_lines(&cell.display_lines(/*width*/ 80));
-    let model_line = lines
-        .iter()
-        .find(|line| line.contains("model:"))
-        .expect("model line");
-
-    assert!(model_line.contains("gpt-4o high   fast"));
-    assert!(model_line.contains("/model to change"));
-}
-
-#[test]
-fn session_header_hides_fast_status_when_disabled() {
-    let cell = SessionHeaderHistoryCell::new(
-        "gpt-4o".to_string(),
-        Some(ReasoningEffortConfig::High),
-        /*show_fast_status*/ false,
-        std::env::temp_dir(),
-        "test",
-    );
-
-    let lines = render_lines(&cell.display_lines(/*width*/ 80));
-    let model_line = lines
-        .iter()
-        .find(|line| line.contains("model:"))
-        .expect("model line");
-
-    assert!(model_line.contains("gpt-4o high"));
-    assert!(!model_line.contains("fast"));
-}
-
-#[test]
 fn session_header_clamps_to_narrow_width() {
     const WIDTH: u16 = 44;
     let cell = SessionHeaderHistoryCell::new(
         "gpt-5.6-sol".to_string(),
         Some(ReasoningEffortConfig::XHigh),
-        /*show_fast_status*/ true,
         PathBuf::from("project"),
         "test",
     )
@@ -1904,7 +1866,7 @@ fn session_header_clamps_to_narrow_width() {
     let lines = cell.display_lines(WIDTH);
     let widths = lines.iter().map(line_width).collect::<Vec<_>>();
 
-    assert_eq!(widths, vec![usize::from(WIDTH); lines.len()]);
+    assert!(widths.iter().all(|width| *width <= usize::from(WIDTH)));
     insta::assert_snapshot!(render_lines(&lines).join("\n"));
 }
 
@@ -1917,7 +1879,6 @@ fn session_header_indicates_yolo_mode() {
     let cell = SessionHeaderHistoryCell::new(
         "gpt-5".to_string(),
         /*reasoning_effort*/ None,
-        /*show_fast_status*/ false,
         test_path_buf("/tmp/project").abs().to_path_buf(),
         "test",
     )
@@ -1928,30 +1889,10 @@ fn session_header_indicates_yolo_mode() {
 }
 
 #[test]
-fn session_header_aligns_halfwidth_sound_marks() {
-    let cell: Box<dyn HistoryCell> = Box::new(SessionHeaderHistoryCell::new(
-        "gpt-5-ｶﾞ-ﾊﾟ".to_string(),
-        /*reasoning_effort*/ None,
-        /*show_fast_status*/ false,
-        PathBuf::from("project"),
-        "test",
-    ));
-
-    let width = 80;
-    let height = cell.desired_height(width);
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    cell.render(area, &mut buf);
-
-    insta::assert_snapshot!("session_header_halfwidth_sound_marks", format!("{buf:?}"));
-}
-
-#[test]
 fn session_header_truncates_halfwidth_directory() {
     let cell: Box<dyn HistoryCell> = Box::new(SessionHeaderHistoryCell::new(
         "gpt-5".to_string(),
         /*reasoning_effort*/ None,
-        /*show_fast_status*/ false,
         PathBuf::from("ｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟｶﾞﾊﾟ-project"),
         "test",
     ));

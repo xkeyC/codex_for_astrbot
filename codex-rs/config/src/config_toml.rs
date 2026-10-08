@@ -3,6 +3,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::num::NonZeroUsize;
 use std::path::Path;
 
 use crate::HooksToml;
@@ -166,6 +167,8 @@ pub struct FeatureToggleToml {
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
+    /// Default Daybreak preference for new threads and non-interactive turns.
+    pub daybreak: Option<bool>,
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
@@ -588,12 +591,32 @@ pub enum ThreadStoreToml {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 pub struct AutoReviewToml {
+    /// Controls whether circuit-breaker interruptions include a structured error.
+    /// Strict mode writes structured errors that older clients may not
+    /// recognize when reading shared history. Defaults to `default`.
+    pub circuit_break_action: Option<CircuitBreakAction>,
     /// Additional policy instructions inserted into the guardian prompt.
     pub policy: Option<String>,
     /// Additional policy text inserted into the Guardian template's `{{ extra_policy }}` slot.
     pub extra_policy: Option<String>,
     /// Experimental full Guardian prompt template containing the tenant policy placeholder.
     pub experimental_policy_template: Option<String>,
+    /// Experimental replacement for the history-retrieval instructions when history tools
+    /// and Apps are enabled. Omitted or blank values use the built-in prompt.
+    pub experimental_conversation_history_prompt: Option<String>,
+    /// Maximum estimated tokens per Guardian history-tool response, before the standard
+    /// serialization allowance. Defaults to 4,000; stricter parent tool limits still apply.
+    pub conversation_history_max_output_tokens: Option<NonZeroUsize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CircuitBreakAction {
+    /// Emit the warning and interrupt without structured error details.
+    #[default]
+    Default,
+    /// Emit the same warning and interruption, with structured error details.
+    Strict,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
@@ -612,8 +635,27 @@ impl ProjectConfig {
     }
 }
 
+/// Selected microphone inputs. Scalars preserve existing single-channel configuration.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum MicrophoneChannels {
+    Single(std::num::NonZeroU16),
+    Multiple(Vec<std::num::NonZeroU16>),
+}
+
+impl MicrophoneChannels {
+    pub fn as_slice(&self) -> &[std::num::NonZeroU16] {
+        match self {
+            Self::Single(channel) => std::slice::from_ref(channel),
+            Self::Multiple(channels) => channels,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RealtimeAudioConfig {
+    /// One-based microphone channels to mix; unset mixes all input channels.
+    pub microphone_channel: Option<MicrophoneChannels>,
     pub microphone: Option<String>,
     pub speaker: Option<String>,
 }
@@ -678,6 +720,8 @@ pub struct RealtimeToml {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeAudioToml {
+    /// One-based microphone channels to mix; unset mixes all input channels.
+    pub microphone_channel: Option<MicrophoneChannels>,
     pub microphone: Option<String>,
     pub speaker: Option<String>,
 }

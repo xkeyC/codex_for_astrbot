@@ -485,6 +485,7 @@ use codex_thread_store::DeleteThreadsParams as StoreDeleteThreadsParams;
 use codex_thread_store::GitInfoPatch as StoreGitInfoPatch;
 use codex_thread_store::ItemSortKey as StoreItemSortKey;
 use codex_thread_store::ListItemsParams as StoreListItemsParams;
+use codex_thread_store::ListItemsPosition as StoreListItemsPosition;
 use codex_thread_store::ListThreadsParams as StoreListThreadsParams;
 use codex_thread_store::ListTimelineParams as StoreListTimelineParams;
 use codex_thread_store::ListTurnsParams as StoreListTurnsParams;
@@ -541,6 +542,9 @@ mod bedrock_auth;
 mod catalog_processor;
 mod command_exec_processor;
 mod config_processor;
+#[cfg(test)]
+#[path = "request_processors/config_reload_tests.rs"]
+mod config_reload_tests;
 mod diagnostics;
 mod environment_processor;
 mod feedback_doctor_report;

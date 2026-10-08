@@ -117,15 +117,20 @@ impl GuardianReviewEvidence {
         assessment: &GuardianAssessmentEvent,
         action: &str,
         authorization_version: GuardianAuthorizationVersion,
+        review_context_revision: u64,
         root_authorization_version: Option<GuardianAuthorizationVersion>,
+        root_review_context_revision: Option<u64>,
     ) {
         let Some(completed_at_ms) = assessment.completed_at_ms else {
             return;
         };
         let review = Arc::new(GuardianReviewEvidenceRecord {
+            delivery_id: codex_protocol::ResponseItemId::new("guardian_review"),
             completed_at_ms,
             authorization_version,
+            review_context_revision,
             root_authorization_version,
+            root_review_context_revision,
             correlation: json!({
                 "review_id": assessment.id,
                 "turn_id": assessment.turn_id,
@@ -166,8 +171,12 @@ impl GuardianReviewEvidence {
 /// Structured synchronous-review evidence retained for Guardian V2 classification.
 #[derive(Debug)]
 pub struct GuardianReviewEvidenceRecord {
+    /// Identifies this immutable completion even if the same action is reviewed again.
+    pub delivery_id: codex_protocol::ResponseItemId,
     pub authorization_version: GuardianAuthorizationVersion,
+    pub review_context_revision: u64,
     pub root_authorization_version: Option<GuardianAuthorizationVersion>,
+    pub root_review_context_revision: Option<u64>,
     completed_at_ms: i64,
     pub correlation: serde_json::Value,
     pub decision: serde_json::Value,
