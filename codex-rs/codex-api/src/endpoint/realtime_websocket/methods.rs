@@ -689,6 +689,7 @@ impl RealtimeWebsocketEvents {
             }
             RealtimeEvent::SessionUpdated { .. }
             | RealtimeEvent::InputWake(_)
+            | RealtimeEvent::InputDelivered(_)
             | RealtimeEvent::AudioOut(_)
             | RealtimeEvent::ResponseCancelled(_)
             | RealtimeEvent::ResponseDone(_)

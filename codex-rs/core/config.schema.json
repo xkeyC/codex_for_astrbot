@@ -2363,6 +2363,11 @@
         "url": {
           "description": "The server's realtime WebSocket, e.g. `ws://127.0.0.1:17890/v1/realtime`.",
           "type": "string"
+        },
+        "utc_offset_minutes": {
+          "description": "The time zone (its offset from UTC, in minutes) that heard lines are stamped with and `{now}` in the end instructions reads in; unset: the machine's own.",
+          "format": "int32",
+          "type": "integer"
         }
       },
       "type": "object"

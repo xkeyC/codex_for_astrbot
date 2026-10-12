@@ -6550,7 +6550,8 @@
         "developer",
         "assistant",
         "context",
-        "voice_session"
+        "voice_session",
+        "voice_event"
       ],
       "type": "string"
     },

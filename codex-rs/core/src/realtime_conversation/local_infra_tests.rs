@@ -32,6 +32,7 @@ fn harness(group: bool) -> Harness {
             open_responses: HashMap::new(),
             items: HashMap::new(),
             context: Vec::new(),
+            clock: Arc::new(|| "12:00:00".to_string()),
             cut_off: None,
             last_answered: None,
             last_relays: Vec::new(),
@@ -270,7 +271,8 @@ async fn the_next_input_carries_context_and_what_was_heard_of_a_cut_reply() {
         .await;
     assert_eq!(
         h.conversation.input_for("小乐，停一下"),
-        "(Said before this by others, not to you: 老王，吃饭去)\n\
+        "(Before this, not said to you:)\n\
+         [12:00:00] 老王，吃饭去\n\
          (Your last reply was cut off; the listener heard only: \"从前有座山，\")\n\
          小乐，停一下"
     );
@@ -468,7 +470,7 @@ async fn an_utterance_that_goes_on_replaces_its_context() {
         .await;
     assert_eq!(
         h.conversation.context,
-        vec![(4, "老王，吃饭去".to_string())]
+        vec![(Some(4), "[12:00:00] 老王，吃饭去".to_string())]
     );
 }
 
@@ -603,11 +605,20 @@ async fn voice_session_settings_go_to_the_server_as_they_are() {
 async fn an_answer_carries_the_last_nine_things_said_before_it() {
     let mut h = harness(/*group*/ true);
     for n in 0..12u64 {
-        h.conversation.keep_as_context(n, format!("s{n}"));
+        h.conversation.keep_as_context(Some(n), format!("s{n}"));
     }
     assert_eq!(
         h.conversation.input_for("Jarvis?"),
-        "(Said before this by others, not to you: s3 / s4 / s5 / s6 / s7 / s8 / s9 / s10 / s11)
+        "(Before this, not said to you:)
+s3
+s4
+s5
+s6
+s7
+s8
+s9
+s10
+s11
 Jarvis?"
     );
 }
@@ -615,20 +626,89 @@ Jarvis?"
 #[tokio::test]
 async fn context_already_given_is_not_given_again() {
     let mut h = harness(/*group*/ true);
-    h.conversation.keep_as_context(1, "s1".to_string());
-    h.conversation.keep_as_context(2, "s2".to_string());
+    h.conversation.keep_as_context(Some(1), "s1".to_string());
+    h.conversation.keep_as_context(Some(2), "s2".to_string());
     assert_eq!(
         h.conversation.input_for("Jarvis?"),
-        "(Said before this by others, not to you: s1 / s2)
+        "(Before this, not said to you:)
+s1
+s2
 Jarvis?"
     );
-    h.conversation.keep_as_context(3, "s3".to_string());
+    h.conversation.keep_as_context(Some(3), "s3".to_string());
     assert_eq!(
         h.conversation.input_for("Jarvis, again"),
-        "(Said before this by others, not to you: s3)
+        "(Before this, not said to you:)
+s3
 Jarvis, again"
     );
     assert_eq!(h.conversation.input_for("Jarvis!"), "Jarvis!");
+}
+
+#[test]
+fn the_local_time_is_in_the_configured_zone() {
+    assert_eq!(local_time(Some(480), "%:z"), "+08:00");
+    assert_eq!(local_time(Some(-150), "%:z"), "-02:30");
+    // Out of range, or unset: the machine's own zone.
+    let own = chrono::Local::now().format("%:z").to_string();
+    assert_eq!(local_time(Some(i32::MAX), "%:z"), own);
+    assert_eq!(local_time(None, "%:z"), own);
+}
+
+#[tokio::test]
+async fn heard_lines_are_read_with_their_time() {
+    let mut h = harness(/*group*/ true);
+    h.conversation
+        .server_event(
+            r#"{"type":"input.transcript","id":1,"text":"Alice: 吃饭去","respond":false}"#,
+        )
+        .await;
+    assert_eq!(
+        h.conversation.context,
+        vec![(Some(1), "[12:00:00] Alice: 吃饭去".to_string())]
+    );
+}
+
+#[tokio::test]
+async fn host_events_go_with_the_heard_lines_in_order_and_are_capped_apart() {
+    let mut h = harness(/*group*/ true);
+    h.conversation.keep_as_context(Some(1), "s1".to_string());
+    h.conversation
+        .keep_as_context(None, "[12:00:01] (Bob joined)".to_string());
+    h.conversation.keep_as_context(Some(2), "s2".to_string());
+    assert_eq!(
+        h.conversation.input_for("Jarvis?"),
+        "(Before this, not said to you:)
+s1
+[12:00:01] (Bob joined)
+s2
+Jarvis?"
+    );
+    // Events do not push heard lines out (nor the other way round).
+    for n in 0..12u64 {
+        h.conversation.keep_as_context(None, format!("e{n}"));
+    }
+    h.conversation.keep_as_context(Some(3), "s3".to_string());
+    let lines: Vec<&str> = h
+        .conversation
+        .context
+        .iter()
+        .map(|(_, line)| line.as_str())
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "e10", "e11", "s3"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn context_past_its_size_drops_the_oldest() {
+    let mut h = harness(/*group*/ true);
+    h.conversation.keep_as_context(Some(1), "a".repeat(1_500));
+    h.conversation.keep_as_context(Some(2), "b".repeat(1_500));
+    assert_eq!(h.conversation.context, vec![(Some(2), "b".repeat(1_500))]);
 }
 
 #[tokio::test]

@@ -159,7 +159,8 @@ impl RealtimeStartRequest {
     }
 }
 
-/// Parses `"user" | "developer" | "assistant" | "context" | "voice_session"`.
+/// Parses `"user" | "developer" | "assistant" | "context" | "voice_session" |
+/// "voice_event"`.
 pub fn parse_text_role(role: &str) -> Result<ConversationTextRole> {
     Ok(serde_json::from_value(serde_json::Value::from(role))?)
 }

@@ -24,13 +24,14 @@ pub(super) fn conversation_item_create_message(
         ConversationTextRole::User
         | ConversationTextRole::Developer
         | ConversationTextRole::Context
-        | ConversationTextRole::VoiceSession => ConversationContentType::InputText,
+        | ConversationTextRole::VoiceSession
+        | ConversationTextRole::VoiceEvent => ConversationContentType::InputText,
     };
     // A host's context is developer text here (only local_infra keeps it apart).
     let role = match role {
-        ConversationTextRole::Context | ConversationTextRole::VoiceSession => {
-            ConversationTextRole::Developer
-        }
+        ConversationTextRole::Context
+        | ConversationTextRole::VoiceSession
+        | ConversationTextRole::VoiceEvent => ConversationTextRole::Developer,
         role => role,
     };
 

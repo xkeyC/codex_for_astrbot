@@ -14,8 +14,13 @@
 //! a task's result, something to say first) is told in a turn of its own once
 //! nobody talks and the bot is quiet, or after `RELAY_WAIT` at the latest.
 //! Talk that wants no reply (in a group, others talking while the bot speaks)
-//! goes with the next input as context, as does what the listener actually
-//! heard of a reply that was cut off.
+//! goes with the next input as context, as do the host's events (someone came
+//! or went: `ConversationTextRole::VoiceEvent`) and what the listener actually
+//! heard of a reply that was cut off. Every heard line is read with its local
+//! time (`utc_offset_minutes`; the host words its events with theirs); what of
+//! them an input carried goes to the host
+//! (`RealtimeEvent::InputDelivered`), so it can keep a transcript of only what
+//! the model was given.
 //!
 //! The text goes to the server in whole words (an ASCII word still being
 //! written waits for what completes it). When the conversation ends, its end
@@ -34,6 +39,7 @@ use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::RealtimeConversationVersion;
 use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
+use codex_protocol::protocol::RealtimeInputDelivered;
 use codex_protocol::protocol::RealtimeInputWake;
 use codex_protocol::protocol::RealtimeResponseCancelled;
 use codex_protocol::protocol::RealtimeResponseDone;
@@ -115,7 +121,12 @@ const CONTINUES_NOTE: &str = "(The speaker went on; their words below are the wh
 /// Context lines (talk that wanted no reply) kept for the next input: with
 /// the utterance that wants the reply, the last ten heard.
 const MAX_CONTEXT_LINES: usize = 9;
-const MAX_CONTEXT_CHARS: usize = 2_000;
+/// The host's events kept for the next input (besides the heard lines).
+const MAX_EVENT_LINES: usize = 10;
+/// Both together, in characters (each line with its time).
+const MAX_CONTEXT_CHARS: usize = 2_500;
+/// Put before the context lines and events an input carries.
+const CONTEXT_NOTE: &str = "(Before this, not said to you:)";
 
 type InfraSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
@@ -291,6 +302,10 @@ pub(super) async fn handle_start(
         open_responses: HashMap::new(),
         items: HashMap::new(),
         context: Vec::new(),
+        clock: {
+            let offset = infra.utc_offset_minutes;
+            Arc::new(move || local_time(offset, "%H:%M:%S"))
+        },
         cut_off: None,
         last_answered: None,
         answer_heard_at: None,
@@ -379,6 +394,12 @@ pub(super) async fn handle_start(
 /// The conversation is over: its end goes into the thread now, with `{now}`
 /// in the host's end instructions read as the local time.
 async fn record_end(sess: &Arc<Session>) {
+    let offset = sess
+        .get_config()
+        .await
+        .realtime
+        .local_infra
+        .utc_offset_minutes;
     {
         let mut state = sess.conversation.state.lock().await;
         // Another call started meanwhile: the instructions are its own, and
@@ -391,17 +412,23 @@ async fn record_end(sess: &Arc<Session>) {
             .as_mut()
             .and_then(|instructions| instructions.end.as_mut())
         {
-            *end = end.replace("{now}", &local_time_now());
+            *end = end.replace("{now}", &local_time(offset, "%Y-%m-%d %H:%M (%A, UTC%:z)"));
         }
     }
     sess.record_local_voice_end().await;
 }
 
-/// The local time, as `2026-10-02 14:05 (Friday, UTC+08:00)`.
-fn local_time_now() -> String {
-    chrono::Local::now()
-        .format("%Y-%m-%d %H:%M (%A, UTC%:z)")
-        .to_string()
+/// The local time in `format`: in the zone `utc_offset_minutes` east of UTC,
+/// or the machine's own (also when that offset is out of range).
+fn local_time(utc_offset_minutes: Option<i32>, format: &str) -> String {
+    let now = chrono::Utc::now();
+    match utc_offset_minutes
+        .and_then(|minutes| minutes.checked_mul(60))
+        .and_then(chrono::FixedOffset::east_opt)
+    {
+        Some(offset) => now.with_timezone(&offset).format(format).to_string(),
+        None => now.with_timezone(&chrono::Local).format(format).to_string(),
+    }
 }
 
 /// Opens the server's WebSocket and asks for an audio mode session.
@@ -516,8 +543,11 @@ struct LocalInfraConversation {
     open_responses: HashMap<String, String>,
     /// The messages of the running turn being spoken, by item id.
     items: HashMap<String, SpokenItem>,
-    /// Talk that wanted no reply (with its utterance id), for the next input.
-    context: Vec<(u64, String)>,
+    /// Talk that wanted no reply (with its utterance id) and the host's
+    /// events (no id), each with its time, in order, for the next input.
+    context: Vec<(Option<u64>, String)>,
+    /// The local time of day that stamps a heard line (`local_time`).
+    clock: Arc<dyn Fn() -> String + Send + Sync>,
     /// What the listener heard of replies of the current turn cut off.
     cut_off: Option<String>,
     /// The id of the last utterance answered.
@@ -639,6 +669,13 @@ impl LocalInfraConversation {
                 text = text_rx.recv() => match text {
                     Ok(params) if params.role == ConversationTextRole::VoiceSession => {
                         self.update_session(&params.text);
+                        Step::Continue
+                    }
+                    // Worded by the host, with its time.
+                    Ok(params) if params.role == ConversationTextRole::VoiceEvent => {
+                        if !params.text.trim().is_empty() {
+                            self.keep_as_context(None, params.text);
+                        }
                         Step::Continue
                     }
                     Ok(params) if params.role == ConversationTextRole::Context => {
@@ -792,15 +829,16 @@ impl LocalInfraConversation {
                 // What it continues was said already: it goes from the context.
                 if let Some(replaced) = replaces {
                     self.context
-                        .retain(|(context_id, _)| *context_id != replaced);
+                        .retain(|(context_id, _)| *context_id != Some(replaced));
                 }
+                let line = format!("[{}] {text}", (self.clock)());
                 if respond {
                     let continues = replaces.is_some() && replaces == self.last_answered;
                     self.last_answered = id;
                     self.answer_heard_at = Some(Instant::now());
-                    self.answer(&text, continues).await;
+                    self.answer(&line, continues).await;
                 } else if self.group {
-                    self.keep_as_context(id.unwrap_or(u64::MAX), text);
+                    self.keep_as_context(Some(id.unwrap_or(u64::MAX)), line);
                 }
             }
             "input.wake" => {
@@ -932,13 +970,25 @@ impl LocalInfraConversation {
         let host_context = self.host_context.clone();
         let context = self.context.clone();
         let cut_off = self.cut_off.clone();
+        // What the model is given of the conversation, for the host.
+        let delivered: Vec<String> = context
+            .iter()
+            .map(|(_, line)| line.clone())
+            .chain(std::iter::once(text.to_string()))
+            .collect();
         let input = if continues {
             self.input_for(&format!("{CONTINUES_NOTE}\n{text}"))
         } else {
             self.input_for(text)
         };
         match self.start_turn(&sess, input).await {
-            Ok(()) => self.last_relays = relays,
+            Ok(()) => {
+                self.last_relays = relays;
+                self.emit(RealtimeEvent::InputDelivered(RealtimeInputDelivered {
+                    lines: delivered,
+                }))
+                .await;
+            }
             Err(err) => {
                 warn!("local-infra conversation: the turn did not start: {err}");
                 // Still to be told.
@@ -969,12 +1019,12 @@ impl LocalInfraConversation {
             self.waiting_since = None;
         }
         if !self.context.is_empty() {
-            let lines: Vec<&str> = self.context.iter().map(|(_, line)| line.as_str()).collect();
-            input.push_str(&format!(
-                "(Said before this by others, not to you: {})\n",
-                lines.join(" / ")
-            ));
-            self.context.clear();
+            input.push_str(CONTEXT_NOTE);
+            input.push('\n');
+            for (_, line) in self.context.drain(..) {
+                input.push_str(&line);
+                input.push('\n');
+            }
         }
         match self.cut_off.take() {
             Some(heard) if heard.trim().is_empty() => {
@@ -1003,10 +1053,32 @@ impl LocalInfraConversation {
         Ok(())
     }
 
-    fn keep_as_context(&mut self, id: u64, text: String) {
-        self.context.push((id, text));
-        while self.context.len() > MAX_CONTEXT_LINES
-            || self
+    /// Keeps a heard line (`id`: its utterance) or a host event (`None`)
+    /// for the next input: the newest `MAX_CONTEXT_LINES` heard lines and
+    /// `MAX_EVENT_LINES` events, `MAX_CONTEXT_CHARS` at most.
+    fn keep_as_context(&mut self, id: Option<u64>, line: String) {
+        let event = id.is_none();
+        let max = if event {
+            MAX_EVENT_LINES
+        } else {
+            MAX_CONTEXT_LINES
+        };
+        self.context.push((id, line));
+        let kept = self
+            .context
+            .iter()
+            .filter(|(id, _)| id.is_none() == event)
+            .count();
+        if kept > max
+            && let Some(oldest) = self
+                .context
+                .iter()
+                .position(|(id, _)| id.is_none() == event)
+        {
+            self.context.remove(oldest);
+        }
+        while !self.context.is_empty()
+            && self
                 .context
                 .iter()
                 .map(|(_, line)| line.chars().count())

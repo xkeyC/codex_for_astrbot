@@ -437,6 +437,16 @@ pub struct RealtimeInputWake {
     pub score: f32,
 }
 
+/// AstrBot: what of the conversation local_infra gave the voice thread with
+/// an input that started (or steered) a turn: the lines of heard speech and
+/// host events it carried, oldest first, the utterance answered last, each
+/// as the model read it (with its time). Heard speech never given (it wanted
+/// no reply and was dropped before any input took it) is in none of these.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeInputDelivered {
+    pub lines: Vec<String>,
+}
+
 // AstrBot: not `Eq`, for `InputWake`'s score.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub enum RealtimeEvent {
@@ -448,6 +458,7 @@ pub enum RealtimeEvent {
     InputTranscriptDelta(RealtimeTranscriptDelta),
     InputTranscriptDone(RealtimeTranscriptDone),
     InputWake(RealtimeInputWake),
+    InputDelivered(RealtimeInputDelivered),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
     OutputTranscriptDone(RealtimeTranscriptDone),
     AudioOut(RealtimeAudioFrame),
@@ -487,6 +498,10 @@ pub struct ConversationTextParams {
 // `VoiceSession` is a JSON object of local_infra voice server session settings
 // changed mid-conversation (e.g. `{"wake": false}` when only one person is
 // left to talk with); other backends ignore it.
+// `VoiceEvent` is something that happened in the conversation (someone came
+// or went, the bot joined), as the host words it (with its time): for
+// local_infra no turn of its own, it goes with the next input like talk that
+// wanted no reply; other backends take it as developer text.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
@@ -497,6 +512,7 @@ pub enum ConversationTextRole {
     Assistant,
     Context,
     VoiceSession,
+    VoiceEvent,
 }
 
 #[derive(Debug, Clone, PartialEq)]

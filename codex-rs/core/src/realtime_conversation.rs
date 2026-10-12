@@ -2693,6 +2693,7 @@ async fn handle_realtime_server_event(
         RealtimeEvent::InputTranscriptDelta(_)
         | RealtimeEvent::InputTranscriptDone(_)
         | RealtimeEvent::InputWake(_)
+        | RealtimeEvent::InputDelivered(_)
         | RealtimeEvent::OutputTranscriptDelta(_)
         | RealtimeEvent::OutputTranscriptDone(_)
         | RealtimeEvent::ConversationItemAdded(_)

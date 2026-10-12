@@ -16,6 +16,7 @@
 //! ref_audio_path = "/data/voice.wav"
 //! ref_text = "What the reference recording says."
 //! idle_compact_percent = 70
+//! utc_offset_minutes = 480
 //!
 //! [realtime.local_infra.session]
 //! name = "Xiaole"
@@ -67,4 +68,8 @@ pub struct LocalInfraRealtimeConfig {
     /// turn waits for it (0 or unset: only Codex's own compaction). After one
     /// the prompt must grow by a tenth of the window before the next.
     pub idle_compact_percent: Option<u8>,
+    /// The time zone (its offset from UTC, in minutes) that heard lines are
+    /// stamped with and `{now}` in the end instructions reads in; unset: the
+    /// machine's own.
+    pub utc_offset_minutes: Option<i32>,
 }

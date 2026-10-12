@@ -82,13 +82,14 @@ pub(super) fn session_json(
                         ConversationTextRole::User
                         | ConversationTextRole::Developer
                         | ConversationTextRole::Context
-                        | ConversationTextRole::VoiceSession => "input_text",
+                        | ConversationTextRole::VoiceSession
+                        | ConversationTextRole::VoiceEvent => "input_text",
                         ConversationTextRole::Assistant => "output_text",
                     };
                     let role = match item.role {
-                        ConversationTextRole::Context | ConversationTextRole::VoiceSession => {
-                            ConversationTextRole::Developer
-                        }
+                        ConversationTextRole::Context
+                        | ConversationTextRole::VoiceSession
+                        | ConversationTextRole::VoiceEvent => ConversationTextRole::Developer,
                         role => role,
                     };
                     json!({

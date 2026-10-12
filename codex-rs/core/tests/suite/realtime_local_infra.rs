@@ -5,8 +5,11 @@
 use anyhow::Result;
 use codex_config::realtime_local_infra::RealtimeBackend;
 use codex_protocol::protocol::ConversationStartParams;
+use codex_protocol::protocol::ConversationTextParams;
+use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeOutputModality;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketTestServer;
@@ -146,11 +149,13 @@ async fn what_the_server_hears_is_answered_by_a_turn_and_spoken() -> Result<()> 
         Some("Bearer infer-token".to_string())
     );
 
-    // The turn read what was heard, as a realtime turn.
+    // The turn read what was heard (with its time), as a realtime turn.
     let request = response_mock.single_request();
     let user_texts = request.message_input_texts("user");
     assert!(
-        user_texts.iter().any(|text| text == "what time is it"),
+        user_texts
+            .iter()
+            .any(|text| is_stamped(text, "what time is it")),
         "{user_texts:?}"
     );
     let metadata: Value = serde_json::from_str(
@@ -312,6 +317,124 @@ async fn a_hang_up_is_told_with_its_time_and_the_next_call_starts_anew() -> Resu
         developer.find("The voice call ended at").unwrap()
             < developer.rfind("A voice call started.").unwrap(),
         "{developer}"
+    );
+
+    voice_server.shutdown().await;
+    Ok(())
+}
+
+/// `line` is `[HH:MM:SS] ` and then `rest`.
+fn is_stamped(line: &str, rest: &str) -> bool {
+    let bytes = line.as_bytes();
+    line.len() == 11 + rest.len()
+        && line.ends_with(rest)
+        && bytes[0] == b'['
+        && bytes[9] == b']'
+        && bytes[10] == b' '
+        && [1, 2, 4, 5, 7, 8]
+            .iter()
+            .all(|i| bytes[*i].is_ascii_digit())
+        && bytes[3] == b':'
+        && bytes[6] == b':'
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn talk_and_host_events_before_an_utterance_go_with_it_and_the_host_hears_what_went()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "Noon."),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let voice_server = start_websocket_server(vec![vec![
+        // session.start
+        vec![
+            json!({"type": "session.started", "input_rate": 16000, "output_rate": 24000}),
+            json!({"type": "input.transcript", "id": 0, "text": "Alice: lunch?", "respond": false}),
+        ],
+        // session.update: the utterance that wants a reply comes after the event.
+        vec![json!({"type": "input.transcript", "id": 1, "text": "Carol: Xiaole, the time?", "respond": true})],
+        // response.delta, response.end
+        vec![],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let url = voice_server.uri().to_string();
+        move |config| {
+            config.realtime.backend = RealtimeBackend::LocalMultimodalInfra;
+            config.realtime.local_infra.url = Some(url);
+            let session = &mut config.realtime.local_infra.session;
+            session.insert("name".to_string(), json!("Xiaole"));
+            session.insert("group".to_string(), json!(true));
+        }
+    });
+    let test = builder.build(&api_server).await?;
+    test.codex
+        .submit(Op::RealtimeConversationStart(start_params()))
+        .await?;
+    wait_for_event(&test.codex, |msg| {
+        matches!(msg, EventMsg::RealtimeConversationStarted(_))
+    })
+    .await;
+    // Only the first line was heard so far.
+    wait_for_received(&voice_server, 1).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    test.codex
+        .submit(Op::RealtimeConversationText(ConversationTextParams {
+            text: "[11:59:59] (Bob joined the voice channel.)".to_string(),
+            role: ConversationTextRole::VoiceEvent,
+        }))
+        .await?;
+    test.codex
+        .submit(Op::RealtimeConversationText(ConversationTextParams {
+            text: json!({"wake": true}).to_string(),
+            role: ConversationTextRole::VoiceSession,
+        }))
+        .await?;
+
+    let delivered = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(event) => match &event.payload {
+            RealtimeEvent::InputDelivered(delivered) => Some(delivered.lines.clone()),
+            _ => None,
+        },
+        _ => None,
+    })
+    .await;
+    assert_eq!(delivered.len(), 3, "{delivered:?}");
+    assert!(is_stamped(&delivered[0], "Alice: lunch?"), "{delivered:?}");
+    // An event as the host worded it.
+    assert_eq!(delivered[1], "[11:59:59] (Bob joined the voice channel.)");
+    assert!(
+        is_stamped(&delivered[2], "Carol: Xiaole, the time?"),
+        "{delivered:?}"
+    );
+    // (The turn may have completed before this event reached the stream.)
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while response_mock.requests().is_empty() {
+        assert!(tokio::time::Instant::now() < deadline, "no model request");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // The turn read them all, in order, each once.
+    let request = response_mock.single_request();
+    let user_texts = request.message_input_texts("user");
+    let input = user_texts
+        .iter()
+        .find(|text| text.contains("Carol: Xiaole, the time?"))
+        .expect("the utterance's input");
+    assert_eq!(
+        *input,
+        format!("(Before this, not said to you:)\n{}", delivered.join("\n")),
+        "{user_texts:?}"
     );
 
     voice_server.shutdown().await;
