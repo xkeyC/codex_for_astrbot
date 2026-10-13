@@ -17,6 +17,7 @@
 //! ref_text = "What the reference recording says."
 //! idle_compact_percent = 70
 //! utc_offset_minutes = 480
+//! silence_tool = "stay_silent"
 //!
 //! [realtime.local_infra.session]
 //! name = "Xiaole"
@@ -72,4 +73,8 @@ pub struct LocalInfraRealtimeConfig {
     /// stamped with and `{now}` in the end instructions reads in; unset: the
     /// machine's own.
     pub utc_offset_minutes: Option<i32>,
+    /// A dynamic tool that silences the turn calling it: whatever the turn
+    /// wrote is not spoken (what is being spoken is cut off at once), even
+    /// words written before the call. Unset: no tool does.
+    pub silence_tool: Option<String>,
 }

@@ -2356,6 +2356,10 @@
           "description": "More `session.start` config fields, sent as they are (`name`, `aliases`, `group`, `tts_emotion`, `min_silence_ms`, ...). `mode` is always `audio`.",
           "type": "object"
         },
+        "silence_tool": {
+          "description": "A dynamic tool that silences the turn calling it: whatever the turn wrote is not spoken (what is being spoken is cut off at once), even words written before the call. Unset: no tool does.",
+          "type": "string"
+        },
         "token": {
           "description": "Bearer token (one of the server's `LOCAL_MCP_INFER_TOKENS`), if it asks for one.",
           "type": "string"

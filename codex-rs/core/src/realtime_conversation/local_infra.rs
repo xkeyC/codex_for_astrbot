@@ -22,6 +22,9 @@
 //! (`RealtimeEvent::InputDelivered`), so it can keep a transcript of only what
 //! the model was given.
 //!
+//! A turn that calls the `silence_tool` says nothing: its speech is cut off
+//! and nothing more of it is spoken, words it wrote before the call included.
+//!
 //! The text goes to the server in whole words (an ASCII word still being
 //! written waits for what completes it). When the conversation ends, its end
 //! goes into the thread at once (`{now}` in the host's end instructions reads
@@ -152,12 +155,18 @@ pub(super) enum TurnSignal {
         input: i64,
         window: Option<i64>,
     },
+    /// The turn called the `silence_tool`.
+    Silenced {
+        turn_id: String,
+    },
 }
 
 /// The session's side of a running local-infra conversation.
 #[derive(Clone)]
 pub(super) struct LocalInfraHandle {
     signals: Sender<TurnSignal>,
+    /// `realtime.local_infra.silence_tool`.
+    silence_tool: Option<String>,
 }
 
 impl RealtimeConversationManager {
@@ -201,6 +210,17 @@ impl RealtimeConversationManager {
                 input: info.last_token_usage.input_tokens,
                 window: info.model_context_window,
             }),
+            // As soon as it is called (its words came before it).
+            EventMsg::ItemStarted(event) => match &event.item {
+                TurnItem::DynamicToolCall(item)
+                    if handle.silence_tool.as_deref() == Some(item.tool.as_str()) =>
+                {
+                    Some(TurnSignal::Silenced {
+                        turn_id: event.turn_id.clone(),
+                    })
+                }
+                _ => None,
+            },
             _ => None,
         };
         if let Some(signal) = signal {
@@ -229,6 +249,10 @@ pub(super) async fn handle_start(
 ) -> CodexResult<()> {
     let config = sess.get_config().await;
     let infra = config.realtime.local_infra.clone();
+    let silence_tool = infra
+        .silence_tool
+        .clone()
+        .filter(|tool| !tool.trim().is_empty());
     let socket = match connect(&infra).await {
         Ok(socket) => socket,
         Err(message) => {
@@ -298,6 +322,7 @@ pub(super) async fn handle_start(
         turn: None,
         compacting: false,
         muted_turn: None,
+        silenced_turn: None,
         heard_since_cut: false,
         open_responses: HashMap::new(),
         items: HashMap::new(),
@@ -342,6 +367,7 @@ pub(super) async fn handle_start(
             stop_token,
             local_infra: Some(LocalInfraHandle {
                 signals: signals_tx,
+                silence_tool,
             }),
         });
         state.mode_instructions = Some(RealtimeModeInstructions {
@@ -537,6 +563,9 @@ struct LocalInfraConversation {
     /// it is spoken, unless the talk that cut it turns out to be no
     /// utterance (a cough, noise).
     muted_turn: Option<String>,
+    /// A turn that called the `silence_tool`: nothing of it is spoken, and
+    /// what was cut of it is not told to the next input.
+    silenced_turn: Option<String>,
     /// An utterance was heard since the last cut.
     heard_since_cut: bool,
     /// Responses given to the server and not done, with their turn.
@@ -888,7 +917,7 @@ impl LocalInfraConversation {
                 // What was heard of a cut reply goes with the next input, if
                 // it was the current turn's (a turn already replaced says it
                 // no longer).
-                if cut && turn.is_some() && turn == self.turn {
+                if cut && turn.is_some() && turn == self.turn && turn != self.silenced_turn {
                     let heard = self.cut_off.get_or_insert_with(String::new);
                     heard.push_str(&spoken);
                     // Talked over: nothing more of this turn is spoken (its
@@ -1211,9 +1240,23 @@ impl LocalInfraConversation {
                     }
                 }
             }
+            TurnSignal::Silenced { turn_id } => {
+                if !current(&self.turn, &turn_id) {
+                    return Step::Continue;
+                }
+                info!(turn = %turn_id, "local-infra voice turn silenced");
+                self.silenced_turn = Some(turn_id);
+                for item in self.items.values_mut() {
+                    item.silent = true;
+                }
+                if !self.open_responses.is_empty() {
+                    self.send(json!({"type": "response.cancel"}));
+                }
+            }
             TurnSignal::Delta { turn_id, .. } | TurnSignal::MessageDone { turn_id, .. }
                 if !current(&self.turn, &turn_id)
-                    || self.muted_turn.as_deref() == Some(turn_id.as_str()) => {}
+                    || self.muted_turn.as_deref() == Some(turn_id.as_str())
+                    || self.silenced_turn.as_deref() == Some(turn_id.as_str()) => {}
             TurnSignal::Delta { item_id, delta, .. } => {
                 let item = self.items.entry(item_id.clone()).or_default();
                 if item.silent {

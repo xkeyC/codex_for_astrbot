@@ -28,6 +28,7 @@ fn harness(group: bool) -> Harness {
             turn: Some("t1".to_string()),
             compacting: false,
             muted_turn: None,
+            silenced_turn: None,
             heard_since_cut: false,
             open_responses: HashMap::new(),
             items: HashMap::new(),
@@ -653,6 +654,49 @@ fn the_local_time_is_in_the_configured_zone() {
     let own = chrono::Local::now().format("%:z").to_string();
     assert_eq!(local_time(Some(i32::MAX), "%:z"), own);
     assert_eq!(local_time(None, "%:z"), own);
+}
+
+#[tokio::test]
+async fn a_turn_that_calls_the_silence_tool_says_nothing_more_and_its_cut_is_not_told() {
+    let mut h = harness(/*group*/ true);
+    h.delta("t1", "m1", "They are talking to each other, ")
+        .await;
+    assert_eq!(h.sent().len(), 1);
+    h.conversation
+        .turn_signal(TurnSignal::Silenced {
+            turn_id: "t1".to_string(),
+        })
+        .await;
+    // What is being spoken is cut off at once; nothing more of it goes.
+    assert_eq!(h.sent(), vec![json!({"type": "response.cancel"})]);
+    h.delta("t1", "m1", "so I stay quiet.").await;
+    h.done(
+        "t1",
+        "m1",
+        "They are talking to each other, so I stay quiet.",
+    )
+    .await;
+    h.delta("t1", "m2", "Really quiet.").await;
+    assert_eq!(h.sent(), Vec::<serde_json::Value>::new());
+    h.conversation
+        .server_event(
+            r#"{"type":"response.done","response_id":"m1","spoken":"They are","cut":true}"#,
+        )
+        .await;
+    assert_eq!(h.conversation.cut_off, None);
+    assert_eq!(h.conversation.input_for("next"), "next");
+}
+
+#[tokio::test]
+async fn silencing_another_turn_changes_nothing() {
+    let mut h = harness(/*group*/ true);
+    h.conversation
+        .turn_signal(TurnSignal::Silenced {
+            turn_id: "t0".to_string(),
+        })
+        .await;
+    h.delta("t1", "m1", "Hello there.").await;
+    assert_eq!(h.sent().len(), 1);
 }
 
 #[tokio::test]

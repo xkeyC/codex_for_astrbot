@@ -4,6 +4,11 @@
 
 use anyhow::Result;
 use codex_config::realtime_local_infra::RealtimeBackend;
+use codex_core::StartThreadOptions;
+use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
+use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
+use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ConversationTextRole;
@@ -436,6 +441,111 @@ async fn talk_and_host_events_before_an_utterance_go_with_it_and_the_host_hears_
         format!("(Before this, not said to you:)\n{}", delivered.join("\n")),
         "{user_texts:?}"
     );
+
+    voice_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_turn_calling_the_silence_tool_is_cut_off_and_asks_the_model_no_more() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let api_server = start_mock_server().await;
+    // Words, then the silence tool, in one response; only one response: a
+    // follow-up request would find nothing to answer it.
+    let response_mock = responses::mount_sse_once(
+        &api_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-1"),
+            responses::ev_assistant_message("msg-1", "They are talking to each other."),
+            responses::ev_function_call("silence-call", "stay_silent", "{}"),
+            responses::ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let voice_server = start_websocket_server(vec![vec![
+        // session.start
+        vec![
+            json!({"type": "session.started", "input_rate": 16000, "output_rate": 24000}),
+            json!({"type": "input.transcript", "id": 0, "text": "Bob: lunch?", "respond": true}),
+        ],
+        // response.delta, response.cancel, response.end: open for anything.
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let url = voice_server.uri().to_string();
+        move |config| {
+            config.realtime.backend = RealtimeBackend::LocalMultimodalInfra;
+            config.realtime.local_infra.url = Some(url);
+            config.realtime.local_infra.silence_tool = Some("stay_silent".to_string());
+            config
+                .realtime
+                .local_infra
+                .session
+                .insert("name".to_string(), json!("Xiaole"));
+        }
+    });
+    let base = builder.build(&api_server).await?;
+    let thread = base
+        .thread_manager
+        .start_thread(StartThreadOptions {
+            dynamic_tools: vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
+                name: "stay_silent".to_string(),
+                description: "Says nothing.".to_string(),
+                input_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
+                defer_loading: false,
+            })],
+            ..StartThreadOptions::new(base.config.clone())
+        })
+        .await?;
+    let codex = thread.thread;
+    codex
+        .submit(Op::RealtimeConversationStart(start_params()))
+        .await?;
+    let EventMsg::DynamicToolCallRequest(request) = wait_for_event(&codex, |event| {
+        matches!(event, EventMsg::DynamicToolCallRequest(_))
+    })
+    .await
+    else {
+        unreachable!("event guard guarantees DynamicToolCallRequest");
+    };
+    assert_eq!(request.tool, "stay_silent");
+    codex
+        .submit(Op::DynamicToolResponse {
+            id: request.call_id,
+            response: DynamicToolResponse {
+                content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                    text: "Silent.".to_string(),
+                }],
+                success: true,
+                end_turn: true,
+                speak: None,
+            },
+        })
+        .await?;
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    // What it had begun to say is cut off at once.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !received(&voice_server)
+        .iter()
+        .any(|message| message["type"] == "response.cancel")
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{:?}",
+            received(&voice_server)
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    // The turn ended with the call: the model was asked once.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(response_mock.requests().len(), 1);
 
     voice_server.shutdown().await;
     Ok(())
