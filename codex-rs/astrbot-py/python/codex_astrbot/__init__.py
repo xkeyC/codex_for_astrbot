@@ -1,8 +1,9 @@
 """In-process codex-core binding for AstrBot (codex_for_astrbot fork).
 
-Wheels built with ``bundle.py`` ship the helper executables Codex re-execs
-(``codex-code-mode-host`` for code mode, ``codex`` for sandboxed exec and
-memory consolidation) under ``bin/``; ``bundled_executable`` finds them.
+Installed wheels carry the helper executables Codex re-execs under ``bin/``
+(``codex-code-mode-host`` for code mode, and ``codex`` for native execution
+when built with ``CODEX_ASTRBOT_WITH_CODEX=1``); ``bundled_executable`` finds
+them.
 """
 
 from __future__ import annotations

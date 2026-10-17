@@ -193,7 +193,8 @@ impl Runtime {
         })
     }
 
-    /// `response_json`: `{"content_items": [...], "success": bool}`.
+    /// `response_json`: `{"content_items": [...], "success": bool}`, plus the
+    /// fork's optional `end_turn` / `speak` flags.
     fn dynamic_tool_response<'py>(
         &self,
         py: Python<'py>,

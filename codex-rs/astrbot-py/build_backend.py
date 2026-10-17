@@ -10,7 +10,7 @@ Environment switches (build time):
 - ``CODEX_ASTRBOT_SKIP_HOST=1``  skip the code-mode host. Code mode then needs
   ``code_mode_host`` to point at a host built from this same fork.
 - ``CODEX_ASTRBOT_WITH_CODEX=1`` also build the ``codex`` executable, needed
-  only for native command execution and memory consolidation.
+  only for Codex's own (native) command execution; AstrBot does not use it.
 - ``CODEX_ASTRBOT_DEBUG=1``      build the helpers with the dev profile.
 - ``CODEX_ASTRBOT_TARGET_DIR``   where compiled crates are kept between
   installs (default ``~/.cache/codex-astrbot/target``); ``CARGO_TARGET_DIR``
