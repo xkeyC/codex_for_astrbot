@@ -270,7 +270,16 @@ pub(super) async fn handle_start(
 
     let previous = sess.conversation.state.lock().await.conversation.take();
     if let Some(previous) = previous {
+        // As upstream's start: the replaced call's host hears it closed (its
+        // own fanout no longer can, the conversation was taken here).
+        let previous_sub_id = previous.sub_id.clone();
         stop_conversation_state(previous, RealtimeFanoutTaskStop::Await).await;
+        send_realtime_conversation_closed(
+            sess,
+            previous_sub_id,
+            RealtimeConversationEnd::Requested,
+        )
+        .await;
     }
 
     let (audio_tx, audio_rx) =
@@ -356,7 +365,8 @@ pub(super) async fn handle_start(
     {
         let mut state = sess.conversation.state.lock().await;
         state.conversation = Some(ConversationState {
-            session_id: None,
+            // A paired detach names it.
+            session_id: params.realtime_session_id.clone(),
             sub_id: sub_id.clone(),
             audio_tx,
             text_tx,
@@ -412,9 +422,9 @@ pub(super) async fn handle_start(
                 state.context_active = false;
             }
         }
-        if ended_here {
-            sess_clone.conversation.take_if_active(&fanout_active).await;
-        }
+        // A host close racing this end takes the conversation and sends
+        // the closed event itself: only one of them may.
+        let ended_here = ended_here && sess_clone.conversation.take_if_active(&fanout_active).await;
         // In a task of its own: a fanout task can be aborted.
         let recording = Arc::clone(&sess_clone);
         let _ = tokio::spawn(async move { record_end(&recording).await }).await;

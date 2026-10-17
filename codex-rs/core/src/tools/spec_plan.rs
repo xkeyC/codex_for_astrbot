@@ -1101,9 +1101,7 @@ fn register_code_mode_executors(
         exec_description = crate::tools::code_mode::execute_spec::compact_exec_description(
             &exec_description,
             turn_context.config.code_mode.default_exec_yield_time_ms,
-            tool_mode == ToolMode::CodeModeOnly,
             image_detail_visibility,
-            deferred_tool_discovery,
             model_messages.code_mode(),
         );
     }

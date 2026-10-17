@@ -843,8 +843,9 @@ impl RealtimeConversationManager {
     }
 
     /// AstrBot: stops the conversation if `realtime_active` is still its own,
-    /// without telling the host (local_infra records the end first).
-    pub(crate) async fn take_if_active(&self, realtime_active: &Arc<AtomicBool>) {
+    /// without telling the host (local_infra records the end first). Returns
+    /// whether it was: else a host's close took it and tells the host.
+    pub(crate) async fn take_if_active(&self, realtime_active: &Arc<AtomicBool>) -> bool {
         let state = {
             let mut guard = self.state.lock().await;
             match guard.conversation.as_ref() {
@@ -854,9 +855,11 @@ impl RealtimeConversationManager {
                 _ => None,
             }
         };
+        let took = state.is_some();
         if let Some(state) = state {
             stop_conversation_state(state, RealtimeFanoutTaskStop::Detach).await;
         }
+        took
     }
 
     #[expect(
@@ -2109,6 +2112,12 @@ pub(crate) async fn handle_attach(
     sub_id: String,
     params: ConversationStartParams,
 ) -> CodexResult<()> {
+    // AstrBot: the local backend starts its own way here too.
+    if sess.get_config().await.realtime.backend
+        == codex_config::realtime_local_infra::RealtimeBackend::LocalMultimodalInfra
+    {
+        return local_infra::handle_start(sess, sub_id, params).await;
+    }
     let prepared = prepare_realtime_start(sess, params).await?;
     handle_start_inner(sess, &sub_id, prepared).await
 }

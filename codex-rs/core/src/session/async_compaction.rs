@@ -43,8 +43,9 @@ pub(super) fn enabled(turn_context: &TurnContext) -> bool {
         .features
         .enabled(Feature::AsyncCompaction)
         && !turn_context.config.features.enabled(Feature::TokenBudget)
+        // Fork: the provider's compaction option (default: its capability).
         && matches!(
-            turn_context.provider.capabilities().remote_compaction,
+            crate::provider_compaction::remote_compaction_support(turn_context),
             RemoteCompactionSupport::V2
         )
 }

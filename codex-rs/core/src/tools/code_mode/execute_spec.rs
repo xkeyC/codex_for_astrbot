@@ -15,21 +15,19 @@ pub(crate) const COMPACT_EXEC_DESCRIPTION: &str = r#"Run JavaScript to call tool
 - Optional first line: `// @exec: {"yield_time_ms": 10000, "max_output_tokens": 10000}`. A script still running when it yields continues via `wait`.
 - Input is raw JavaScript source, not JSON or markdown fences."#;
 
-/// Replaces the generic template at the start of `description` with the compact text.
+/// Replaces the generic template at the start of `description` with the
+/// compact text; the deferred-tool guidance and tool sections after it stay.
 pub(crate) fn compact_exec_description(
     description: &str,
     default_exec_yield_time_ms: u64,
-    code_mode_only: bool,
     image_detail_visibility: ImageDetailVisibility,
-    deferred_tool_discovery: DeferredToolDiscovery,
     messages: Option<&CodeModeToolMessages>,
 ) -> String {
-    // The generic part only: no tools, no shared types. Code Mode Only
-    // describes the search tool on its own, so its guidance is the catalog's.
-    let deferred_tool_discovery = if code_mode_only {
-        DeferredToolDiscovery::Catalog
-    } else {
-        deferred_tool_discovery
+    // The generic section alone: no tools, no shared types, and the
+    // deferred-tool guidance (an empty override omits it) left in `rest`.
+    let messages = CodeModeToolMessages {
+        deferred_nested_tools_guidance: Some(String::new()),
+        ..messages.cloned().unwrap_or_default()
     };
     let template = codex_code_mode::build_exec_tool_description(
         &[],
@@ -38,9 +36,13 @@ pub(crate) fn compact_exec_description(
         default_exec_yield_time_ms,
         /*code_mode_only*/ false,
         image_detail_visibility,
-        deferred_tool_discovery,
-        messages,
+        DeferredToolDiscovery::Catalog,
+        Some(&messages),
     );
+    if template.is_empty() {
+        // A model that supplies no exec text has nothing to replace.
+        return description.to_string();
+    }
     match description.strip_prefix(template.as_str()) {
         Some(rest) => format!("{COMPACT_EXEC_DESCRIPTION}{rest}"),
         None => description.to_string(),
@@ -169,13 +171,19 @@ mod compact_description_tests {
             let compact = compact_exec_description(
                 &full,
                 codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
-                code_mode_only,
                 visibility,
-                discovery,
                 /*messages*/ None,
             );
             assert!(compact.starts_with(COMPACT_EXEC_DESCRIPTION));
             assert!(compact.contains("ALL_TOOLS"));
+            // The deferred-tool guidance stays.
+            assert!(
+                compact.contains("Tool availability can change between calls."),
+                "{code_mode_only} {discovery:?}"
+            );
+            if !code_mode_only && discovery == DeferredToolDiscovery::RankedSearch {
+                assert!(compact.contains(codex_code_mode::TOOL_SEARCH_GUIDANCE));
+            }
             assert!(
                 compact.len() < full.len() / 2,
                 "{} vs {}",
