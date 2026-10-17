@@ -10,6 +10,8 @@ const JPEG: &str = "data:image/jpeg;base64,AwQF";
 
 fn user_image(url: &str) -> ResponseItem {
     ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: "user".to_string(),
         content: vec![

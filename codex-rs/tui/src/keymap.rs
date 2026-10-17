@@ -34,6 +34,7 @@ use std::sync::Arc;
 
 mod bindings;
 mod chords;
+mod leader;
 mod vim_search;
 pub(crate) use vim_search::VimSearchKeymap;
 
@@ -52,6 +53,7 @@ mod global_find_tests;
 pub(crate) use bindings::KeymapActionId;
 pub(crate) use bindings::KeymapContext;
 pub(crate) use bindings::bindings_for_action;
+pub(crate) use bindings::configured_binding_for_action;
 pub(crate) use bindings::keymap_action_id;
 pub(crate) use bindings::keymap_action_ids;
 use bindings::runtime_action_bindings;
@@ -411,6 +413,13 @@ impl ListKeymap {
         .find(|action| self.bindings_for(*action).is_pressed(event))
     }
 
+    pub(crate) fn has_chord_prefix(&self, event: KeyEvent) -> bool {
+        self.chord_hints.bindings.iter().any(|binding| {
+            binding.action.context.overlaps(KeymapContext::List)
+                && binding.chord.prefix.is_press(event)
+        })
+    }
+
     pub(crate) fn primary_hint(&self, action: ListAction) -> Option<ShortcutHint> {
         let action_id = keymap_action_id(KeymapContext::List.config_name(), action.config_name())?;
         self.chord_hints
@@ -431,6 +440,7 @@ pub(crate) struct AgentsKeymap {
     pub(crate) archive: Vec<KeyBinding>,
     pub(crate) delete: Vec<KeyBinding>,
     pub(crate) hide: Vec<KeyBinding>,
+    pub(crate) toggle_pin: Vec<KeyBinding>,
     pub(crate) toggle_grouping: Vec<KeyBinding>,
     chord_hints: Arc<RuntimeChordKeymap>,
 }
@@ -644,13 +654,13 @@ impl RuntimeKeymap {
                     || configured_context_alias_is_used(&keymap.approval, alias)
             });
 
-        // Preserve existing Ctrl+X shortcuts and chord prefixes when adding this default.
+        // Voice mute yields to existing shortcuts and chord prefixes.
         let voice_mute_default_is_shadowed = keymap.chat.toggle_voice_mute.is_none()
-            && (configured_main_surface_alias_is_used(keymap, "ctrl-x")
+            && (configured_main_surface_alias_is_used(keymap, "f9")
+                || configured_context_alias_is_used(&keymap.vim_search, "f9")
                 || chords.bindings.iter().any(|binding| {
                     binding.action.context.overlaps(KeymapContext::Voice)
-                        && binding.chord.prefix.parts()
-                            == key_hint::ctrl(KeyCode::Char('x')).parts()
+                        && binding.chord.prefix.parts() == key_hint::plain(KeyCode::F(9)).parts()
                 }));
 
         // New activity defaults yield to existing custom keys and chord prefixes.
@@ -1360,6 +1370,7 @@ impl RuntimeKeymap {
             archive: resolve_local!(keymap, defaults, agents, archive),
             delete: resolve_local!(keymap, defaults, agents, delete),
             hide: resolve_local!(keymap, defaults, agents, hide),
+            toggle_pin: resolve_local!(keymap, defaults, agents, toggle_pin),
             toggle_grouping: resolve_local!(keymap, defaults, agents, toggle_grouping),
             chord_hints: Arc::clone(&chords),
         };
@@ -1379,6 +1390,7 @@ impl RuntimeKeymap {
             (keymap.agents.archive.as_ref(), &mut agents.archive),
             (keymap.agents.delete.as_ref(), &mut agents.delete),
             (keymap.agents.hide.as_ref(), &mut agents.hide),
+            (keymap.agents.toggle_pin.as_ref(), &mut agents.toggle_pin),
             (
                 keymap.agents.toggle_grouping.as_ref(),
                 &mut agents.toggle_grouping,
@@ -1545,6 +1557,7 @@ impl RuntimeKeymap {
             (keymap.agents.archive.as_ref(), &mut agents.archive),
             (keymap.agents.delete.as_ref(), &mut agents.delete),
             (keymap.agents.hide.as_ref(), &mut agents.hide),
+            (keymap.agents.toggle_pin.as_ref(), &mut agents.toggle_pin),
             (
                 keymap.agents.toggle_grouping.as_ref(),
                 &mut agents.toggle_grouping,
@@ -1657,7 +1670,7 @@ impl RuntimeKeymap {
             chords: Arc::default(),
             chat: ChatKeymap {
                 toggle_voice: default_bindings![plain(KeyCode::F(8))],
-                toggle_voice_mute: default_bindings![ctrl(KeyCode::Char('x'))],
+                toggle_voice_mute: default_bindings![plain(KeyCode::F(9))],
                 chord_hints: Arc::default(),
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
                 decrease_reasoning_effort: default_bindings![
@@ -1919,6 +1932,7 @@ impl RuntimeKeymap {
                 archive: default_bindings![plain(KeyCode::Char('a'))],
                 delete: default_bindings![plain(KeyCode::Backspace)],
                 hide: default_bindings![plain(KeyCode::Char('h'))],
+                toggle_pin: default_bindings![plain(KeyCode::Char('p'))],
                 toggle_grouping: default_bindings![plain(KeyCode::Char('g'))],
                 chord_hints: Arc::default(),
             },

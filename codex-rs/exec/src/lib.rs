@@ -594,14 +594,14 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         permission_profile: None,
         default_permissions: None,
         persisted_permission_profile_id: None,
+        persisted_permission_profile: None,
         cwd: resolved_cwd,
         workspace_roots: None,
         model_provider: model_provider.clone(),
         service_tier: None,
         codex_self_exe: arg0_paths.codex_self_exe.clone(),
         codex_linux_sandbox_exe: arg0_paths.codex_linux_sandbox_exe.clone(),
-        main_execve_wrapper_exe: arg0_paths.main_execve_wrapper_exe.clone(),
-        default_zsh_path: None,
+        main_execve_wrapper_exe: None,
         base_instructions: None,
         developer_instructions: None,
         personality: None,
@@ -1177,8 +1177,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
     if !json_mode
-        && let Some(message) =
-            codex_core::config::system_bwrap_warning(config.permissions.permission_profile())
+        && let Some(message) = codex_core::config::system_bwrap_warning(
+            &config.permissions.effective_permission_profile(),
+            &config.cwd,
+        )
     {
         event_processor.process_warning(message);
     }
@@ -1213,6 +1215,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 Some(program) => Some(program),
                 None if config.features.enabled(Feature::CliDaybreak) => {
                     daybreak::program_for_turn(
+                        &config.features,
                         &client,
                         &mut request_ids,
                         &session_configured.model,
@@ -1231,6 +1234,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                         disabled_plugin_ids: None,
                         thread_id: primary_thread_id_for_span.clone(),
                         turn_trigger: Some("exec".to_string()),
+                        parent_turn_id: None,
+                        root_turn_id: None,
                         client_user_message_id: None,
                         input: items.into_iter().map(Into::into).collect(),
                         tool_output: None,
@@ -1655,7 +1660,6 @@ fn session_configured_from_thread_response(
         active_permission_profile,
         cwd,
         reasoning_effort,
-        initial_messages: None,
         network_proxy: None,
         rollout_path,
     })
@@ -1862,6 +1866,7 @@ async fn resolve_resume_thread_id(
                 ClientRequest::ThreadList {
                     request_id: RequestId::Integer(0),
                     params: ThreadListParams {
+                        excluded_thread_ids: None,
                         originators: None,
                         cursor,
                         limit: Some(100),
@@ -1948,6 +1953,7 @@ async fn resolve_resume_thread_id(
             ClientRequest::ThreadList {
                 request_id: RequestId::Integer(0),
                 params: ThreadListParams {
+                    excluded_thread_ids: None,
                     originators: None,
                     cursor,
                     limit: Some(100),

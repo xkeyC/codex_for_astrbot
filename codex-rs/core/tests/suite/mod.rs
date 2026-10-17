@@ -58,6 +58,8 @@ mod auth_recovery_policy;
 mod auto_review;
 #[path = "bedrock_multi_agent_tests.rs"]
 mod bedrock_multi_agent;
+#[path = "bedrock_service_tier_tests.rs"]
+mod bedrock_service_tier;
 mod catalog_permission_messages;
 mod chat_wire;
 mod cli_stream;
@@ -80,6 +82,7 @@ mod cyber_exec_policy;
 mod daybreak_access;
 mod deprecation_notice;
 mod direct_tool_metadata;
+mod dynamic_tool_cancellation;
 mod dynamic_tool_end_turn;
 mod dynamic_tools_update;
 mod exec;
@@ -99,8 +102,11 @@ mod guardian_checkpoint_migration;
 // Uses the same command-approval harness as guardian_review below.
 mod canonical_plugin_connectors;
 mod gateway_auth;
+mod guardian_connector_trust;
 #[cfg(not(target_os = "windows"))]
 mod guardian_context_budget;
+#[path = "guardian_cyber_access_program_tests.rs"]
+mod guardian_cyber_access_program;
 mod guardian_history;
 mod guardian_mcp_elicitation;
 #[cfg(not(target_os = "windows"))]
@@ -120,6 +126,7 @@ mod hooks;
 mod hooks_executor;
 #[cfg(not(target_os = "windows"))]
 mod hooks_mcp;
+mod hooks_plugin_policy_refresh;
 mod image_rollout;
 mod injected_models_cache;
 #[cfg(not(target_os = "windows"))]
@@ -132,9 +139,10 @@ mod managed_threads;
 mod mcp_auth_elicitation;
 mod mcp_auth_refresh;
 mod mcp_ema_config;
+#[path = "mcp_executor_context_tests.rs"]
+mod mcp_executor_context;
 mod mcp_extension_protocol;
 mod mcp_optional_startup_grace;
-#[cfg(unix)]
 mod mcp_refresh_cleanup;
 mod mcp_startup_refresh_http_proxy;
 mod mcp_subagent_elicitation;
@@ -160,6 +168,7 @@ mod multi_exec_server_sandbox;
 mod network_approval;
 mod openai_file_mcp;
 mod otel;
+mod output_token_replay;
 mod override_updates;
 mod pending_input;
 mod pending_input_persistence;
@@ -170,6 +179,7 @@ mod prompt_cache_key;
 mod prompt_caching;
 mod prompt_debug_tests;
 mod quota_exceeded;
+mod realtime_attachment;
 mod realtime_conversation;
 mod realtime_initial_items;
 mod realtime_local_infra;
@@ -206,7 +216,6 @@ mod search_tool;
 mod settings_commits;
 mod settings_constraints;
 mod shell_snapshot;
-mod skill_approval;
 mod skills;
 mod skills_extension;
 mod spawn_agent_description;
@@ -216,6 +225,7 @@ mod step_settings;
 mod step_settings_snapshots;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
+mod subagent_dynamic_tools;
 mod subagent_notifications;
 mod subagent_service_tier;
 mod token_budget;
@@ -224,6 +234,7 @@ mod tool_catalog;
 mod tool_harness;
 mod tool_lifecycle;
 mod tool_parallelism;
+mod tool_registration_metrics;
 mod tools;
 mod truncation;
 #[path = "turn_error_details_tests.rs"]
@@ -240,19 +251,16 @@ mod unified_exec_mxc_powershell;
 mod unified_exec_process_events;
 mod unified_exec_stdin_approval;
 mod unified_exec_stdin_review_size;
-#[cfg(unix)]
-mod unified_exec_zsh_fork_approvals;
 mod unstable_features_warning;
 mod user_notification;
 mod user_shell_cmd;
 mod view_image;
+mod wake_reservation;
 mod web_search;
 #[path = "web_search_system_proxy_tests.rs"]
 mod web_search_system_proxy;
 mod websocket_fallback;
 mod window_headers;
-#[cfg(target_os = "windows")]
-mod windows_sandbox;
 mod workspace_roots;
 mod worktree_trust;
 

@@ -5,6 +5,8 @@
 //! events, keeps server metadata, and aggregates tools and resources across
 //! running RMCP clients.
 
+#[path = "connection_manager/catalog_telemetry.rs"]
+mod catalog_telemetry;
 #[path = "connection_manager/required.rs"]
 mod required;
 #[path = "connection_manager/resources.rs"]
@@ -134,6 +136,21 @@ impl McpServerConnection {
             startup_trigger.send_replace(true);
         }
         self.client.client().await
+    }
+
+    async fn client_for_call(&self) -> Result<ManagedClient, StartupOutcomeError> {
+        let result = self.client().await;
+        if matches!(result, Err(StartupOutcomeError::Failed { .. }))
+            && !self.client.cancel_token.is_cancelled()
+            && let Some(reconnect) = &self.client.startup_reconnect
+        {
+            if let Some(attempt) = reconnect.reconnect_in_background() {
+                return attempt.await;
+            }
+            // Recovery may have finished between reading the client and joining it.
+            return self.client().await;
+        }
+        result
     }
 
     async fn shutdown(&self) {
@@ -922,7 +939,8 @@ impl McpConnectionSet {
         let Some(view) = self.servers.get(server_name) else {
             return false;
         };
-        view.connection.client.ready_transport().is_some() || view.connection.client().await.is_ok()
+        view.connection.client.ready_transport().is_some()
+            || view.connection.client_for_call().await.is_ok()
     }
 
     /// Stop all MCP clients owned by this manager and terminate stdio server processes.

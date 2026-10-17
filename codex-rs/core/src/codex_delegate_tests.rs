@@ -4,6 +4,8 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
+use codex_protocol::capabilities::CapabilityRootLocation;
+use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentStatus;
@@ -14,6 +16,7 @@ use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnEnvironmentSelection;
 use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -51,6 +54,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
         .send(Event {
             id: "full".to_string(),
             msg: EventMsg::TurnAborted(TurnAbortedEvent {
+                root_turn_id: None,
                 turn_id: Some("turn-1".to_string()),
                 started_at: None,
                 reason: TurnAbortReason::Interrupted,
@@ -86,6 +90,7 @@ async fn forward_events_filters_private_events_before_blocked_send_is_cancelled(
     }
     let visible_msg = EventMsg::RawResponseItem(RawResponseItemEvent {
         item: ResponseItem::CustomToolCall {
+            encrypted_content: None,
             id: None,
             status: None,
             call_id: "call-1".to_string(),
@@ -187,38 +192,47 @@ async fn forward_ops_preserves_submission_trace_context() {
 
 #[tokio::test]
 async fn run_codex_thread_interactive_respects_pre_cancelled_spawn() {
-    let (parent_session, parent_ctx, _rx_events) =
-        crate::session::tests::make_session_and_context_with_rx().await;
-    let mut config = parent_ctx.config.as_ref().clone();
-    config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
-    let cancel_token = CancellationToken::new();
-    cancel_token.cancel();
-    let parent_environments = parent_ctx.initial_environments.clone();
+    for shutdown_requested in [false, true] {
+        let (parent_session, parent_ctx, _rx_events) =
+            crate::session::tests::make_session_and_context_with_rx().await;
+        if shutdown_requested {
+            parent_session
+                .services
+                .local_agent_runtime
+                .request_shutdown();
+        }
+        let mut config = parent_ctx.config.as_ref().clone();
+        config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
+        let cancel_token = CancellationToken::new();
+        cancel_token.cancel();
+        let parent_environments = parent_ctx.initial_environments.clone();
 
-    let result = timeout(
-        Duration::from_secs(/*secs*/ 1),
-        run_codex_thread_interactive(
-            config,
-            Arc::clone(&parent_session.services.auth_manager),
-            Arc::clone(&parent_session.services.models_manager),
-            parent_session,
-            parent_ctx,
-            parent_environments,
-            cancel_token,
-            SubAgentSource::Review,
-            codex_extension_api::SessionIsolation::Inherit,
-            /*initial_history*/ None,
-            crate::session::GitEnrichmentPolicy::Fresh,
-            codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
-        ),
-    )
-    .await
-    .expect("cancelled delegate spawn should not hang");
+        let result = timeout(
+            Duration::from_secs(/*secs*/ 1),
+            run_codex_thread_interactive(
+                config,
+                Arc::clone(&parent_session.services.auth_manager),
+                Arc::clone(&parent_session.services.models_manager),
+                parent_session,
+                parent_ctx,
+                parent_environments,
+                cancel_token,
+                SubAgentSource::Review,
+                codex_extension_api::SessionIsolation::Inherit,
+                /*initial_history*/ None,
+                crate::session::GitEnrichmentPolicy::Fresh,
+                codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,
+            ),
+        )
+        .await
+        .expect("cancelled delegate spawn should not hang");
 
-    assert!(matches!(
-        result,
-        Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted)
-    ));
+        let error = result.err().expect("cancelled delegate spawn should fail");
+        assert!(
+            matches!(error.details(), CodexErrorDetails::TurnAborted),
+            "unexpected cancelled delegate spawn error (shutdown_requested={shutdown_requested}): {error}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -303,8 +317,11 @@ async fn delegate_start_analytics_honors_child_opt_out_with_enabled_parent() {
 
 #[tokio::test]
 async fn delegate_isolation_does_not_depend_on_attribution() {
-    let (mut parent_session, parent_ctx, _rx_events) =
+    let (mut parent_session, mut parent_ctx, _rx_events) =
         crate::session::tests::make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut parent_ctx)
+        .expect("parent turn should be uniquely owned")
+        .disabled_plugin_ids = vec!["parent-root".to_string()];
     let thread_starts = Arc::new(AtomicUsize::new(0));
     let mut extensions = ExtensionRegistryBuilder::<Config>::new();
     extensions
@@ -313,6 +330,28 @@ async fn delegate_isolation_does_not_depend_on_attribution() {
         .expect("parent session should be uniquely owned")
         .services
         .extensions = Arc::new(extensions.build());
+
+    let selection = parent_ctx
+        .initial_environments
+        .inheritable_selections()
+        .into_iter()
+        .next()
+        .expect("parent environment");
+    let root = SelectedCapabilityRoot {
+        id: "parent-root".to_string(),
+        location: CapabilityRootLocation::Environment {
+            environment_id: selection.environment_id.clone(),
+            path: selection.cwd.clone(),
+        },
+    };
+    parent_session
+        .services
+        .turn_environments
+        .update_selections(&[TurnEnvironmentSelection::new(
+            selection.into_request(),
+            std::slice::from_ref(&root),
+        )]);
+    let parent_environments = parent_session.services.turn_environments.snapshot().await;
 
     for (subagent_source, isolation, expected_thread_starts, expected_thread_source) in [
         (
@@ -342,7 +381,7 @@ async fn delegate_isolation_does_not_depend_on_attribution() {
             Arc::clone(&parent_session.services.models_manager),
             Arc::clone(&parent_session),
             Arc::clone(&parent_ctx),
-            parent_ctx.initial_environments.clone(),
+            parent_environments.clone(),
             CancellationToken::new(),
             subagent_source,
             isolation,
@@ -365,6 +404,28 @@ async fn delegate_isolation_does_not_depend_on_attribution() {
         assert_eq!(
             session.thread_config_snapshot().await.thread_source,
             Some(expected_thread_source)
+        );
+        let expected_roots = match isolation {
+            codex_extension_api::SessionIsolation::Inherit => vec![root.clone()],
+            codex_extension_api::SessionIsolation::Isolated => Vec::new(),
+        };
+        assert_eq!(session.services.selected_capability_roots, expected_roots);
+        let expected_disabled_plugins = match isolation {
+            codex_extension_api::SessionIsolation::Inherit => vec!["parent-root".to_string()],
+            codex_extension_api::SessionIsolation::Isolated => Vec::new(),
+        };
+        assert_eq!(
+            session.thread_settings_snapshot().await.disabled_plugin_ids,
+            expected_disabled_plugins,
+        );
+        assert_eq!(
+            session
+                .services
+                .turn_environments
+                .snapshot()
+                .await
+                .selected_capability_roots(),
+            expected_roots,
         );
         io.shutdown_and_wait()
             .await

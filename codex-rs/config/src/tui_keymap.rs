@@ -134,6 +134,8 @@ impl KeybindingsSpec {
 #[serde(deny_unknown_fields)]
 #[schemars(deny_unknown_fields)]
 pub struct TuiGlobalKeymap {
+    /// Prefix for persistent, context-aware shortcut menus.
+    pub leader: Option<KeybindingsSpec>,
     /// Open the shared agent-session overview.
     pub open_agents: Option<KeybindingsSpec>,
     /// Open the transcript overlay.
@@ -503,6 +505,8 @@ pub struct TuiAgentsKeymap {
     pub delete: Option<KeybindingsSpec>,
     /// Hide the selected task until explicitly resumed or the TUI restarts.
     pub hide: Option<KeybindingsSpec>,
+    /// Pin or unpin the selected task in the shared sidebar section.
+    pub toggle_pin: Option<KeybindingsSpec>,
     /// Toggle grouping tasks by status or project.
     pub toggle_grouping: Option<KeybindingsSpec>,
 }
@@ -590,6 +594,17 @@ fn normalize_keybinding_spec(raw: &str) -> Result<String, String> {
             "invalid keybinding `{raw}`: key chords may contain at most \
 {MAX_KEY_CHORD_STROKES} strokes (for example `ctrl-x ctrl-s`)."
         ));
+    }
+
+    if strokes[0].eq_ignore_ascii_case("leader") {
+        let [_, completion] = strokes.as_slice() else {
+            return Err(format!(
+                "invalid keybinding `{raw}`: `leader` must be followed by one key \
+(for example `leader c`)."
+            ));
+        };
+        return normalize_keybinding_stroke(completion)
+            .map(|completion| format!("leader {completion}"));
     }
 
     strokes

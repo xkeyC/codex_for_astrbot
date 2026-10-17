@@ -31,7 +31,12 @@ fn render(
     state
         .render_diff(previous)
         .1
-        .map(|fragment| fragment.render())
+        .into_iter()
+        .next()
+        .map(|update| match update.content {
+            super::super::WorldStateUpdateContent::Fragment(fragment) => fragment.render(),
+            super::super::WorldStateUpdateContent::Item(_) => unreachable!("catalog renders text"),
+        })
 }
 
 #[test]

@@ -1398,17 +1398,6 @@ fn pnpm_update_available_history_cell_snapshot() {
 }
 
 #[test]
-fn vite_plus_update_available_history_cell_snapshot() {
-    let cell = UpdateAvailableHistoryCell::new(
-        "9.9.9".to_string(),
-        Some(UpdateAction::VitePlusGlobalLatest),
-    );
-    let rendered = render_lines(&cell.display_lines(/*width*/ 110)).join("\n");
-
-    insta::assert_snapshot!(rendered);
-}
-
-#[test]
 fn web_search_history_cell_without_detail_snapshot() {
     let cell = new_web_search_call("call-1".to_string(), String::new(), WebSearchAction::Other);
     let rendered = render_lines(&cell.display_lines(/*width*/ 64)).join("\n");
@@ -2974,6 +2963,18 @@ fn deprecation_notice_renders_summary_with_details() {
             "Use flag `bar` instead.".to_string(),
         ]
     );
+}
+
+#[test]
+fn legacy_zsh_migration_notice_snapshot() {
+    let mut features = codex_features::Features::default();
+    features.record_legacy_usage_force("shell_zsh_fork", codex_features::Feature::ShellZshFork);
+    let usage = features
+        .legacy_feature_usages()
+        .next()
+        .expect("migration notice");
+    let cell = new_deprecation_notice(usage.summary.clone(), usage.details.clone());
+    insta::assert_snapshot!(render_lines(&cell.transcript_lines(/*width*/ 80)).join("\n"));
 }
 
 #[test]

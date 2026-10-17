@@ -17,6 +17,7 @@ use crate::config_update::format_config_error;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::session_resume::cwds_differ;
+use crate::status::StatusAccountDisplay;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ThreadGoalStatus;
 #[cfg(target_os = "windows")]
@@ -53,9 +54,28 @@ impl App {
                 &event,
                 AppEvent::OpenDaemonMenu
                     | AppEvent::OpenWarnings
+                    | AppEvent::StatusLineSetup { .. }
+                    | AppEvent::StatusLineSetupCancelled
+                    | AppEvent::TerminalTitleSetup { .. }
+                    | AppEvent::TerminalTitleSetupPreview { .. }
+                    | AppEvent::TerminalTitleSetupCancelled
+                    | AppEvent::OpenConfigEditor(_)
+                    | AppEvent::SyntaxThemeSelected { .. }
+                    | AppEvent::SyntaxThemePreviewed
+                    | AppEvent::OpenKeymapActionMenu { .. }
+                    | AppEvent::OpenKeymapReplaceBindingMenu { .. }
+                    | AppEvent::OpenKeymapCapture { .. }
+                    | AppEvent::OpenKeymapDebug
+                    | AppEvent::KeymapCaptured { .. }
+                    | AppEvent::KeymapCleared { .. }
+                    | AppEvent::TestConfigNotification
+                    | AppEvent::SendConfigTestNotification { .. }
+                    | AppEvent::SaveConfigPreference(_)
                     | AppEvent::CopyWarning(_)
                     | AppEvent::UpdateWarnings { .. }
                     | AppEvent::CopySelection { .. }
+                    | AppEvent::SelectTranscriptCopy { .. }
+                    | AppEvent::TranscriptCopyClosed
                     | AppEvent::ConfirmDaemonUpdate(_)
                     | AppEvent::RunDaemonUpdate(_)
                     | AppEvent::InsertHistoryCell(_)
@@ -65,6 +85,7 @@ impl App {
                     | AppEvent::FinishPromptRevert { .. }
                     | AppEvent::ManagedWorktreeCreated(_)
                     | AppEvent::AgentsOverviewWorktreeCreated(_)
+                    | AppEvent::AgentsOverviewPinToggled { .. }
                     | AppEvent::AppendMessageHistoryEntry { .. }
                     | AppEvent::BeginInitialHistoryReplayBuffer
                     | AppEvent::BeginThreadSwitchHistoryReplayBuffer
@@ -118,6 +139,10 @@ impl App {
             return Ok(AppRunControl::Continue);
         }
 
+        if matches!(event, AppEvent::OpenDaemonMenu | AppEvent::OpenWarnings) {
+            self.verify_managed_daemon().await;
+        }
+
         // Keep the picker check and model update in one event without recursively polling this
         // large dispatcher on the TUI thread's stack.
         let (event, sparkle_model) = match event {
@@ -135,6 +160,16 @@ impl App {
         };
         match event {
             AppEvent::OpenDaemonMenu => self.open_daemon_menu(),
+            AppEvent::ConfirmDaemonRestart => self.confirm_daemon_restart(),
+            AppEvent::RunDaemonRestart => {
+                if self.chat_widget.remote_connection.as_ref().is_some_and(|connection| connection.is_managed_daemon)
+                    && self.daemon_restart.is_none()
+                {
+                    self.daemon_restart = Some(tokio::spawn(codex_app_server_daemon::run(
+                        codex_app_server_daemon::LifecycleCommand::Restart,
+                    )));
+                }
+            }
             AppEvent::ConfirmDaemonUpdate(source) => self.confirm_daemon_update(source),
             AppEvent::RunDaemonUpdate(source) => {
                 self.pending_update_action = Some(UpdateAction::Daemon(source));
@@ -390,6 +425,17 @@ impl App {
                         .set_queue_autosend_suppressed(/*suppressed*/ false);
                     self.chat_widget.maybe_send_next_queued_input();
                 }
+            }
+            AppEvent::TranscriptCopyClosed => {
+                self.chat_widget.maybe_send_next_queued_input();
+            }
+            AppEvent::SelectTranscriptCopy { guard } => {
+                let size = tui.prepare_draw_size()?;
+                self.render_owned_transcript(tui, size)?;
+                if !self.transcript_view.begin_copy_mode(&self.transcript_cells, Some(guard)) {
+                    self.chat_widget.add_info_message("Nothing to copy".into(), /*hint*/ None);
+                }
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::CopySelection { text, label, format } => {
                 let result = tui.clipboard.copy(text, format, tui.frame_requester());
@@ -879,6 +925,7 @@ impl App {
             }
             AppEvent::ConsolidateAgentMessage {
                 source,
+                copy_source,
                 cwd,
                 inline_visualization_context,
                 scrollback_reflow,
@@ -886,9 +933,7 @@ impl App {
             } => {
                 self.handle_consolidate_agent_message(
                     tui,
-                    source,
-                    cwd,
-                    inline_visualization_context,
+                    history_cell::AgentMarkdownCell::new_with_inline_visualizations(source, &cwd, inline_visualization_context).with_copy_source(copy_source),
                     scrollback_reflow,
                     deferred_history_cell,
                 )?;
@@ -1111,6 +1156,17 @@ impl App {
                     self.active_thread_id = visible_thread;
                 }
                 if let Err(err) = result {
+                    if is_realtime_stop {
+                        let chat_widget = match self.background_voice.as_deref_mut() {
+                            Some(owner) if parked_voice => owner,
+                            _ => &mut self.chat_widget,
+                        };
+                        if chat_widget.thread_id() == realtime_stop_thread_id {
+                            chat_widget.record_realtime_failure(
+                                crate::chatwidget::RealtimeFailureCause::AppServerRequest,
+                            );
+                        }
+                    }
                     if self.recover_transport_error(&err) {
                         return Ok(AppRunControl::Continue);
                     }
@@ -1137,12 +1193,14 @@ impl App {
                         let message = format!("Voice conversation failed: {err:#}");
                         if is_realtime_stop {
                             if chat_widget.thread_id() == realtime_stop_thread_id {
-                                chat_widget.record_realtime_failure();
                                 chat_widget.reset_realtime_conversation();
                                 chat_widget.add_realtime_error(message);
                             }
                         } else {
-                            chat_widget.on_realtime_error(message);
+                            chat_widget.on_realtime_error(
+                                message,
+                                crate::chatwidget::RealtimeFailureCause::AppServerRequest,
+                            );
                         }
                         tracing::error!(error = ?err, "realtime conversation request failed");
                     } else if handled {
@@ -1267,6 +1325,12 @@ impl App {
                         elicitation_target: None,
                     });
             }
+            AppEvent::AccountEmailLoaded { request_id, email } => {
+                if self.account_email_request_id == Some(request_id) {
+                    self.account_email_request_id = None;
+                    self.chat_widget.on_account_email_loaded(email);
+                }
+            }
             AppEvent::SecuritySetupLoaded { request_id, identity, notice } => {
                 tracing::debug!(current = request_id == self.chat_widget.security_setup_request_id, "handling security setup notice");
                 if request_id == self.chat_widget.security_setup_request_id {
@@ -1300,8 +1364,12 @@ impl App {
                     .handle_pet_selection_loaded(tui, request_id, pet_id, result)
                     .await;
             }
-            AppEvent::ConfiguredPetLoaded { pet_id, result } => {
-                self.handle_configured_pet_loaded(tui, pet_id, result);
+            AppEvent::ConfiguredPetLoaded {
+                generation,
+                pet_id,
+                result,
+            } => {
+                self.handle_configured_pet_loaded(tui, generation, pet_id, result);
             }
             AppEvent::RefreshConnectors { force_refetch } => {
                 self.chat_widget.refresh_connectors(force_refetch);
@@ -2161,7 +2229,23 @@ impl App {
                     app_server.fetch_models(request_id, self.app_event_tx.clone());
                 }
             }
-            AppEvent::ModelsLoaded { request_id, result } => {
+            AppEvent::ModelsLoaded { request_id, result: Ok(models) }
+                if self.chat_widget.model_popup_request_is_current(request_id)
+                    && self.chat_widget.status_account_display() == Some(&StatusAccountDisplay::ApiKey) =>
+            {
+                let checked = app_server.constrain_api_key_models(
+                    self.chat_widget.config_ref(),
+                    self.chat_widget.thread_id(),
+                    /*requirements*/ None,
+                    models,
+                );
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    tx.send(AppEvent::ApiKeyCompatModelsLoaded { request_id, result: Ok(checked.await) });
+                });
+            }
+            AppEvent::ModelsLoaded { request_id, result }
+            | AppEvent::ApiKeyCompatModelsLoaded { request_id, result } => {
                 if self.chat_widget.on_models_loaded(request_id, result) {
                     self.model_catalog = self.chat_widget.model_catalog();
                     app_server.set_available_models(self.model_catalog.try_list_models()?);
@@ -2804,13 +2888,26 @@ impl App {
                     }
                     Err(error) => {
                         if let Ok(mut state) = self.agents_overview.view_state.lock() {
-                            state.input = name;
+                            state.set_rename_input(&name, &self.keymap);
                             state.rename_target = Some(thread_id);
                         }
                         self.repaint_agents_overview();
                         self.add_agents_overview_error(format!("Failed to rename task: {error}"));
                     }
                 }
+            }
+            AppEvent::ToggleAgentsOverviewPin { thread_id, pinned } => {
+                self.toggle_agents_overview_pin(app_server, thread_id, pinned);
+            }
+            AppEvent::AgentsOverviewPinToggled {
+                request_id,
+                thread_id,
+                pinned,
+                result,
+            } => {
+                self.complete_agents_overview_pin(
+                    app_server, request_id, thread_id, pinned, result,
+                );
             }
             AppEvent::SuggestThreadName {
                 thread_id,
@@ -2884,6 +2981,7 @@ impl App {
                 }
             }
             AppEvent::HideAgentsOverviewThread { thread_id } => {
+                self.prepare_agents_overview_removal(&HashSet::from([thread_id]));
                 self.agents_overview.hidden_threads.insert(thread_id);
                 self.repaint_agents_overview();
             }
@@ -2920,10 +3018,15 @@ impl App {
                 request_id,
                 result,
             } => {
-                self.apply_agent_picker_thread_refresh(primary_thread_id, request_id, result);
+                self.apply_agent_picker_thread_refresh(
+                    app_server,
+                    primary_thread_id,
+                    request_id,
+                    result,
+                );
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread_and_discard_side(tui, app_server, thread_id)
+                self.select_agent_thread(tui, app_server, thread_id)
                     .await?;
             }
             AppEvent::StartSide {
@@ -2952,7 +3055,7 @@ impl App {
                         self.chat_widget.update_skill_enabled(path, enabled);
                     }
                     Err(err) => {
-                        let path_display = path.display();
+                        let path_display = path.inferred_native_path_string();
                         self.chat_widget.add_error_message(format!(
                             "Failed to update skill config for {path_display}: {err}"
                         ));
@@ -3160,14 +3263,14 @@ impl App {
                         self.local_settings.tui.status_line = Some(ids.clone());
                         self.local_settings.tui.status_line_use_colors = use_theme_colors;
                         self.chat_widget.setup_status_line(items, use_theme_colors);
+                        self.chat_widget.refresh_config_panel(/*notice*/ None);
                     }
                     Err(err) => {
                         let error = format_config_error(&err);
                         tracing::error!(error = %error, "failed to persist status line settings; keeping previous selection");
                         self.app_event_tx.send(AppEvent::FollowTranscript);
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save status line settings: {error}"
-                        ));
+                        let message = format!("Failed to save status line settings: {error}");
+                        self.chat_widget.report_config_save_error(message);
                     }
                 }
             }
@@ -3189,6 +3292,7 @@ impl App {
             }
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();
+                self.chat_widget.refresh_config_panel(/*notice*/ None);
             }
             AppEvent::TerminalTitleSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -3201,14 +3305,14 @@ impl App {
                     Ok(()) => {
                         self.local_settings.tui.terminal_title = Some(ids.clone());
                         self.chat_widget.setup_terminal_title(items);
+                        self.chat_widget.refresh_config_panel(/*notice*/ None);
                     }
                     Err(err) => {
                         tracing::error!(error = %err, "failed to persist terminal title items; keeping previous selection");
                         self.app_event_tx.send(AppEvent::FollowTranscript);
                         self.chat_widget.revert_terminal_title_setup_preview();
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to save terminal title items: {err}"
-                        ));
+                        let message = format!("Failed to save terminal title items: {err}");
+                        self.chat_widget.report_config_save_error(message);
                     }
                 }
             }
@@ -3217,6 +3321,39 @@ impl App {
             }
             AppEvent::TerminalTitleSetupCancelled => {
                 self.chat_widget.cancel_terminal_title_setup();
+                self.chat_widget.refresh_config_panel(/*notice*/ None);
+            }
+            AppEvent::OpenConfigEditor(handoff) => {
+                self.cancel_pending_key_chord();
+                if let Err(err) = tui.discard_pending_input_before_interactive_screen() {
+                    tracing::warn!(%err, "failed to discard input before opening config editor");
+                    self.chat_widget.config_editor_open_failed(format!(
+                        "Failed to open setting because terminal input could not be cleared: {err}"
+                    ));
+                } else {
+                    let resume_current_availability =
+                        super::resume_config::resume_current_directory_availability(
+                            &self.app_server_target,
+                            self.environment_manager.as_ref(),
+                            self.runtime_working_directory_override
+                                .as_deref()
+                                .or(self.harness_overrides.cwd.as_deref())
+                                .or_else(|| app_server.remote_cwd_override()),
+                        );
+                    self.chat_widget
+                        .open_config_editor(handoff, resume_current_availability);
+                    self.chat_widget.refresh_config_panel(/*notice*/ None);
+                }
+            }
+            AppEvent::TestConfigNotification => self.schedule_config_notification_test(),
+            AppEvent::SendConfigTestNotification { generation } => {
+                self.send_config_notification_test(tui, generation)
+            }
+            AppEvent::SaveConfigPreference(preference) => {
+                self.save_config_preference(tui, preference).await;
+            }
+            AppEvent::PersistAgentsOverviewGrouping(grouping) => {
+                self.persist_agents_overview_grouping(grouping).await;
             }
             AppEvent::SyntaxThemeSelected { name } => {
                 let edit = crate::legacy_core::config::edit::syntax_theme_edit(&name);
@@ -3237,6 +3374,7 @@ impl App {
                             crate::render::highlight::set_syntax_theme(theme);
                         }
                         self.sync_tui_theme_selection(name);
+                        self.chat_widget.refresh_config_panel(/*notice*/ None);
                         self.refresh_status_line();
                         tui.frame_requester().schedule_frame();
                     }
@@ -3245,8 +3383,8 @@ impl App {
                         self.refresh_status_line();
                         tracing::error!(error = %err, "failed to persist theme selection");
                         self.app_event_tx.send(AppEvent::FollowTranscript);
-                        self.chat_widget
-                            .add_error_message(format!("Failed to save theme: {err}"));
+                        let message = format!("Failed to save theme: {err}");
+                        self.chat_widget.report_config_save_error(message);
                     }
                 }
             }
@@ -3442,7 +3580,7 @@ impl App {
                 tracing::error!(error = %err, "failed to persist keymap binding");
                 self.app_event_tx.send(AppEvent::FollowTranscript);
                 self.chat_widget
-                    .add_error_message(format!("Failed to save shortcut: {err}"));
+                    .report_config_save_error(format!("Failed to save shortcut: {err}"));
             }
         }
     }
@@ -3503,7 +3641,7 @@ impl App {
                 tracing::error!(error = %err, "failed to clear keymap binding");
                 self.app_event_tx.send(AppEvent::FollowTranscript);
                 self.chat_widget
-                    .add_error_message(format!("Failed to remove shortcut: {err}"));
+                    .report_config_save_error(format!("Failed to remove shortcut: {err}"));
             }
         }
     }
@@ -3538,6 +3676,16 @@ impl App {
                 // its shutdown completion does not trigger agent failover.
                 self.pending_shutdown_exit_thread_id =
                     self.active_thread_id.or(self.chat_widget.thread_id());
+                if !self.side_threads.is_empty()
+                    && tokio::time::timeout(
+                        SHUTDOWN_FIRST_EXIT_TIMEOUT,
+                        self.shutdown_side_threads(app_server),
+                    )
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("timed out waiting for side-conversation shutdown");
+                }
                 if self.pending_shutdown_exit_thread_id.is_some()
                     || self.voice_owner_thread_id().is_some()
                 {

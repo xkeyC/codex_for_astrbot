@@ -1,5 +1,5 @@
+use codex_code_mode::DeferredToolDiscovery;
 use codex_code_mode::ImageDetailVisibility;
-use codex_code_mode::ToolDefinition as CodeModeToolDefinition;
 use codex_protocol::openai_models::CodeModeToolMessages;
 use codex_tools::FreeformTool;
 use codex_tools::FreeformToolFormat;
@@ -19,9 +19,18 @@ pub(crate) const COMPACT_EXEC_DESCRIPTION: &str = r#"Run JavaScript to call tool
 pub(crate) fn compact_exec_description(
     description: &str,
     default_exec_yield_time_ms: u64,
+    code_mode_only: bool,
     image_detail_visibility: ImageDetailVisibility,
+    deferred_tool_discovery: DeferredToolDiscovery,
     messages: Option<&CodeModeToolMessages>,
 ) -> String {
+    // The generic part only: no tools, no shared types. Code Mode Only
+    // describes the search tool on its own, so its guidance is the catalog's.
+    let deferred_tool_discovery = if code_mode_only {
+        DeferredToolDiscovery::Catalog
+    } else {
+        deferred_tool_discovery
+    };
     let template = codex_code_mode::build_exec_tool_description(
         &[],
         &[],
@@ -29,6 +38,7 @@ pub(crate) fn compact_exec_description(
         default_exec_yield_time_ms,
         /*code_mode_only*/ false,
         image_detail_visibility,
+        deferred_tool_discovery,
         messages,
     );
     match description.strip_prefix(template.as_str()) {
@@ -69,15 +79,7 @@ pub(crate) fn create_code_mode_function_tool(description: String) -> ToolSpec {
     })
 }
 
-pub(crate) fn create_code_mode_tool(
-    enabled_tools: &[CodeModeToolDefinition],
-    deferred_tools: &[CodeModeToolDefinition],
-    namespace_descriptions: &BTreeMap<String, codex_code_mode::ToolNamespaceDescription>,
-    default_exec_yield_time_ms: u64,
-    code_mode_only: bool,
-    image_detail_visibility: ImageDetailVisibility,
-    messages: Option<&CodeModeToolMessages>,
-) -> ToolSpec {
+pub(crate) fn create_code_mode_tool(description: String) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source
 pragma_source: PRAGMA_LINE NEWLINE SOURCE
@@ -90,15 +92,7 @@ SOURCE: /[\s\S]+/
 
     ToolSpec::Freeform(FreeformTool {
         name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
-        description: codex_code_mode::build_exec_tool_description(
-            enabled_tools,
-            deferred_tools,
-            namespace_descriptions,
-            default_exec_yield_time_ms,
-            code_mode_only,
-            image_detail_visibility,
-            messages,
-        ),
+        description,
         defer_loading: None,
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
@@ -111,42 +105,15 @@ SOURCE: /[\s\S]+/
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_tools::ToolName;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn create_code_mode_tool_matches_expected_spec() {
-        let enabled_tools = vec![codex_code_mode::ToolDefinition {
-            name: "update_plan".to_string(),
-            tool_name: ToolName::plain("update_plan"),
-            description: "Update the plan".to_string(),
-            kind: codex_code_mode::CodeModeToolKind::Function,
-            input_schema: None,
-            input_schema_max_bytes: None,
-            output_schema: None,
-        }];
-
         assert_eq!(
-            create_code_mode_tool(
-                &enabled_tools,
-                &[],
-                &BTreeMap::new(),
-                codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
-                /*code_mode_only*/ true,
-                ImageDetailVisibility::Visible,
-                /*messages*/ None,
-            ),
+            create_code_mode_tool("Run JavaScript code.".to_string()),
             ToolSpec::Freeform(FreeformTool {
                 name: codex_code_mode::PUBLIC_TOOL_NAME.to_string(),
-                description: codex_code_mode::build_exec_tool_description(
-                    &enabled_tools,
-                    &[],
-                    &BTreeMap::new(),
-                    codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
-                    /*code_mode_only*/ true,
-                    ImageDetailVisibility::Visible,
-                    /*messages*/ None,
-                ),
+                description: "Run JavaScript code.".to_string(),
                 defer_loading: None,
                 format: FreeformToolFormat {
                     r#type: "grammar".to_string(),
@@ -183,30 +150,38 @@ mod compact_description_tests {
             input_schema_max_bytes: None,
             output_schema: None,
         }];
-        let ToolSpec::Freeform(full) = create_code_mode_tool(
-            &[],
-            &deferred,
-            &BTreeMap::new(),
-            codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
-            /*code_mode_only*/ true,
-            visibility,
-            /*messages*/ None,
-        ) else {
-            unreachable!("exec is a freeform tool");
-        };
-        let compact = compact_exec_description(
-            &full.description,
-            codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
-            visibility,
-            /*messages*/ None,
-        );
-        assert!(compact.starts_with(COMPACT_EXEC_DESCRIPTION));
-        assert!(compact.contains("ALL_TOOLS"));
-        assert!(
-            compact.len() < full.description.len() / 2,
-            "{} vs {}",
-            compact.len(),
-            full.description.len()
-        );
+        for (code_mode_only, discovery) in [
+            (true, DeferredToolDiscovery::Catalog),
+            (true, DeferredToolDiscovery::RankedSearch),
+            (false, DeferredToolDiscovery::Catalog),
+            (false, DeferredToolDiscovery::RankedSearch),
+        ] {
+            let full = codex_code_mode::build_exec_tool_description(
+                &[],
+                &deferred,
+                &BTreeMap::new(),
+                codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
+                code_mode_only,
+                visibility,
+                discovery,
+                /*messages*/ None,
+            );
+            let compact = compact_exec_description(
+                &full,
+                codex_code_mode::DEFAULT_EXEC_YIELD_TIME_MS,
+                code_mode_only,
+                visibility,
+                discovery,
+                /*messages*/ None,
+            );
+            assert!(compact.starts_with(COMPACT_EXEC_DESCRIPTION));
+            assert!(compact.contains("ALL_TOOLS"));
+            assert!(
+                compact.len() < full.len() / 2,
+                "{} vs {}",
+                compact.len(),
+                full.len()
+            );
+        }
     }
 }

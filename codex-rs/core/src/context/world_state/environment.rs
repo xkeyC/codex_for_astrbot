@@ -1,6 +1,7 @@
 use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::context::environment_context::FileSystemContext;
 use crate::context::environment_context::NetworkContext;
@@ -60,7 +61,10 @@ impl EnvironmentsState {
             environments: environment_states(environments),
             shell_version,
             current_date,
-            timezone: turn_context.timezone.clone(),
+            timezone: turn_context
+                .timezone
+                .clone()
+                .filter(|_| turn_context.config.include_environment_context_time),
             network: network_from_turn_context(turn_context),
             filesystem: environments.primary().map(|environment| {
                 FileSystemContext::from_permission_profile(
@@ -189,7 +193,10 @@ impl WorldStateSection for EnvironmentsState {
                 subagents: self.subagents.clone(),
             }) as Box<dyn ContextualUserFragment>
         });
-        (Some(current), fragment)
+        (
+            Some(current),
+            WorldStateUpdate::optional_boxed_fragment(fragment),
+        )
     }
 }
 
@@ -490,7 +497,10 @@ fn environment_states(snapshot: &TurnEnvironmentSnapshot) -> BTreeMap<String, En
     const MAX_TOTAL_ERROR_BYTES: usize = 512;
     let mut remaining_error_bytes = MAX_TOTAL_ERROR_BYTES;
     for environment in &snapshot.environments {
-        if let TurnEnvironmentState::Failed { selection, error } = environment {
+        if let TurnEnvironmentState::Failed {
+            selection, error, ..
+        } = environment
+        {
             let detail = error
                 [..error.floor_char_boundary(remaining_error_bytes.min(MAX_ERROR_BYTES))]
                 .to_string();

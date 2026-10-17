@@ -180,6 +180,12 @@ Modes:
 - OTLP: exports metrics via the OpenTelemetry OTLP exporter (HTTP or gRPC).
 - In-memory: records via `opentelemetry_sdk::metrics::InMemoryMetricExporter` for tests/assertions; call `shutdown()` to flush.
 
+Configured OTLP metrics exporters (HTTP or gRPC) default to delta temporality. Set
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative` for backends that require
+cumulative metrics. The values `delta`, `cumulative`, and `lowmemory` are case-insensitive;
+unset, empty, or unrecognized values retain the delta default. This setting does not change
+the built-in Statsig exporter or on-demand runtime snapshots.
+
 `codex-otel` also provides `OtelExporter::Statsig`, a shorthand for exporting OTLP/HTTP JSON metrics
 to Statsig using Codex-internal defaults.
 
@@ -227,13 +233,13 @@ metrics.shutdown()?; // flushes in-memory exporter
 failed sends. It carries existing session tags plus `mode` (`incremental`/`full`),
 `phase` (`warmup`/`generation`), and `reason`:
 
-| Reason | Meaning |
-| --- | --- |
-| `incremental` | Send the previous response ID and new input. |
-| `no_previous_request` | First request from a fresh client. |
-| `restored_history` | First request after loading resumed or forked history. |
-| `connection_closed` | Full input after observing the previous socket closed. |
-| `other` | Full input for another reason, such as changed input/settings or unavailable response state. |
+| Reason                | Meaning                                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `incremental`         | Send the previous response ID and new input.                                                 |
+| `no_previous_request` | First request from a fresh client.                                                           |
+| `restored_history`    | First request after loading resumed or forked history.                                       |
+| `connection_closed`   | Full input after observing the previous socket closed.                                       |
+| `other`               | Full input for another reason, such as changed input/settings or unavailable response state. |
 
 Per-socket backend metrics label a resend after reconnect as `initial`; this client
 metric retains the first reset reason through reconnect failures and turn boundaries.

@@ -12,6 +12,7 @@ use super::PreviousSectionState;
 use super::SectionTransition;
 use super::WorldStateContextFragment;
 use super::WorldStateSection;
+use super::WorldStateUpdate;
 use crate::context::ContextualUserFragment;
 use crate::tools::tool_catalog::CatalogTool;
 use codex_extension_api::RenderedWorldStateFragment;
@@ -286,7 +287,10 @@ impl WorldStateSection for ToolCatalogState {
         previous: PreviousSectionState<'_, Self::Snapshot>,
     ) -> SectionTransition<Self::Snapshot> {
         let fragment = self.render_fragment(previous);
-        (Some(self.snapshot()), fragment)
+        (
+            Some(self.snapshot()),
+            WorldStateUpdate::optional_boxed_fragment(fragment),
+        )
     }
 }
 

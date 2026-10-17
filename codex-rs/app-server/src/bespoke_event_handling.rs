@@ -162,6 +162,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 let state = thread_state.lock().await;
                 let mut turn = state.active_turn_snapshot().unwrap_or_else(|| Turn {
                     id: payload.turn_id.clone(),
+                    root_turn_id: payload.root_turn_id.clone(),
                     items: Vec::new(),
                     items_view: TurnItemsView::NotLoaded,
                     error: None,
@@ -497,7 +498,10 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ))
                     .await;
             }
-            RealtimeEvent::SessionUpdated { .. } => {}
+            RealtimeEvent::SessionUpdated {
+                realtime_session_id,
+                ..
+            } => outgoing.track_realtime_session_updated(realtime_session_id),
             RealtimeEvent::InputAudioSpeechStarted(event) => {
                 let notification = ThreadRealtimeItemAddedNotification {
                     thread_id: conversation_id.to_string(),
@@ -1314,6 +1318,7 @@ async fn handle_turn_plan_update(
 
 struct TurnCompletionMetadata {
     status: TurnStatus,
+    root_turn_id: Option<String>,
     error: Option<TurnError>,
     last_agent_message: Option<ThreadItem>,
     started_at: Option<i64>,
@@ -1335,6 +1340,7 @@ async fn emit_turn_completed_with_status(
         thread_id: conversation_id.to_string(),
         turn: Turn {
             id: event_turn_id,
+            root_turn_id: turn_completion_metadata.root_turn_id,
             items,
             items_view,
             error: turn_completion_metadata.error,
@@ -1522,6 +1528,7 @@ async fn handle_turn_complete(
         event_turn_id,
         TurnCompletionMetadata {
             status,
+            root_turn_id: turn_complete_event.root_turn_id,
             error,
             last_agent_message,
             started_at: turn_summary.started_at,
@@ -1547,6 +1554,7 @@ async fn handle_turn_interrupted(
         event_turn_id,
         TurnCompletionMetadata {
             status: TurnStatus::Interrupted,
+            root_turn_id: turn_aborted_event.root_turn_id,
             error: turn_aborted_event.error.map(|error| TurnError {
                 message: error.message,
                 codex_error_info: error.codex_error_info.map(Into::into),
@@ -2182,6 +2190,7 @@ mod tests {
 
     fn turn_complete_event(turn_id: &str) -> TurnCompleteEvent {
         TurnCompleteEvent {
+            root_turn_id: None,
             turn_id: turn_id.to_string(),
             started_at: None,
             last_agent_message: None,
@@ -2194,6 +2203,7 @@ mod tests {
 
     fn turn_aborted_event(turn_id: &str) -> TurnAbortedEvent {
         TurnAbortedEvent {
+            root_turn_id: None,
             turn_id: Some(turn_id.to_string()),
             started_at: None,
             reason: codex_protocol::protocol::TurnAbortReason::Interrupted,
@@ -3092,6 +3102,7 @@ mod tests {
             state.track_current_turn_event(
                 "turn-1",
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: "turn-1".to_string(),
                     root_turn_id: None,
                     trace_id: None,
@@ -3128,6 +3139,7 @@ mod tests {
             Event {
                 id: "turn-1".to_string(),
                 msg: EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: "turn-1".to_string(),
                     root_turn_id: None,
                     trace_id: None,
@@ -3246,6 +3258,8 @@ mod tests {
                     thread_id: conversation_id,
                     turn_id: "turn-1".to_string(),
                     item: CoreTurnItem::SubAgentActivity(SubAgentActivityItem {
+                        model: None,
+                        reasoning_effort: None,
                         id: "activity-1".to_string(),
                         kind: SubAgentActivityKind::Interrupted,
                         agent_thread_id: child_thread_id,
@@ -3280,6 +3294,8 @@ mod tests {
             payload,
             ItemCompletedNotification {
                 item: ThreadItem::SubAgentActivity {
+                    model: None,
+                    reasoning_effort: None,
                     id: "activity-1".to_string(),
                     kind: codex_app_server_protocol::SubAgentActivityKind::Interrupted,
                     agent_thread_id: child_thread_id_string,
@@ -3398,6 +3414,7 @@ mod tests {
             state.track_current_turn_event(
                 &event_turn_id,
                 &EventMsg::TurnStarted(codex_protocol::protocol::TurnStartedEvent {
+                    turn_attribution: None,
                     turn_id: event_turn_id.clone(),
                     root_turn_id: None,
                     trace_id: None,
@@ -3513,7 +3530,10 @@ mod tests {
         handle_turn_interrupted(
             conversation_id,
             event_turn_id.clone(),
-            turn_aborted_event(&event_turn_id),
+            TurnAbortedEvent {
+                root_turn_id: Some("root-a".to_string()),
+                ..turn_aborted_event(&event_turn_id)
+            },
             &outgoing,
             &thread_state,
         )
@@ -3523,6 +3543,7 @@ mod tests {
         match msg {
             ServerNotification::TurnCompleted(n) => {
                 assert_eq!(n.turn.id, event_turn_id);
+                assert_eq!(n.turn.root_turn_id.as_deref(), Some("root-a"));
                 assert_eq!(n.turn.status, TurnStatus::Interrupted);
                 assert_eq!(n.turn.error, None);
                 assert_eq!(n.turn.completed_at, Some(TEST_TURN_COMPLETED_AT));

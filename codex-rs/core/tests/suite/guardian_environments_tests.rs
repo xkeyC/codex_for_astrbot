@@ -4,6 +4,7 @@ use super::*;
 use codex_core::context::UserGoalUpdate;
 use codex_history::RolloutItem;
 use codex_protocol::protocol::GuardianAssessmentStatus;
+use codex_protocol::protocol::TurnEnvironmentRequests;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
@@ -202,9 +203,9 @@ async fn guardian_reviews_target_environment_and_reuses_prefix(tool: &str) -> Re
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![primary.clone(), secondary],
+                    vec![primary.clone().into_request(), secondary.into_request()],
                 )),
                 ..Default::default()
             }),
@@ -408,9 +409,9 @@ async fn guardian_reviews_with_offline_primary_executor() -> Result<()> {
             }])
             .with_thread_settings(ThreadSettingsOverrides {
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![primary],
+                    vec![primary.into_request()],
                 )),
                 ..Default::default()
             }),
@@ -462,12 +463,17 @@ async fn guardian_reviews_with_offline_primary_executor() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<()> {
     skip_if_no_network!(Ok(()));
+    const PROJECT_INSTRUCTIONS: &str =
+        "Repository rule: network access requires explicit approval.";
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let executor_url = format!("ws://{}", listener.local_addr()?);
     let (attach, connection) = tokio::sync::oneshot::channel();
     let (disconnect, stop) = tokio::sync::oneshot::channel();
     let executor = AbortOnDropHandle::new(tokio::spawn(serve_environment_with_agents_md(
-        listener, "", connection, stop,
+        listener,
+        PROJECT_INSTRUCTIONS,
+        connection,
+        stop,
     )));
     attach.send(()).expect("attach secondary executor");
 
@@ -540,7 +546,10 @@ async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<
         vec![StreamingSseChunk {
             gate: Some(pending_allow),
             body: sse(vec![
-                ev_assistant_message("allow", r#"{"outcome":"allow"}"#),
+                ev_assistant_message(
+                    "allow",
+                    r#"{"outcome":"allow","rationale":"Superseded network approval"}"#,
+                ),
                 ev_completed("first-review"),
             ]),
         }],
@@ -548,8 +557,8 @@ async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<
             gate: None,
             body: sse(vec![
                 ev_assistant_message(
-                    "deny",
-                    r#"{"outcome":"deny","rationale":"The user withdrew authorization."}"#,
+                    "updated-review",
+                    r#"{"outcome":"deny","rationale":"Apply the updated authorization."}"#,
                 ),
                 ev_completed("retry-review"),
             ]),
@@ -578,9 +587,9 @@ async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<
                 text_elements: Vec::new(),
             }])
             .with_thread_settings(ThreadSettingsOverrides {
-                environments: Some(TurnEnvironmentSelections::new(
+                environments: Some(TurnEnvironmentRequests::new(
                     test.config.cwd.clone(),
-                    vec![primary, secondary],
+                    vec![primary.into_request(), secondary.into_request()],
                 )),
                 ..Default::default()
             }),
@@ -597,13 +606,15 @@ async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<
         first["client_metadata"]["x-openai-subagent"],
         json!("guardian")
     );
+    assert!(first["input"].to_string().contains(PROJECT_INSTRUCTIONS));
 
     // Invalidate the pending allow, then disconnect the unrelated executor. The
     // retry must still reach the model and respect the updated authorization.
+    let guidance = "Do not grant network permission after all.";
     let mut expected_authorization = test.codex.guardian_authorization_version().await;
     test.codex
         .record_user_goal_update(UserGoalUpdate::Set {
-            objective: Some("Do not grant network permission after all.".to_owned()),
+            objective: Some(guidance.to_owned()),
             status: None,
         })
         .await?;
@@ -627,11 +638,10 @@ async fn guardian_revalidates_allow_with_offline_secondary_executor() -> Result<
         retry["client_metadata"]["x-openai-subagent"],
         json!("guardian")
     );
-    assert!(
-        retry["input"]
-            .to_string()
-            .contains("Do not grant network permission after all.")
-    );
+    let retry_input = retry["input"].to_string();
+    assert!(retry_input.contains(guidance));
+    assert!(retry_input.contains(PROJECT_INSTRUCTIONS));
+    assert!(!retry_input.contains("Superseded network approval"));
     let status = wait_for_event_match(&test.codex, |event| match event {
         EventMsg::GuardianAssessment(assessment)
             if assessment.status != GuardianAssessmentStatus::InProgress =>

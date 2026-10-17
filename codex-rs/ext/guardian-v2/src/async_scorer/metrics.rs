@@ -1,4 +1,4 @@
-//! Low-cardinality metrics for Guardian V2 classification, connections, and approval decisions.
+//! Structured failure diagnostics and low-cardinality metrics for Guardian V2 scoring and decisions.
 
 use std::time::Duration;
 
@@ -7,6 +7,7 @@ use codex_api::TransportError;
 use codex_core::context::GuardianContextMode;
 use codex_extension_api::ExtensionMetrics;
 
+use super::decisions::DecisionsError;
 use super::sampler::LunaSamplerError;
 
 pub(super) const CLASSIFICATION_METRIC: &str = "codex.guardian_v2.classification";
@@ -46,6 +47,7 @@ pub(super) fn sampler_failure_reason(error: &LunaSamplerError) -> &'static str {
             ApiError::Transport(TransportError::ResponseTooLarge { .. }) => "response_too_large",
             ApiError::Transport(TransportError::Policy(_)) => "network_policy_denied",
             ApiError::Stream(_) | ApiError::ContentFilter => "stream_error",
+            ApiError::ResponseIncomplete(_) => "incomplete_response",
             ApiError::ContextWindowExceeded => "context_window_exceeded",
             ApiError::QuotaExceeded => "quota_exceeded",
             ApiError::UsageNotIncluded => "usage_not_included",
@@ -68,6 +70,14 @@ pub(super) fn record_classification(
     outcome: &str,
     failure_reason: Option<&str>,
 ) {
+    if outcome == "failure" {
+        tracing::warn!(
+            failure_reason,
+            context_mode = context_mode.as_str(),
+            duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+            "Guardian V2 background scoring failed"
+        );
+    }
     let Some(metrics) = metrics else {
         return;
     };
@@ -153,6 +163,115 @@ pub(super) fn record_request_tokens(
             i64::try_from(tokens).unwrap_or(i64::MAX),
             codex_guardian_context::REQUEST_TOKENS_BOUNDARIES,
             &[("target", "async"), ("component", component)],
+        );
+    }
+}
+
+pub(super) fn record_decisions_comparison_outcome(
+    metrics: Option<&dyn ExtensionMetrics>,
+    outcome: &str,
+    reason: &str,
+) {
+    if let Some(metrics) = metrics {
+        metrics.counter(
+            "codex.guardian_v2.decisions_comparison",
+            /*inc*/ 1,
+            &[("outcome", outcome), ("reason", reason)],
+        );
+    }
+}
+
+// Keep all backend diagnostics bounded and free of raw transport data.
+pub(super) fn decisions_failure_reason(error: DecisionsError) -> &'static str {
+    match error {
+        DecisionsError::Credentials => "credentials_unavailable",
+        DecisionsError::ClientSetup => "request_build_error",
+        DecisionsError::UnsupportedEvidence => "decisions_unsupported_evidence",
+        DecisionsError::InputTooLarge => "input_too_large",
+        DecisionsError::Timeout => "transport_timeout",
+        // The adapter erases transport details; do not claim a specific network failure.
+        DecisionsError::Transport => "decisions_transport",
+        DecisionsError::Http(status) => match status {
+            401 => "http_401",
+            403 => "http_403",
+            429 => "http_429",
+            400..=499 => "http_4xx",
+            500..=599 => "http_5xx",
+            _ => "http_other",
+        },
+        DecisionsError::ResponseTooLarge => "response_too_large",
+        DecisionsError::InvalidResponse => "invalid_output",
+    }
+}
+
+// Called after the authoritative baseline has been published.
+pub(super) fn record_decisions_comparison(
+    completed: Result<(Result<&'static str, DecisionsError>, Duration), tokio::task::JoinError>,
+    responses_sample: Option<(&str, Duration)>,
+    metrics: Option<&dyn ExtensionMetrics>,
+) {
+    let decisions_sample = match completed {
+        Ok((result, duration)) => {
+            let outcome = match &result {
+                Ok(_) => "success",
+                Err(DecisionsError::UnsupportedEvidence | DecisionsError::InputTooLarge) => {
+                    "skipped"
+                }
+                Err(_) => "failure",
+            };
+            record_decisions_comparison_outcome(
+                metrics,
+                outcome,
+                result
+                    .as_ref()
+                    .err()
+                    .map_or("none", |error| decisions_failure_reason(*error)),
+            );
+            result.ok().map(|risk| (risk, duration))
+        }
+        Err(error) => {
+            let (outcome, reason) = if error.is_cancelled() {
+                ("skipped", "superseded")
+            } else {
+                ("failure", "task_error")
+            };
+            record_decisions_comparison_outcome(metrics, outcome, reason);
+            None
+        }
+    };
+    if let Some(metrics) = metrics {
+        if let (Some((_, responses_duration)), Some((_, decisions_duration))) =
+            (responses_sample, decisions_sample)
+        {
+            // Compare latency only for the same successfully classified requests.
+            for (backend, duration) in [
+                ("responses", responses_duration),
+                ("decisions", decisions_duration),
+            ] {
+                metrics.histogram(
+                    "codex.guardian_v2.decisions_comparison.duration_ms",
+                    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+                    &[("backend", backend), ("outcome", "success")],
+                );
+            }
+        }
+        let responses_risk = responses_sample.map(|(risk, _)| risk);
+        let decisions_risk = decisions_sample.map(|(risk, _)| risk);
+        let comparison = match (responses_risk, decisions_risk) {
+            (Some(responses_risk), Some(decisions_risk)) if responses_risk == decisions_risk => {
+                "agree"
+            }
+            (Some(_), Some(_)) => "disagree",
+            _ => "unavailable",
+        };
+        metrics.counter(
+            "codex.guardian_v2.decisions_comparison.comparison",
+            /*inc*/ 1,
+            &[
+                ("comparison", comparison),
+                ("responses", responses_risk.unwrap_or("unavailable")),
+                ("decisions", decisions_risk.unwrap_or("unavailable")),
+            ],
         );
     }
 }

@@ -283,8 +283,6 @@ pub struct ResponsesApiRequest {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub instructions: String,
     pub input: Vec<ResponseItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ResponsesApiTools>,
@@ -309,7 +307,6 @@ impl<'a> From<&'a ResponsesApiRequest> for ResponseCreateWsRequest<'a> {
     fn from(request: &'a ResponsesApiRequest) -> Self {
         Self {
             model: &request.model,
-            instructions: &request.instructions,
             previous_response_id: None,
             input: &request.input,
             tools: request.tools.as_ref().map(ResponsesApiTools::as_raw_value),
@@ -338,8 +335,6 @@ pub struct ResponseCreateWsRequest<'a> {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<&'a str>,
-    #[serde(skip_serializing_if = "str::is_empty")]
-    pub instructions: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
     pub input: &'a [ResponseItem],
@@ -414,12 +409,23 @@ pub fn create_text_param_for_request(
     })
 }
 
+/// Distinguishes draining a live response from abandoning obsolete work.
+#[derive(Clone, Copy)]
+pub enum ResponseInterrupt {
+    /// Drain normally, without validating or waiting for interruption acknowledgements.
+    Drain,
+    /// Skip undispatched work or retire its transport at the cleanup deadline.
+    /// Undispatched work ends without a completion event and leaves the socket reusable.
+    Cancel { deadline: tokio::time::Instant },
+}
+
 pub struct ResponseStream {
     pub rx_event: mpsc::Receiver<Result<ResponseEvent, ApiError>>,
     /// Server-assigned `x-request-id` response header, when present.
     pub upstream_request_id: Option<String>,
     /// Requests a graceful interrupt. Keep consuming events through completion.
-    pub interrupt: Option<oneshot::Sender<()>>,
+    /// Only `Cancel` validates and waits for an interruption acknowledgement.
+    pub interrupt: Option<oneshot::Sender<ResponseInterrupt>>,
 }
 
 impl Stream for ResponseStream {

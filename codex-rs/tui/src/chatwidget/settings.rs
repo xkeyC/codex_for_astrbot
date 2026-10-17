@@ -6,18 +6,41 @@ use crate::chatwidget::rate_limits::RATE_LIMIT_SWITCH_PROMPT_VIEW_ID;
 
 impl ChatWidget {
     pub(crate) fn set_daybreak_enabled(&mut self, enabled: bool) {
-        self.daybreak_enabled = enabled && self.config.features.enabled(Feature::CliDaybreak);
+        self.daybreak_enabled = enabled && self.daybreak_feature_enabled();
         self.bottom_pane
             .set_daybreak_command_description(self.daybreak_command_description());
     }
 
+    fn daybreak_feature_enabled(&self) -> bool {
+        // Preserve a resumed preference while account state is still unknown. Once an API-key
+        // account is known, both flags must be enabled before using that preference.
+        self.config.features.enabled(Feature::CliDaybreak)
+            && (self.has_chatgpt_account
+                || !matches!(
+                    self.status_account_display,
+                    Some(StatusAccountDisplay::ApiKey)
+                )
+                || self
+                    .config
+                    .features
+                    .enabled(Feature::ApiKeyCyberAccessPrograms))
+    }
+
+    /// UI and turn-selection eligibility; the catalog and server still determine program access.
+    pub(crate) fn daybreak_account_eligible(&self) -> bool {
+        self.daybreak_feature_enabled()
+            && self.config.model_provider_id == "openai"
+            && (self.has_chatgpt_account
+                || matches!(
+                    self.status_account_display,
+                    Some(StatusAccountDisplay::ApiKey)
+                ))
+    }
+
     pub(super) fn daybreak_command_description(&self) -> Option<&'static str> {
-        if !self.config.features.enabled(Feature::CliDaybreak) {
-            return None;
-        }
         if self.daybreak_enabled {
             Some("Disable broader access for cybersecurity work")
-        } else if !self.has_chatgpt_account || self.config.model_provider_id != "openai" {
+        } else if !self.daybreak_account_eligible() {
             None
         } else {
             match crate::daybreak::availability(&self.model_catalog.models) {
@@ -99,11 +122,14 @@ impl ChatWidget {
             );
         }
         let enabled = self.config.features.enabled(feature);
-        if feature == Feature::CliDaybreak {
+        if matches!(
+            feature,
+            Feature::CliDaybreak | Feature::ApiKeyCyberAccessPrograms
+        ) {
             self.set_daybreak_enabled(self.daybreak_enabled);
             self.refresh_status_surfaces();
         }
-        if feature == Feature::FastMode {
+        if matches!(feature, Feature::FastMode | Feature::UltrafastMode) {
             self.refresh_effective_service_tier();
             self.sync_service_tier_commands();
         }
@@ -205,6 +231,13 @@ impl ChatWidget {
         self.model_catalog.clone()
     }
 
+    pub(crate) fn on_account_email_loaded(&mut self, current_email: Option<String>) {
+        if let Some(StatusAccountDisplay::ChatGpt { email, .. }) = &mut self.status_account_display
+        {
+            *email = current_email;
+        }
+    }
+
     pub(crate) fn current_plan_type(&self) -> Option<PlanType> {
         self.plan_type
     }
@@ -227,7 +260,10 @@ impl ChatWidget {
         // Account-update notifications are the identity boundary. The visible account fields can
         // be identical across two accounts, so always invalidate account-scoped requests and data.
         self.model_popup_request_id = None;
+        let api_key_changed = self.status_account_display == Some(StatusAccountDisplay::ApiKey)
+            || status_account_display == Some(StatusAccountDisplay::ApiKey);
         self.invalidate_permission_discovery();
+        self.permission_discovery = None;
         self.invalidate_connector_scope();
         self.clear_pending_rate_limit_reset_requests();
         self.clear_backend_banner();
@@ -258,6 +294,9 @@ impl ChatWidget {
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
+        if api_key_changed {
+            self.refresh_account_scoped_models();
+        }
         self.set_daybreak_enabled(self.daybreak_enabled);
         self.has_codex_backend_auth = has_codex_backend_auth;
         self.bottom_pane
@@ -270,6 +309,7 @@ impl ChatWidget {
 
     /// Set the syntax theme override in the widget's config copy.
     pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
+        self.config_panel_tui.theme.clone_from(&theme);
         self.local_settings.tui.theme = theme;
     }
 
@@ -541,6 +581,9 @@ impl ChatWidget {
 
     fn apply_thread_settings_cwd(&mut self, cwd: AbsolutePathBuf) {
         let previous_cwd = std::mem::replace(&mut self.config.cwd, cwd.clone());
+        if previous_cwd != cwd {
+            self.permission_discovery = None;
+        }
         self.current_cwd = Some(cwd.to_path_buf());
         self.status_line_project_root_name_cache = None;
 

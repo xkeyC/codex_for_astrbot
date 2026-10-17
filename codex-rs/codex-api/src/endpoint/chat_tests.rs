@@ -8,13 +8,14 @@ use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use pretty_assertions::assert_eq;
 use serde_json::value::RawValue;
 
-fn request(input: Vec<ResponseItem>, tools: Value) -> ResponsesApiRequest {
+fn request(mut input: Vec<ResponseItem>, tools: Value) -> ResponsesApiRequest {
+    // Codex sends the base instructions as the first input item.
+    input.insert(0, message("system", "You are a voice."));
     let tools: Arc<RawValue> = serde_json::from_str::<Box<RawValue>>(&tools.to_string())
         .unwrap()
         .into();
     ResponsesApiRequest {
         model: "deepseek-v4.1-flash".to_string(),
-        instructions: "You are a voice.".to_string(),
         input,
         tools: Some(ResponsesApiTools::from(tools)),
         tool_choice: "auto".to_string(),
@@ -34,11 +35,15 @@ fn request(input: Vec<ResponseItem>, tools: Value) -> ResponsesApiRequest {
 
 fn message(role: &str, text: &str) -> ResponseItem {
     ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: role.to_string(),
         content: vec![if role == "assistant" {
             ContentItem::OutputText {
                 text: text.to_string(),
+                annotations: None,
+                logprobs: None,
             }
         } else {
             ContentItem::InputText {
@@ -56,6 +61,8 @@ fn reasoning(text: &str) -> ResponseItem {
 
 fn call(call_id: &str, namespace: Option<&str>, name: &str, arguments: &str) -> ResponseItem {
     ResponseItem::FunctionCall {
+        encrypted_content: None,
+        status: None,
         id: None,
         name: name.to_string(),
         namespace: namespace.map(str::to_string),
@@ -139,6 +146,8 @@ fn user_images_go_inline_or_by_file_id() {
         detail: None,
     };
     let input = vec![ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: "user".to_string(),
         content: vec![
@@ -230,6 +239,7 @@ fn calls_and_outputs_out_of_order_still_make_a_valid_history() {
         message("user", "Hello?"),
         output("call_9", "late result"),
         ResponseItem::CustomToolCall {
+            encrypted_content: None,
             id: None,
             status: None,
             call_id: "call_3".to_string(),

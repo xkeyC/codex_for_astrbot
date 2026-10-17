@@ -442,14 +442,21 @@ impl Engine {
             effort: request.effort.map(Some),
             ..Default::default()
         };
-        let submission = match request.mode {
-            TurnMode::StartOrSteer => thread.start_or_steer_turn(turn).await?,
+        let started = |turn_id: String| json!({"status": "started", "turn_id": turn_id});
+        let steered = |turn_id: String| json!({"status": "steered", "turn_id": turn_id});
+        let not_submitted = |reason: codex_core::NotSubmittedReason| json!({"status": "not_submitted", "reason": format!("{reason:?}")});
+        let (submission, was_started) = match request.mode {
+            TurnMode::StartOrSteer => match thread.start_or_steer_turn(turn).await? {
+                TurnInputSubmission::Started { turn_id, .. } => (started(turn_id), true),
+                TurnInputSubmission::Steered { turn_id, .. } => (steered(turn_id), false),
+                TurnInputSubmission::NotSubmitted { reason } => (not_submitted(reason), false),
+            },
             TurnMode::StartIfIdle => match thread.start_turn_if_idle(turn).await? {
-                codex_core::StartIfIdleSubmission::Started { turn_id } => {
-                    TurnInputSubmission::Started { turn_id }
+                codex_core::StartIfIdleSubmission::Started { turn_id, .. } => {
+                    (started(turn_id), true)
                 }
                 codex_core::StartIfIdleSubmission::NotSubmitted { reason } => {
-                    TurnInputSubmission::NotSubmitted { reason }
+                    (not_submitted(reason), false)
                 }
             },
             TurnMode::Steer => {
@@ -457,29 +464,17 @@ impl Engine {
                     .expected_turn_id
                     .ok_or_else(|| anyhow!("steer requires expected_turn_id"))?;
                 match thread.steer_turn(turn, expected).await? {
-                    codex_core::SteerSubmission::Steered { turn_id } => {
-                        TurnInputSubmission::Steered { turn_id }
-                    }
+                    codex_core::SteerSubmission::Steered { turn_id } => (steered(turn_id), false),
                     codex_core::SteerSubmission::NotSubmitted { reason } => {
-                        TurnInputSubmission::NotSubmitted { reason }
+                        (not_submitted(reason), false)
                     }
                 }
             }
         };
-        if matches!(submission, TurnInputSubmission::Started { .. }) {
+        if was_started {
             self.start_memories(thread_id, &thread).await;
         }
-        Ok(match submission {
-            TurnInputSubmission::Started { turn_id } => {
-                json!({"status": "started", "turn_id": turn_id})
-            }
-            TurnInputSubmission::Steered { turn_id } => {
-                json!({"status": "steered", "turn_id": turn_id})
-            }
-            TurnInputSubmission::NotSubmitted { reason } => {
-                json!({"status": "not_submitted", "reason": format!("{reason:?}")})
-            }
-        })
+        Ok(submission)
     }
 
     /// Next event, or `None` once the thread has terminated and its queue is drained.

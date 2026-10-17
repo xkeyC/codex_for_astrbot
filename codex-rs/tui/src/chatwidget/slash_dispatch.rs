@@ -193,8 +193,8 @@ impl ChatWidget {
                     return;
                 }
                 if !self.daybreak_enabled {
-                    if !self.has_chatgpt_account || self.config.model_provider_id != "openai" {
-                        self.add_error_message("Daybreak requires a signed-in ChatGPT account and the OpenAI provider.".into());
+                    if !self.daybreak_account_eligible() {
+                        self.add_error_message("Daybreak requires the OpenAI provider with either ChatGPT sign-in or an API key with Daybreak support enabled.".into());
                         return;
                     }
                     if !crate::daybreak::available(&self.model_catalog.models) {
@@ -241,7 +241,12 @@ impl ChatWidget {
                 self.bottom_pane.show_selection_view(SelectionViewParams {
                     title: Some("Archive this session?".to_string()),
                     subtitle: Some(
-                        "Are you sure? This will archive the current session".to_string(),
+                        if self.bottom_pane.is_task_running() {
+                            "This will stop the current turn and archive the session."
+                        } else {
+                            "Are you sure? This will archive the current session"
+                        }
+                        .to_string(),
                     ),
                     footer_hint: Some(standard_popup_hint_line()),
                     items: vec![
@@ -261,7 +266,7 @@ impl ChatWidget {
                             ..Default::default()
                         },
                     ],
-                    ..SelectionViewParams::picker()
+                    ..SelectionViewParams::confirmation()
                 });
                 self.request_redraw();
             }
@@ -294,7 +299,7 @@ impl ChatWidget {
                             ..Default::default()
                         },
                     ],
-                    ..SelectionViewParams::picker()
+                    ..SelectionViewParams::confirmation()
                 });
                 self.request_redraw();
             }
@@ -579,6 +584,9 @@ impl ChatWidget {
             }
             SlashCommand::Statusline => {
                 self.open_status_line_setup();
+            }
+            SlashCommand::Config => {
+                self.open_config_panel();
             }
             SlashCommand::Theme => {
                 self.open_theme_picker();
@@ -1236,7 +1244,7 @@ impl ChatWidget {
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
             token_activity_command_enabled: self.has_codex_backend_auth,
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
-            service_tier_commands_enabled: self.fast_mode_enabled(),
+            service_tier_commands_enabled: !self.current_model_service_tier_commands().is_empty(),
             daybreak_command_description: self.daybreak_command_description(),
             voice_command_enabled: self.realtime_conversation_available_for_thread,
             worktrees_enabled: self.config.features.enabled(Feature::Worktrees)
@@ -1328,6 +1336,7 @@ impl ChatWidget {
             | SlashCommand::Hooks
             | SlashCommand::Title
             | SlashCommand::Statusline
+            | SlashCommand::Config
             | SlashCommand::Theme
             | SlashCommand::Tui
             | SlashCommand::Pets => QueueDrain::Stop,

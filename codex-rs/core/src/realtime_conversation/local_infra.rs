@@ -356,6 +356,8 @@ pub(super) async fn handle_start(
     {
         let mut state = sess.conversation.state.lock().await;
         state.conversation = Some(ConversationState {
+            session_id: None,
+            sub_id: sub_id.clone(),
             audio_tx,
             text_tx,
             session_kind: RealtimeSessionKind::V1,
@@ -374,6 +376,7 @@ pub(super) async fn handle_start(
             start: params.realtime_start_instructions,
             end: params.realtime_end_instructions,
         });
+        state.context_active = true;
     }
     info!("local-infra realtime conversation connected");
 
@@ -398,11 +401,19 @@ pub(super) async fn handle_start(
         // Still active: the server or the connection ended it (else the
         // host stopped it, and is told once this task is done).
         let ended_here = fanout_active.swap(false, Ordering::Relaxed);
-        if ended_here {
-            sess_clone
+        {
+            // The thread is out of the call (unless another one started).
+            let mut state = sess_clone.conversation.state.lock().await;
+            if state
                 .conversation
-                .finish_if_active(&fanout_active)
-                .await;
+                .as_ref()
+                .is_none_or(|current| Arc::ptr_eq(&current.realtime_active, &fanout_active))
+            {
+                state.context_active = false;
+            }
+        }
+        if ended_here {
+            sess_clone.conversation.take_if_active(&fanout_active).await;
         }
         // In a task of its own: a fanout task can be aborted.
         let recording = Arc::clone(&sess_clone);

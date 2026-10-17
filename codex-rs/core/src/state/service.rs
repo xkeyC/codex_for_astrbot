@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
@@ -56,10 +55,6 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_handler_cache: McpHandlerCache,
     pub(crate) unified_exec_manager: UnifiedExecProcessManager,
     pub(crate) elicitations: ElicitationService,
-    #[cfg_attr(not(unix), allow(dead_code))]
-    pub(crate) shell_zsh_path: Option<PathBuf>,
-    #[cfg_attr(not(unix), allow(dead_code))]
-    pub(crate) main_execve_wrapper_exe: Option<PathBuf>,
     pub(crate) analytics_events_client: AnalyticsEventsClient,
     pub(crate) hooks: ArcSwap<Hooks>,
     pub(crate) rollout_thread_trace: ThreadTraceContext,
@@ -86,8 +81,8 @@ pub(crate) struct SessionServices {
     pub(crate) thread_extension_data: ExtensionData,
     /// MCP extensions fixed when this session is created.
     pub(crate) client_mcp_extensions: ClientMcpExtensions,
-    /// Raw capability selections for this thread. Each model step resolves them against its
-    /// current executor environments before using them.
+    /// Roots supplied when the thread started or loaded from saved history.
+    /// Keep roots for unselected environments so selecting them again restores their capabilities.
     pub(crate) selected_capability_roots: Vec<SelectedCapabilityRoot>,
     pub(crate) mcp_thread_init: ExtensionDataInit,
     pub(crate) agent_control: Arc<dyn AgentControl>,

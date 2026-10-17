@@ -102,7 +102,7 @@ use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
-use codex_tools::create_tools_json_for_responses_api;
+use codex_tools::ToolSpec;
 use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
 use eventsource_stream::Event;
@@ -216,11 +216,14 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     concurrent_reasoning_summaries_enabled: bool,
+    output_token_replay_enabled: bool,
     include_attestation: bool,
     attestation_provider: Option<Arc<dyn AttestationProvider>>,
     disable_websockets: AtomicBool,
     agent_identity_session_fallback: AgentIdentitySessionFallback,
     cached_websocket_session: StdMutex<WebsocketSession>,
+    /// Last full tool list used for sampling, retained across turns and connection resets.
+    last_inference_tools: StdMutex<Option<Arc<[ToolSpec]>>>,
 }
 
 enum ClientRouting {
@@ -319,6 +322,11 @@ pub struct ModelClientSession {
     turn_state: Arc<OnceLock<String>>,
 }
 
+/// Executes HTTP Responses requests without owning a turn's WebSocket state.
+pub(crate) struct ResponsesHttpExecutor<'a> {
+    client: &'a ModelClient,
+}
+
 #[derive(Debug, Clone)]
 struct LastResponse {
     response_id: String,
@@ -345,17 +353,58 @@ struct WebsocketSession {
     continuation_reset_reason: Option<&'static str>,
 }
 
+// Continuation diagnostics use bounded labels, never request contents or identifiers.
+#[derive(Debug, PartialEq, Eq)]
+enum NonIncrementalReason {
+    NoPreviousRequest,
+    NoPreviousResponse,
+    NoPreviousResponseId,
+    RequestPropertyChanged {
+        reason: &'static str,
+    },
+    InputShortened {
+        previous: &'static str,
+    },
+    InputMismatch {
+        previous: &'static str,
+        current: &'static str,
+    },
+}
+
+impl NonIncrementalReason {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::NoPreviousRequest => "no_previous_request",
+            Self::NoPreviousResponse => "no_previous_response",
+            Self::NoPreviousResponseId => "no_previous_response_id",
+            Self::RequestPropertyChanged { reason } => reason,
+            Self::InputShortened { .. } => "input_shortened",
+            Self::InputMismatch { .. } => "input_mismatch",
+        }
+    }
+
+    fn item_types(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::InputShortened { previous } => (previous, "none"),
+            Self::InputMismatch { previous, current } => (previous, current),
+            Self::NoPreviousRequest
+            | Self::NoPreviousResponse
+            | Self::NoPreviousResponseId
+            | Self::RequestPropertyChanged { .. } => ("none", "none"),
+        }
+    }
+}
+
 // This is intentionally not a `PartialEq` implementation: request equality includes `input` and
 // `client_metadata`, while websocket reuse compares input and late tool-result metadata separately.
 // Access programs are authorized per response, including continuations, without replaying input.
 // Keep the destructuring exhaustive so new request fields require an explicit reuse decision.
-fn responses_request_properties_match(
+fn responses_request_properties_mismatch(
     previous: &ResponsesApiRequest,
     current: &ResponsesApiRequest,
-) -> bool {
+) -> Option<&'static str> {
     let ResponsesApiRequest {
         model: previous_model,
-        instructions: previous_instructions,
         input: _,
         tools: previous_tools,
         tool_choice: previous_tool_choice,
@@ -373,7 +422,6 @@ fn responses_request_properties_match(
     } = previous;
     let ResponsesApiRequest {
         model: current_model,
-        instructions: current_instructions,
         input: _,
         tools: current_tools,
         tool_choice: current_tool_choice,
@@ -390,20 +438,34 @@ fn responses_request_properties_match(
         access_programs: _,
     } = current;
 
-    previous_model == current_model
-        && previous_instructions == current_instructions
-        && previous_tools == current_tools
-        && previous_tool_choice == current_tool_choice
-        && previous_parallel_tool_calls == current_parallel_tool_calls
-        && previous_reasoning == current_reasoning
-        && previous_store == current_store
-        && previous_stream == current_stream
-        // Stream options control delivery for this response, not the context
-        // referenced by `previous_response_id`.
-        && previous_include == current_include
-        && previous_service_tier == current_service_tier
-        && previous_prompt_cache_key == current_prompt_cache_key
-        && previous_text == current_text
+    // Stream options control delivery for this response, not the context
+    // referenced by `previous_response_id`.
+    let reason = if previous_model != current_model {
+        "model_changed"
+    } else if previous_tools != current_tools {
+        "tools_changed"
+    } else if previous_tool_choice != current_tool_choice {
+        "tool_choice_changed"
+    } else if previous_parallel_tool_calls != current_parallel_tool_calls {
+        "parallel_tool_calls_changed"
+    } else if previous_reasoning != current_reasoning {
+        "reasoning_changed"
+    } else if previous_store != current_store {
+        "store_changed"
+    } else if previous_stream != current_stream {
+        "stream_changed"
+    } else if previous_include != current_include {
+        "include_changed"
+    } else if previous_service_tier != current_service_tier {
+        "service_tier_changed"
+    } else if previous_prompt_cache_key != current_prompt_cache_key {
+        "prompt_cache_key_changed"
+    } else if previous_text != current_text {
+        "text_changed"
+    } else {
+        return None;
+    };
+    Some(reason)
 }
 
 fn response_items_equal_ignoring_internal_metadata(
@@ -504,6 +566,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
         concurrent_reasoning_summaries_enabled: bool,
+        output_token_replay_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         http_client_factory: HttpClientFactory,
         workspace_routing: WorkspaceRoutingContext,
@@ -542,11 +605,13 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 concurrent_reasoning_summaries_enabled,
+                output_token_replay_enabled,
                 include_attestation,
                 attestation_provider,
                 disable_websockets: AtomicBool::new(false),
                 agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                last_inference_tools: StdMutex::new(None),
             }),
             agent_identity_policy,
             prompt_cache_key_override: None,
@@ -660,7 +725,7 @@ impl ModelClient {
         self.state.provider.auth_manager()
     }
 
-    fn auth_owner_generation(&self) -> Option<u64> {
+    pub(crate) fn auth_owner_generation(&self) -> Option<u64> {
         self.auth_manager().map(|manager| {
             manager
                 .auth_change_state_receiver()
@@ -946,47 +1011,58 @@ impl ModelClient {
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
         }
         let is_openai = self.state.provider.info().is_openai();
-        let (instructions, tools) = if model_info.use_responses_lite {
-            // These prompt-only items are rebuilt on every request. Hash their visible payloads
-            // within the thread so retries and resumed sessions preserve their identity.
-            let prefix_namespace = Uuid::new_v5(
-                &Uuid::NAMESPACE_OID,
-                self.state.thread_id.to_string().as_bytes(),
-            );
-            let tools = if self.state.provider.capabilities().namespace_tools {
-                create_tools_json_for_responses_lite(&prompt.tools)?
-            } else {
-                create_tools_json_for_responses_api(&prompt.tools)?
-            };
-            let mut prefix = vec![ResponseItem::AdditionalTools {
-                id: Some(ResponseItemId::with_suffix(
-                    "at",
-                    Uuid::new_v5(&prefix_namespace, &serde_json::to_vec(&tools)?),
-                )),
-                role: "developer".to_string(),
-                tools,
-            }];
-            if !prompt.base_instructions.text.is_empty() {
-                let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
-                    prompt.base_instructions.text.clone(),
-                ));
-                instructions.set_id(Some(ResponseItemId::with_suffix(
-                    "msg",
-                    Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
-                )));
-                prefix.push(instructions);
+        // These prompt-only items are rebuilt on every request. Hash their visible payloads
+        // within the thread so retries and resumed sessions preserve their identity.
+        let prefix_namespace = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            self.state.thread_id.to_string().as_bytes(),
+        );
+        let mut prefix = Vec::new();
+        let tools = if model_info.use_responses_lite {
+            if !prompt.tools.is_empty() {
+                let tools = create_tools_json_for_responses_lite(&prompt.tools)?;
+                prefix.push(ResponseItem::AdditionalTools {
+                    id: Some(ResponseItemId::with_suffix(
+                        "at",
+                        Uuid::new_v5(&prefix_namespace, &serde_json::to_vec(&tools)?),
+                    )),
+                    role: "developer".to_string(),
+                    tools,
+                });
             }
-            input.splice(0..0, prefix);
-            (String::new(), None)
+            None
         } else {
-            (
-                prompt.base_instructions.text.clone(),
-                Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
-            )
+            Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
         };
+        if !prompt.base_instructions.text.is_empty() {
+            let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
+                prompt.base_instructions.text.clone(),
+            ));
+            instructions.set_id(Some(ResponseItemId::with_suffix(
+                "msg",
+                Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
+            )));
+            // AstrBot: the chat wire sends the base instructions as its one
+            // `system` message.
+            if self.chat_wire.is_some()
+                && let ResponseItem::Message { role, .. } = &mut instructions
+            {
+                *role = "system".to_string();
+            }
+            prefix.push(instructions);
+        }
+        input.splice(0..0, prefix);
         if !is_openai {
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();
+                if !matches!(
+                    item,
+                    ResponseItem::Reasoning { .. }
+                        | ResponseItem::Compaction { .. }
+                        | ResponseItem::ContextCompaction { .. }
+                ) {
+                    item.clear_encrypted_content();
+                }
                 if let ResponseItem::FunctionCall {
                     encrypted_function_args,
                     ..
@@ -1003,7 +1079,10 @@ impl ModelClient {
         .then_some(StreamOptions {
             reasoning_summary_delivery: codex_api::ReasoningSummaryDelivery::SequentialCutoff,
         });
-        let include = vec!["reasoning.encrypted_content".to_string()];
+        let mut include = vec!["reasoning.encrypted_content".to_string()];
+        if self.state.output_token_replay_enabled && is_openai {
+            include.push("output.encrypted_content".to_string());
+        }
         let verbosity = if model_info.support_verbosity {
             self.state.model_verbosity.or(model_info.default_verbosity)
         } else {
@@ -1021,12 +1100,17 @@ impl ModelClient {
             prompt.output_schema_strict,
         );
         let prompt_cache_key = Some(self.prompt_cache_key(responses_metadata));
-        let service_tier = if self.state.provider.info().is_amazon_bedrock() {
-            // Bedrock only supports the implicit default tier, including with custom catalogs.
-            None
-        } else {
-            model_info.service_tier_for_request(service_tier)
-        };
+        let service_tier = model_info
+            .service_tier_for_request(service_tier)
+            .filter(|tier| {
+                // Bedrock requires an advertised tier, including for flex, which the
+                // generic OpenAI resolver permits without catalog support.
+                !self.state.provider.info().is_amazon_bedrock()
+                    || model_info
+                        .service_tiers
+                        .iter()
+                        .any(|supported| supported.id == *tier)
+            });
         if !include_internal {
             for item in &mut input {
                 item.clear_tool_result_metadata();
@@ -1039,7 +1123,6 @@ impl ModelClient {
         }
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
-            instructions,
             input,
             tools,
             tool_choice: "auto".to_string(),
@@ -1393,6 +1476,23 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn inference_tools_changed(&self, tools: &Arc<[ToolSpec]>) -> bool {
+        let previous = self
+            .client
+            .state
+            .last_inference_tools
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replace(Arc::clone(tools));
+        previous.is_some_and(|previous| previous != *tools)
+    }
+}
+
+impl<'a> ResponsesHttpExecutor<'a> {
+    pub(crate) fn new(client: &'a ModelClient) -> Self {
+        Self { client }
+    }
+
     #[allow(clippy::too_many_arguments)]
     /// Builds shared Responses API transport options and request-body options.
     ///
@@ -1400,6 +1500,7 @@ impl ModelClientSession {
     /// regardless of transport choice.
     async fn build_responses_options(
         &self,
+        turn_state: &Arc<OnceLock<String>>,
         responses_metadata: &CodexResponsesMetadata,
         compression: Compression,
         use_responses_lite: bool,
@@ -1411,7 +1512,7 @@ impl ModelClientSession {
             extra_headers: {
                 let mut headers = build_responses_headers(
                     self.client.state.beta_features_header.as_deref(),
-                    Some(&self.turn_state),
+                    Some(turn_state),
                 );
                 add_originator_header(&mut headers, self.client.state.originator.as_str());
                 headers.extend(
@@ -1425,8 +1526,18 @@ impl ModelClientSession {
                 headers
             },
             compression,
-            turn_state: Some(Arc::clone(&self.turn_state)),
+            turn_state: Some(Arc::clone(turn_state)),
         }
+    }
+}
+
+impl ModelClientSession {
+    pub(crate) fn turn_state_with_auth_owner(&self) -> (Option<String>, Option<u64>) {
+        let owner = self.client.auth_owner_generation();
+        let turn_state = (self.websocket_session.auth_owner_generation == owner)
+            .then(|| self.turn_state.get().cloned())
+            .flatten();
+        (turn_state, owner)
     }
 
     /// Checks whether the current request is an incremental extension of the previous request.
@@ -1437,35 +1548,33 @@ impl ModelClientSession {
         &self,
         request: &ResponsesApiRequest,
         last_response: &LastResponse,
-    ) -> Option<Vec<ResponseItem>> {
-        let previous_request = self.websocket_session.last_request.as_ref()?;
-        if !responses_request_properties_match(previous_request, request) {
-            trace!("incremental request failed, websocket reuse properties didn't match");
-            return None;
+    ) -> std::result::Result<Vec<ResponseItem>, NonIncrementalReason> {
+        let previous_request = self
+            .websocket_session
+            .last_request
+            .as_ref()
+            .ok_or(NonIncrementalReason::NoPreviousRequest)?;
+        if let Some(reason) = responses_request_properties_mismatch(previous_request, request) {
+            return Err(NonIncrementalReason::RequestPropertyChanged { reason });
         }
 
         let response_items = &last_response.items_added;
-        let previous_items_len = previous_request
-            .input
-            .len()
-            .checked_add(response_items.len())?;
-        let Some((request_items_to_compare, incremental_items)) =
-            request.input.split_at_checked(previous_items_len)
-        else {
-            trace!("incremental request failed, incompatible request length");
-            return None;
-        };
         let previous_items = previous_request.input.iter().chain(response_items);
-        if !previous_items
-            .zip(request_items_to_compare)
-            .all(|(previous, current)| {
-                response_items_equal_ignoring_internal_metadata(previous, current)
-            })
-        {
-            trace!("incremental request failed, items didn't match");
-            return None;
+        let mut current_items = request.input.iter();
+        for previous in previous_items {
+            let Some(current) = current_items.next() else {
+                return Err(NonIncrementalReason::InputShortened {
+                    previous: previous.item_type(),
+                });
+            };
+            if !response_items_equal_ignoring_internal_metadata(previous, current) {
+                return Err(NonIncrementalReason::InputMismatch {
+                    previous: previous.item_type(),
+                    current: current.item_type(),
+                });
+            }
         }
-        Some(incremental_items.to_vec())
+        Ok(current_items.cloned().collect())
     }
 
     fn get_last_response(&mut self) -> Option<LastResponse> {
@@ -1481,16 +1590,17 @@ impl ModelClientSession {
     fn prepare_websocket_request(
         &mut self,
         request: &ResponsesApiRequest,
-    ) -> Option<WebsocketContinuation> {
-        let last_response = self.get_last_response()?;
+    ) -> std::result::Result<WebsocketContinuation, NonIncrementalReason> {
+        let last_response = self
+            .get_last_response()
+            .ok_or(NonIncrementalReason::NoPreviousResponse)?;
         let items = self.get_incremental_items(request, &last_response)?;
 
         if last_response.response_id.is_empty() {
-            trace!("incremental request failed, no previous response id");
-            return None;
+            return Err(NonIncrementalReason::NoPreviousResponseId);
         }
 
-        Some(WebsocketContinuation {
+        Ok(WebsocketContinuation {
             response_id: last_response.response_id,
             items,
             from_untraced_warmup: self.websocket_session.last_response_from_untraced_warmup,
@@ -1665,7 +1775,9 @@ impl ModelClientSession {
                 "websocket connection is unavailable".to_string(),
             ))
     }
+}
 
+impl ResponsesHttpExecutor<'_> {
     fn responses_request_compression(&self, auth: Option<&CodexAuth>) -> Compression {
         if self.client.state.enable_request_compression
             && auth.is_some_and(CodexAuth::uses_codex_backend)
@@ -1677,7 +1789,7 @@ impl ModelClientSession {
         }
     }
 
-    /// Streams a turn via the OpenAI Responses API.
+    /// Streams a turn via the OpenAI Responses API over HTTP.
     ///
     /// Handles reasoning summaries, verbosity, and the `text` controls used for output schemas.
     #[allow(clippy::too_many_arguments)]
@@ -1694,8 +1806,11 @@ impl ModelClientSession {
             turn.has_metadata_header = responses_metadata.has_turn_metadata()
         )
     )]
-    async fn stream_responses_api(
+    pub(crate) async fn stream_responses_http(
         &self,
+        turn_state: &Arc<OnceLock<String>>,
+        expected_auth_owner: Option<u64>,
+        event_sender: Option<&Sender<ProtocolEvent>>,
         prompt: &Prompt,
         model_info: &ModelInfo,
         session_telemetry: &SessionTelemetry,
@@ -1716,6 +1831,12 @@ impl ModelClientSession {
                 .client
                 .current_client_setup(ClientRouting::Workspace)
                 .await?;
+            if expected_auth_owner.is_some_and(|owner| {
+                Some(owner) != client_setup.auth_owner_generation
+                    || Some(owner) != self.client.auth_owner_generation()
+            }) {
+                return Err(CodexErr::TurnAborted);
+            }
             let include_internal = self
                 .client
                 .state
@@ -1741,7 +1862,7 @@ impl ModelClientSession {
                 client_setup.agent_identity_telemetry.clone(),
                 pending_retry,
             );
-            let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
+            let (request_telemetry, sse_telemetry) = ModelClientSession::build_streaming_telemetry(
                 session_telemetry,
                 request_auth_context,
                 RequestRouteTelemetry::for_endpoint(api_path),
@@ -1750,6 +1871,7 @@ impl ModelClientSession {
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
             let mut options = self
                 .build_responses_options(
+                    turn_state,
                     responses_metadata,
                     compression,
                     model_info.use_responses_lite,
@@ -1882,7 +2004,7 @@ impl ModelClientSession {
                             &mut provider_auth_recovery_attempted,
                             session_telemetry,
                             &self.client.state.provider,
-                            self.client.event_sender.as_ref(),
+                            event_sender,
                             responses_metadata.turn_id.as_deref(),
                         )
                         .await?,
@@ -1903,7 +2025,9 @@ impl ModelClientSession {
             }
         }
     }
+}
 
+impl ModelClientSession {
     /// Streams a turn via the Responses API over WebSocket transport.
     #[allow(clippy::too_many_arguments)]
     #[instrument(
@@ -2045,23 +2169,35 @@ impl ModelClientSession {
             if let Some(turn_state) = self.turn_state.get() {
                 client_metadata.insert(X_CODEX_TURN_STATE_HEADER.to_string(), turn_state.clone());
             }
-            let continuation = self.prepare_websocket_request(&request);
-            let (mode, reason) = if continuation.is_some() {
-                ("incremental", "incremental")
-            } else {
-                let reason = self
-                    .websocket_session
-                    .continuation_reset_reason
-                    .take()
-                    .unwrap_or(if self.websocket_session.last_request.is_some() {
-                        "other"
-                    } else if self.client.restored_history {
-                        "restored_history"
-                    } else {
-                        "no_previous_request"
-                    });
-                ("full", reason)
-            };
+            let (continuation, mode, reason, previous_item_type, current_item_type) =
+                match self.prepare_websocket_request(&request) {
+                    Ok(continuation) => (
+                        Some(continuation),
+                        "incremental",
+                        "incremental",
+                        "none",
+                        "none",
+                    ),
+                    Err(failure) => {
+                        let reason = self
+                            .websocket_session
+                            .continuation_reset_reason
+                            .take()
+                            .unwrap_or(if self.websocket_session.last_request.is_some() {
+                                failure.as_str()
+                            } else if self.client.restored_history {
+                                "restored_history"
+                            } else {
+                                "no_previous_request"
+                            });
+                        let (previous_item_type, current_item_type) = failure.item_types();
+                        trace!(
+                            reason,
+                            previous_item_type, current_item_type, "non-incremental request"
+                        );
+                        (None, "full", reason, previous_item_type, current_item_type)
+                    }
+                };
             let previous_response_id_from_untraced_warmup = continuation
                 .as_ref()
                 .is_some_and(|c| c.from_untraced_warmup);
@@ -2151,6 +2287,8 @@ impl ModelClientSession {
                 &[
                     ("mode", mode),
                     ("reason", reason),
+                    ("previous_item_type", previous_item_type),
+                    ("current_item_type", current_item_type),
                     ("phase", if warmup { "warmup" } else { "generation" }),
                     (
                         "after_prewarm",
@@ -2341,17 +2479,21 @@ impl ModelClientSession {
                     }
                 }
 
-                self.stream_responses_api(
-                    prompt,
-                    model_info,
-                    session_telemetry,
-                    effort,
-                    summary,
-                    service_tier,
-                    responses_metadata,
-                    inference_trace,
-                )
-                .await
+                ResponsesHttpExecutor::new(&self.client)
+                    .stream_responses_http(
+                        &self.turn_state,
+                        /*expected_auth_owner*/ None,
+                        self.client.event_sender.as_ref(),
+                        prompt,
+                        model_info,
+                        session_telemetry,
+                        effort,
+                        summary,
+                        service_tier,
+                        responses_metadata,
+                        inference_trace,
+                    )
+                    .await
             }
         }
     }

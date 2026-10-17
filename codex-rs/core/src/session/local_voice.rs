@@ -46,7 +46,10 @@ impl Session {
         if step.realtime.active {
             return;
         }
-        let world_state = match self.build_world_state_for_step(&step).await {
+        let world_state = match self
+            .build_world_state_for_step(&step, /*new_window*/ false)
+            .await
+        {
             Ok(world_state) => world_state,
             Err(err) => {
                 warn!("local-infra conversation: cannot record its end: {err}");
@@ -59,7 +62,7 @@ impl Session {
             .await
             .history
             .update_world_state(&world_state);
-        let items = crate::context_manager::updates::merge_contextual_fragments(fragments);
+        let items = crate::context_manager::updates::merge_world_state_updates(fragments);
         if !items.is_empty() {
             self.record_conversation_items(&turn, &step.settings.model_info, &items)
                 .await;

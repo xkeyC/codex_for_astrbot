@@ -19,7 +19,7 @@ use codex_protocol::protocol::SessionMetaLine;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutItem;
-use codex_rollout::persisted_rollout_items;
+use codex_rollout::into_persisted_rollout_items;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use crate::AppendThreadItemsParams;
@@ -128,6 +128,7 @@ mod tests {
 
         let items_err = store
             .list_items(ListItemsParams {
+                item_ids: None,
                 thread_id,
                 turn_id: None,
                 include_archived: true,
@@ -526,6 +527,7 @@ pub struct InMemoryThreadStore {
 #[derive(Default)]
 struct InMemoryThreadStoreState {
     calls: InMemoryThreadStoreCalls,
+    repeated_list_threads_cursor: Option<String>,
     created_threads: HashMap<ThreadId, CreateThreadParams>,
     histories: HashMap<ThreadId, Vec<RolloutItem>>,
     metadata_updates: HashMap<ThreadId, ThreadMetadataPatch>,
@@ -564,6 +566,11 @@ impl InMemoryThreadStore {
     /// Returns the calls observed by this store.
     pub async fn calls(&self) -> InMemoryThreadStoreCalls {
         self.state.lock().await.calls.clone()
+    }
+
+    /// Makes every thread-list page return the same cursor for public API error-path tests.
+    pub async fn repeat_list_threads_cursor_for_testing(&self, cursor: impl Into<String>) {
+        self.state.lock().await.repeated_list_threads_cursor = Some(cursor.into());
     }
 
     /// Makes metadata updates apply normally while returning no materialized thread.
@@ -653,7 +660,7 @@ impl InMemoryThreadStore {
         }
         let mut state = self.state.lock().await;
         let history_mode = history_mode_from_state(&state, params.thread_id);
-        let persisted_items = persisted_rollout_items(params.items.as_slice(), history_mode);
+        let persisted_items = into_persisted_rollout_items(params.items, history_mode);
         if persisted_items.is_empty() {
             return Ok(());
         }
@@ -753,7 +760,7 @@ impl InMemoryThreadStore {
         items.sort_by_key(|item| item.thread_id.to_string());
         Ok(ThreadPage {
             items,
-            next_cursor: None,
+            next_cursor: state.repeated_list_threads_cursor.clone(),
         })
     }
 

@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::app_server_session::ThreadParamsMode;
+use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::tests::helpers::normalize_agent_center_snapshot;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCRequest;
@@ -248,6 +249,77 @@ async fn disconnected_command_center_keeps_input_and_blocks_actions() -> Result<
 }
 
 #[tokio::test]
+async fn disconnected_config_panel_keeps_input() -> Result<()> {
+    let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+    let mut session = crate::start_embedded_app_server_for_picker(&app.config).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.chat_widget
+        .restore_user_message_to_composer("/config".into());
+
+    app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(KeyCode::Enter.into()))
+        .await?;
+    assert!(app.chat_widget.has_active_view());
+    app.app_server_target = AppServerTarget::Remote {
+        endpoint: crate::resolve_remote_addr("ws://127.0.0.1:9")?,
+    };
+    assert!(app.begin_reconnect());
+    assert!(app.chat_widget.has_active_view());
+
+    app.handle_tui_event(
+        &mut tui,
+        &mut session,
+        TuiEvent::Key(KeyCode::Char('/').into()),
+    )
+    .await?;
+    app.handle_tui_event(
+        &mut tui,
+        &mut session,
+        TuiEvent::Key(KeyCode::Char('t').into()),
+    )
+    .await?;
+    app.handle_tui_event(&mut tui, &mut session, TuiEvent::Paste("heme".into()))
+        .await?;
+
+    assert!(render_bottom_popup(&app.chat_widget, /*width*/ 80).contains("\n  Search › theme\n"));
+
+    assert_eq!(app.chat_widget.local_settings.tui.terminal_title, None);
+    app.chat_widget
+        .preview_terminal_title(vec![TerminalTitleItem::Project]);
+    app.chat_widget.show_selection_view(SelectionViewParams {
+        allow_input_when_disconnected: true,
+        on_cancel: Some(Box::new(|tx| {
+            tx.send(AppEvent::TerminalTitleSetupCancelled)
+        })),
+        ..SelectionViewParams::picker()
+    });
+    assert!(matches!(
+        app.handle_tui_event(
+            &mut tui,
+            &mut session,
+            TuiEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        )
+        .await?,
+        AppRunControl::Continue
+    ));
+    assert_eq!(app.chat_widget.local_settings.tui.terminal_title, None);
+    assert!(matches!(
+        events.try_recv(),
+        Ok(AppEvent::TerminalTitleSetupCancelled)
+    ));
+
+    app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(KeyCode::Esc.into()))
+        .await?;
+    app.chat_widget
+        .open_model_popup_with_presets(crate::test_support::TEST_MODEL_PRESETS.clone());
+    app.handle_tui_event(&mut tui, &mut session, TuiEvent::Key(KeyCode::Enter.into()))
+        .await?;
+    assert!(!app.chat_widget.has_active_view());
+    assert!(events.try_recv().is_err());
+    session.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn remote_disconnect_retires_voice_before_reconnecting() -> Result<()> {
     let (mut app, _events, _ops) = make_test_app_with_channels().await;
     let thread_id = ThreadId::new();
@@ -367,7 +439,7 @@ async fn lost_initial_thread_reply_keeps_startup_draft_offline() -> Result<()> {
             ThreadParamsMode::Remote,
             /*remote_cwd_override*/ None,
             session.thread_tool_transport(),
-            /*model_provider_override*/ None,
+            crate::app_server_session::StartupLaunchChoices::default(),
         )
         .await;
         let mut tui = crate::tui::test_support::make_test_tui()?;

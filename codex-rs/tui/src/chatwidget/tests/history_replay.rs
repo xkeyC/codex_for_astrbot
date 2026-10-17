@@ -16,6 +16,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ false);
 
     let thread_id = ThreadId::new();
     let rollout_file = NamedTempFile::new().unwrap();
@@ -53,9 +54,30 @@ async fn resumed_initial_messages_render_history() {
         @""
     );
 
+    // A saved On preference cannot bypass the API-key gate.
+    chat.status_account_display = Some(StatusAccountDisplay::ApiKey);
+    chat.set_feature_enabled(Feature::ApiKeyCyberAccessPrograms, /*enabled*/ false);
     chat.set_feature_enabled(Feature::CliDaybreak, /*enabled*/ true);
     configured.thread_id = ThreadId::new();
+    chat.handle_thread_session(configured.clone());
+    assert!(!chat.daybreak_enabled);
+    insta::assert_snapshot!(
+        drain_insert_history(&mut rx).into_iter().flatten()
+            .map(|line| line.to_string())
+            .filter(|line| line.contains("Daybreak"))
+            .collect::<Vec<_>>().join("\n"),
+        @""
+    );
+
+    // Session hydration can precede the account update on ChatGPT sign-in.
+    chat.status_account_display = None;
+    configured.thread_id = ThreadId::new();
     chat.handle_thread_session(configured);
+    assert!(chat.daybreak_enabled);
+    chat.update_account_state(
+        /*status_account_display*/ None, /*plan_type*/ None,
+        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+    );
     assert!(chat.daybreak_enabled);
     replay_user_message_text(
         &mut chat,
@@ -1140,6 +1162,7 @@ async fn replayed_retryable_app_server_error_keeps_turn_running() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
@@ -1475,6 +1498,7 @@ async fn live_reasoning_summary_is_not_rendered_twice_when_item_completes() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,
@@ -1534,6 +1558,7 @@ async fn live_reasoning_summary_drops_empty_parts_without_losing_content() {
             thread_id: "thread-1".to_string(),
             turn: AppServerTurn {
                 id: "turn-1".to_string(),
+                root_turn_id: None,
                 items_view: codex_app_server_protocol::TurnItemsView::Full,
                 items: Vec::new(),
                 status: AppServerTurnStatus::InProgress,

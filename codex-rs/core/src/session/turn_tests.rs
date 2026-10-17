@@ -29,9 +29,13 @@ impl TurnItemContributor for RewriteAgentMessageContributor {
 
 fn assistant_output_text(text: &str) -> ResponseItem {
     ResponseItem::Message {
+        status: None,
+        encrypted_content: None,
         id: Some(ResponseItemId::with_suffix("msg", "1")),
         role: "assistant".to_string(),
         content: vec![ContentItem::OutputText {
+            annotations: None,
+            logprobs: None,
             text: text.to_string(),
         }],
         phase: None,
@@ -46,22 +50,18 @@ fn post_sampling_token_estimate_is_disabled_by_always_on_sinks() {
         .with(feedback.logger_layer())
         .with(tracing_subscriber::fmt::layer().with_filter(codex_state::log_db::default_filter()));
 
-    // Fork change: ask this subscriber directly. `event_enabled!` goes through
-    // the process-wide callsite interest cache, which subscribers of tests
-    // running in parallel can flip to "always".
-    let callsite = tracing::callsite! {
-        name: "post_sampling_token_estimate",
-        kind: tracing::metadata::Kind::EVENT,
+    static METADATA: tracing::Metadata<'static> = tracing::metadata! {
+        name: "post sampling token estimate filter probe",
         target: POST_SAMPLING_TOKEN_ESTIMATE_TARGET,
         level: tracing::Level::TRACE,
-        fields: turn_id, estimated_token_count, message
+        fields: &["turn_id", "estimated_token_count", "message"],
+        callsite: &CALLSITE,
+        kind: tracing::metadata::Kind::EVENT.hint(),
     };
-    let dispatch = tracing::Dispatch::new(subscriber);
-    let metadata = tracing::Callsite::metadata(callsite);
-    let interest = dispatch.register_callsite(metadata);
-    // The same decision `event_enabled!` makes, from this subscriber alone.
-    let enabled = !interest.is_never() && (interest.is_always() || dispatch.enabled(metadata));
-    assert!(!enabled);
+    static CALLSITE: tracing::callsite::DefaultCallsite =
+        tracing::callsite::DefaultCallsite::new(&METADATA);
+
+    assert!(tracing::Subscriber::register_callsite(&subscriber, &METADATA).is_never());
 }
 
 #[tokio::test]

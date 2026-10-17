@@ -413,9 +413,6 @@ struct AssistantStep {
 /// The chat messages of `request`'s instructions and input.
 fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value> {
     let mut messages = Vec::new();
-    if !request.instructions.is_empty() {
-        messages.push(json!({"role": "system", "content": request.instructions}));
-    }
     let mut step = AssistantStep::default();
     // Calls of the last assistant message without an output yet.
     let mut open: Vec<String> = Vec::new();
@@ -423,6 +420,15 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
         match item {
             ResponseItem::Message { role, content, .. } if role == "assistant" => {
                 push_line(&mut step.content, &message_text(content));
+            }
+            // The base instructions (Codex sends them as the first input item).
+            ResponseItem::Message { role, content, .. } if role == "system" => {
+                flush_step(&mut messages, &mut step, &mut open);
+                close_calls(&mut messages, &mut open);
+                let text = message_text(content);
+                if !text.is_empty() {
+                    messages.push(json!({"role": "system", "content": text}));
+                }
             }
             ResponseItem::Message { role, content, .. } => {
                 flush_step(&mut messages, &mut step, &mut open);
@@ -588,7 +594,7 @@ fn message_text(content: &[ContentItem]) -> String {
     content
         .iter()
         .filter_map(|item| match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                 Some(text.as_str())
             }
             _ => None,
@@ -629,7 +635,7 @@ fn message_content(content: &[ContentItem]) -> Value {
     let parts = content
         .iter()
         .filter_map(|item| match item {
-            ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+            ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                 Some(json!({"type": "text", "text": text}))
             }
             ContentItem::InputImage {
@@ -1040,6 +1046,7 @@ impl ChatStream {
                     })
                     .unwrap_or(call.arguments);
                 ResponseItem::CustomToolCall {
+                    encrypted_content: None,
                     id: None,
                     status: None,
                     call_id,
@@ -1050,6 +1057,8 @@ impl ChatStream {
                 }
             } else {
                 ResponseItem::FunctionCall {
+                    encrypted_content: None,
+                    status: None,
                     id: None,
                     name: target.name,
                     namespace: target.namespace,
@@ -1106,12 +1115,18 @@ fn content_delta(delta: &Value) -> Option<String> {
 
 fn message_item(text: String) -> ResponseItem {
     ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: "assistant".to_string(),
         content: if text.is_empty() {
             Vec::new()
         } else {
-            vec![ContentItem::OutputText { text }]
+            vec![ContentItem::OutputText {
+                text,
+                annotations: None,
+                logprobs: None,
+            }]
         },
         phase: None,
         internal_chat_message_metadata_passthrough: None,

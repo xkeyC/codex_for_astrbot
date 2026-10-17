@@ -169,18 +169,17 @@ async fn spawn_v2_subagent(
     label: &str,
 ) -> crate::thread_manager::NewThread {
     state
-        .spawn_new_thread_with_source(
-            config,
+        .spawn_child_thread(
+            crate::thread_manager::StartThreadOptions {
+                session_source: Some(SessionSource::SubAgent(SubAgentSource::Other(
+                    label.to_string(),
+                ))),
+                thread_source: Some(ThreadSource::Subagent),
+                ..crate::thread_manager::StartThreadOptions::new(config)
+            },
             control.clone(),
-            SessionSource::SubAgent(SubAgentSource::Other(label.to_string())),
-            /*history_mode*/ None,
             Some(parent_thread_id),
-            /*forked_from_thread_id*/ None,
-            Some(ThreadSource::Subagent),
-            /*metrics_service_name*/ None,
-            /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
-            /*environments*/ None,
         )
         .await
         .expect("spawn v2 subagent")
@@ -193,6 +192,7 @@ async fn mark_thread_completed(thread: &CodexThread) {
         .send_event(
             turn.as_ref(),
             EventMsg::TurnComplete(TurnCompleteEvent {
+                root_turn_id: None,
                 turn_id: turn.sub_id.clone(),
                 started_at: None,
                 last_agent_message: Some("done".to_string()),
@@ -213,6 +213,7 @@ async fn mark_thread_interrupted(thread: &CodexThread) {
         .send_event(
             turn.as_ref(),
             EventMsg::TurnAborted(TurnAbortedEvent {
+                root_turn_id: None,
                 turn_id: Some(turn.sub_id.clone()),
                 started_at: None,
                 reason: TurnAbortReason::Interrupted,
