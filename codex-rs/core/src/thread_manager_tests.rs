@@ -3505,3 +3505,54 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
         1,
     );
 }
+
+/// Fork: a thread recorded with an originator the embedder declared legacy
+/// takes the process originator when resumed; other recorded ones are kept.
+#[tokio::test]
+async fn resumed_thread_drops_a_legacy_originator() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config().await;
+    config.codex_home = temp_dir.path().join("codex-home").abs();
+    config.cwd = config.codex_home.abs();
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+    let manager = ThreadManager::with_models_provider_and_home_for_tests(
+        CodexAuth::from_api_key("dummy"),
+        config.model_provider.clone(),
+        config.codex_home.to_path_buf(),
+        Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
+    );
+    let _ = codex_login::default_client::LEGACY_ORIGINATORS
+        .set(vec!["fork_legacy_originator".to_string()]);
+    let resumed = |originator: &str| {
+        InitialHistory::Resumed(ResumedHistory {
+            history_revision: None,
+            conversation_id: ThreadId::new(),
+            history: Arc::new(vec![RolloutItem::SessionMeta(SessionMetaLine {
+                meta: SessionMeta {
+                    originator: originator.to_string(),
+                    ..SessionMeta::default()
+                },
+                git: None,
+            })]),
+            rollout_path: None,
+        })
+    };
+
+    for (recorded, expected) in [
+        ("recorded_originator", "recorded_originator".to_string()),
+        ("fork_legacy_originator", originator().value),
+    ] {
+        let effective = manager
+            .state
+            .effective_originator(
+                &resumed(recorded),
+                /*metrics_service_name*/ None,
+                &SessionSource::Exec,
+                /*parent_thread_id*/ None,
+                /*forked_from_thread_id*/ None,
+                /*parent_originator*/ None,
+            )
+            .await;
+        assert_eq!(effective, expected, "recorded {recorded}");
+    }
+}

@@ -43,6 +43,17 @@ pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(||
 /// Fork identity for the User-Agent, set once by an embedder (fork addition):
 /// `<originator>/<version> (<os>) <terminal>; <tag>`, before any suffix.
 pub static USER_AGENT_FORK_TAG: OnceLock<String> = OnceLock::new();
+/// Originators an embedder used to send (fork addition): a thread resumed
+/// from a rollout that recorded one of them takes the process originator
+/// instead of keeping the recorded one. Empty unless an embedder sets it.
+pub static LEGACY_ORIGINATORS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Whether `value` is one of the embedder's `LEGACY_ORIGINATORS`.
+pub fn is_legacy_originator(value: &str) -> bool {
+    LEGACY_ORIGINATORS
+        .get()
+        .is_some_and(|legacy| legacy.iter().any(|item| item == value))
+}
 pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub use codex_model_provider_info::RESIDENCY_HEADER_NAME;

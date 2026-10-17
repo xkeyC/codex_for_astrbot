@@ -60,6 +60,9 @@ const SESSION_SOURCE: &str = "astrbot";
 /// accept them; the User-Agent names the fork after the terminal token.
 const DEFAULT_ORIGINATOR: &str = "codex_exec";
 const FORK_TAG: &str = "xkeyC/codex_for_astrbot";
+/// The originator this binding sent before it identified as `codex_exec`;
+/// threads recorded with it take the current one when resumed.
+const LEGACY_ORIGINATOR: &str = "astrbot";
 
 /// Process-wide options, fixed when the runtime is created.
 #[derive(Debug, Default, Deserialize)]
@@ -86,7 +89,8 @@ pub struct EngineOptions {
     /// this process, as an app-server client with this `clientInfo.name` gets
     /// them; defaults to `codex_exec` with no suffix, as `codex exec` sends.
     /// The User-Agent always names the fork. The official TUI is `codex-tui`. Threads
-    /// resumed from a rollout keep the originator recorded there. Only the
+    /// resumed from a rollout keep the originator recorded there, except this
+    /// binding's old `astrbot`, which gives way to the current one. Only the
     /// first runtime of a process can set it.
     #[serde(default)]
     pub originator: Option<String>,
@@ -198,6 +202,8 @@ impl Engine {
         }
         // e.g. `codex_exec/0.158.0 (Linux 22.04; x86_64) unknown; xkeyC/codex_for_astrbot`.
         let _ = codex_login::default_client::USER_AGENT_FORK_TAG.set(FORK_TAG.to_string());
+        let _ = codex_login::default_client::LEGACY_ORIGINATORS
+            .set(vec![LEGACY_ORIGINATOR.to_string()]);
         let requested = options.originator.clone();
         let originator = requested
             .clone()

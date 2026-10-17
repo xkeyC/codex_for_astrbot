@@ -65,6 +65,7 @@ use codex_install_context::InstallContext;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use codex_login::default_client::is_legacy_originator;
 use codex_login::default_client::originator;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
@@ -1947,7 +1948,10 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         parent_originator: Option<String>,
     ) -> String {
-        let persisted_originator = initial_history.get_session_originator();
+        // Fork: an originator the embedder no longer sends is not kept.
+        let persisted_originator = initial_history
+            .get_session_originator()
+            .filter(|value| !is_legacy_originator(value));
         let inherited_originator = match initial_history {
             InitialHistory::New | InitialHistory::Cleared => {
                 self.inherited_originator_for_parent_thread(
