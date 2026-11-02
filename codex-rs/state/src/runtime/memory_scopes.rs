@@ -43,7 +43,7 @@ ON CONFLICT(thread_id) DO UPDATE SET
         .bind(thread_id.to_string())
         .bind(scope_key)
         .bind(i64::from(may_write_global))
-        .execute(self.pool.as_ref())
+        .execute_with_busy_retry(self.pool.as_ref())
         .await?;
         Ok(())
     }
@@ -95,7 +95,7 @@ ON CONFLICT(thread_id) DO UPDATE SET
         let now = Utc::now().timestamp();
         let thread_id = thread_id.to_string();
 
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_immediate().await?;
         let rows_affected = sqlx::query(
             r#"
 UPDATE jobs

@@ -150,7 +150,8 @@ pub struct TurnRequest {
     /// Standing context, re-sent by core only when a value changes.
     #[serde(default)]
     pub additional_context: BTreeMap<String, ContextEntry>,
-    /// Replace the thread's dynamic tools when this input is accepted.
+    /// Replace the thread's dynamic tools before this input is submitted. The
+    /// replacement stands even if the input is then refused.
     #[serde(default)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
     #[serde(default)]
