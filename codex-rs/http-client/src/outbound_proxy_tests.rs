@@ -737,11 +737,10 @@ fn explicit_proxy_routes_every_destination_through_it() {
         factory,
         HttpClientFactory::with_explicit_proxy("http://127.0.0.1:8080")
     );
-    factory
-        .build_reqwest_client(
-            reqwest::Client::builder(),
-            "https://chatgpt.com/",
-            ClientRouteClass::Api,
-        )
-        .expect("a socks5 proxy builds a client");
+    build_reqwest_client_for_route(
+        reqwest::Client::builder(),
+        ClientRouteClass::Api,
+        &factory.resolve_proxy_route("https://chatgpt.com/"),
+    )
+    .expect("a socks5 proxy builds a client");
 }

@@ -39,6 +39,8 @@ async fn call(tools: &[MemoryTool], name: &str, arguments: Value) -> Result<(), 
         .find(|tool| tool.tool_name() == name)
         .expect("tool is registered");
     tool.handle(ToolCall {
+        attachment_store: std::sync::Arc::new(codex_attachment_store::InlineAttachmentStore),
+        ephemeral: false,
         turn_id: "turn-1".to_string(),
         call_id: "call-1".to_string(),
         tool_name: name,

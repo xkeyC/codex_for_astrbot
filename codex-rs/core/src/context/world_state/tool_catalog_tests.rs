@@ -34,7 +34,10 @@ fn render(
         .into_iter()
         .next()
         .map(|update| match update.content {
-            super::super::WorldStateUpdateContent::Fragment(fragment) => fragment.render(),
+            super::super::WorldStateUpdateContent::Fragment(fragment) => match fragment.render() {
+                codex_protocol::models::ContentItem::InputText { text } => text,
+                other => unreachable!("catalog fragments are text: {other:?}"),
+            },
             super::super::WorldStateUpdateContent::Item(_) => unreachable!("catalog renders text"),
         })
 }

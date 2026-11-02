@@ -8,11 +8,9 @@ use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
-use codex_protocol::protocol::ThreadSettingsOverrides;
 use core_test_support::responses;
 use core_test_support::responses::ResponsesRequest;
 use core_test_support::skip_if_no_network;
-use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 
@@ -50,6 +48,7 @@ async fn code_mode_catalog_lists_deferred_tools_then_appends_changes() -> Result
     let base_test = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(|config| {
+            config.allow_persistent_dynamic_tool_updates = true;
             config
                 .features
                 .enable(Feature::CodeModeOnly)
@@ -89,14 +88,9 @@ astrbot__ — Host tools.\n- tool_alpha: The tool_alpha tool.\n\
         vec![listing.to_string()]
     );
 
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            dynamic_tools: Some(vec![deferred_namespace(&["tool_alpha", "tool_gamma"])]),
-            ..Default::default()
-        },
-    )
-    .await?;
+    test.codex
+        .replace_dynamic_tools(vec![deferred_namespace(&["tool_alpha", "tool_gamma"])])
+        .await?;
     let third = responses::mount_sse_once(&server, responses::sse_completed("third")).await;
     test.submit_text_turn("and now").await?;
     let third = third.single_request();
@@ -111,14 +105,9 @@ astrbot__ — Host tools.\n- tool_alpha: The tool_alpha tool.\n\
     );
 
     // Back to the first set: tool_beta's description is already in history.
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            dynamic_tools: Some(vec![deferred_namespace(&["tool_alpha", "tool_beta"])]),
-            ..Default::default()
-        },
-    )
-    .await?;
+    test.codex
+        .replace_dynamic_tools(vec![deferred_namespace(&["tool_alpha", "tool_beta"])])
+        .await?;
     let fourth = responses::mount_sse_once(&server, responses::sse_completed("fourth")).await;
     test.submit_text_turn("once more").await?;
     let fourth = fourth.single_request();

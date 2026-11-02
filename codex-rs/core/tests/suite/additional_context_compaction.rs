@@ -29,6 +29,7 @@ fn persona(value: &str) -> BTreeMap<String, AdditionalContextEntry> {
     BTreeMap::from([(
         "astrbot_persona".to_string(),
         AdditionalContextEntry {
+            name: None,
             value: value.to_string(),
             kind: AdditionalContextKind::Application,
         },

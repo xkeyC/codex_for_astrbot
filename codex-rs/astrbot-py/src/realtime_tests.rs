@@ -9,6 +9,7 @@ fn params(request: serde_json::Value) -> ConversationStartParams {
 
 fn defaults(transport: Option<ConversationStartTransport>) -> ConversationStartParams {
     ConversationStartParams {
+        voice_session_id: None,
         client_managed_handoffs: false,
         delegation_ack_filler: None,
         flush_transcript_tail_on_session_end: false,
@@ -85,6 +86,7 @@ fn full_request_maps_every_field() {
         "codex_response_handoff_channel_prefixes": {"final": ["<f>"]},
     });
     let expected = ConversationStartParams {
+        voice_session_id: None,
         client_managed_handoffs: true,
         delegation_ack_filler: Some(true),
         flush_transcript_tail_on_session_end: true,

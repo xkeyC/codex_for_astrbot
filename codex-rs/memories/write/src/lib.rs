@@ -19,6 +19,7 @@ mod scopes;
 mod start;
 mod storage;
 pub mod workspace;
+mod workspace_lock;
 
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::path::Path;
@@ -33,6 +34,7 @@ pub use start::start_memories_startup_task;
 pub use storage::rebuild_raw_memories_file_from_memories;
 pub use storage::rollout_summary_file_stem;
 pub use storage::sync_rollout_summaries_from_memories;
+pub use workspace_lock::MemoryWorkspaceLock;
 
 #[cfg(test)]
 mod startup_tests;
@@ -45,7 +47,7 @@ mod artifacts {
 
 mod extension_resources {
     pub(super) const FILENAME_TS_FORMAT: &str = "%Y-%m-%dT%H-%M-%S";
-    pub(super) const RETENTION_DAYS: i64 = 7;
+    pub(super) const RETENTION_DAYS: i64 = 14;
 }
 
 mod guard_limits {

@@ -5,6 +5,24 @@ use crate::scopes::Phase2Target;
 use codex_config::memory_scopes::memory_scope_root;
 use pretty_assertions::assert_eq;
 
+async fn build_test_codex_with_memories_config(
+    server: &wiremock::MockServer,
+    home: Arc<TempDir>,
+    memories: MemoriesConfig,
+) -> anyhow::Result<TestCodex> {
+    test_codex()
+        .with_home(home)
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::Sqlite)
+                .expect("test config should allow feature update");
+            config.memories = memories;
+        })
+        .build(server)
+        .await
+}
+
 fn scoped_memories_config(auto_consolidate: bool) -> MemoriesConfig {
     MemoriesConfig {
         scope_key: Some("chat-1".to_string()),

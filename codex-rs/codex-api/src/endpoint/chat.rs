@@ -695,6 +695,7 @@ fn spawn_chat_stream(
         .await;
     });
     ResponseStream {
+        routing_affinity: None,
         rx_event,
         upstream_request_id,
         interrupt: None,

@@ -7,12 +7,9 @@ use codex_protocol::dynamic_tools::DynamicToolNamespaceSpec;
 use codex_protocol::dynamic_tools::DynamicToolNamespaceTool;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::mcp::ClientMcpExtensions;
-use codex_protocol::protocol::ThreadSettingsOverrides;
 use core_test_support::responses;
 use core_test_support::skip_if_no_network;
-use core_test_support::submit_thread_settings;
 use core_test_support::test_codex::test_codex;
-use pretty_assertions::assert_eq;
 use serde_json::Value;
 
 fn namespace_with(tools: &[&str]) -> DynamicToolSpec {
@@ -75,7 +72,10 @@ async fn replacing_dynamic_tools_keeps_history_and_persists() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = responses::start_mock_server().await;
-    let base_test = test_codex().build_with_auto_env(&server).await?;
+    let base_test = test_codex()
+        .with_config(|config| config.allow_persistent_dynamic_tool_updates = true)
+        .build_with_auto_env(&server)
+        .await?;
     let new_thread = base_test
         .thread_manager
         .start_thread(StartThreadOptions {
@@ -95,19 +95,9 @@ async fn replacing_dynamic_tools_keeps_history_and_persists() -> Result<()> {
     let names = tool_names(&first_body);
     assert!(names.iter().any(|n| n == "tool_alpha"), "{names:?}");
 
-    submit_thread_settings(
-        &test.codex,
-        ThreadSettingsOverrides {
-            dynamic_tools: Some(vec![namespace_with(&["tool_beta"])]),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let snapshot = test.codex.thread_settings_snapshot().await;
-    assert_eq!(
-        snapshot.dynamic_tools,
-        Some(vec![namespace_with(&["tool_beta"])])
-    );
+    test.codex
+        .replace_dynamic_tools(vec![namespace_with(&["tool_beta"])])
+        .await?;
 
     let second = responses::mount_sse_once(&server, responses::sse_completed("second")).await;
     test.submit_text_turn("what was the word?").await?;

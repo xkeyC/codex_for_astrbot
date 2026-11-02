@@ -96,50 +96,50 @@ jobs:
             target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - runner: macos-15-xlarge
             target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           # Release artifacts intentionally ship MUSL-linked Linux binaries.
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: primary
             artifact_name: x86_64-unknown-linux-musl
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-x64-xl
             target: x86_64-unknown-linux-musl
             bundle: app-server
             artifact_name: x86_64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: primary
             artifact_name: aarch64-unknown-linux-musl
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy bwrap"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy bwrap"
             build_dmg: "false"
           - runner: ${{ github.event.repository.name }}-linux-arm64
             target: aarch64-unknown-linux-musl
             bundle: app-server
             artifact_name: aarch64-unknown-linux-musl-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
 
     steps:
@@ -268,8 +268,8 @@ jobs:
           export STABLE_GIT_COMMIT
           cargo build --target "$target" --release --timings "${build_args[@]}"
 
-      - name: Prepare Bazel release build
-        if: ${{ matrix.build-system == 'bazel' }}
+      - name: Prepare Bazel for release binaries or Linux voice
+        if: matrix.build-system == 'bazel' || (matrix.bundle == 'primary' && contains(matrix.target, 'linux'))
         uses: ./.github/actions/prepare-bazel-ci
         with:
           target: ${{ matrix.target }}
@@ -322,17 +322,12 @@ jobs:
           path: codex-rs/symbols-dist/${{ matrix.artifact_name }}/*
           if-no-files-found: error
 
-      - name: Set up Bazel for Linux voice
-        if: ${{ matrix.bundle == 'primary' && contains(matrix.target, 'linux') }}
-        uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
-        with:
-          bazelisk-version: 1.28.1
-
       - name: Build Linux voice runtime
         if: ${{ matrix.bundle == 'primary' && contains(matrix.target, 'linux') }}
         shell: bash
         env:
           APP_TARGET: ${{ matrix.target }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -342,7 +337,8 @@ jobs:
             x86_64-unknown-linux-gnu) prefix=linux_x86_64 ;;
             *) exit 1 ;;
           esac
-          bazel build --config=release //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
+          python3 .github/scripts/run_bazel_with_buildbuddy.py build --config=release \
+            //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
           source="bazel-bin/third_party/voice/native_runtime_${prefix}"
           output="${RUNNER_TEMP}/signed-voice/${APP_TARGET}"
           mkdir -p "$output"
@@ -402,9 +398,9 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
-            # Both variants package the host, but only the primary bundle publishes
+            # Both variants package the host and executor; only the primary publishes
             # standalone binary archives to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
@@ -446,6 +442,12 @@ jobs:
           artifacts-dir: ${{ github.workspace }}/codex-rs/dist/${{ matrix.target }}
           binaries: codex-package-${{ matrix.target }}.tar.gz codex-package-${{ matrix.target }}.tar.zst
 
+      - name: Set up Python release tools
+        if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' && runner.os != 'macOS' }}
+        uses: ./.github/actions/setup-python-release-tools
+        with:
+          group: runtime
+
       - name: Build Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' && runner.os != 'macOS' }}
         shell: bash
@@ -470,11 +472,6 @@ jobs:
               exit 1
               ;;
           esac
-
-          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
-          # Do not install into the runner's system Python; macOS runners mark
-          # the Homebrew Python as externally managed under PEP 668.
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
           # Keep the existing manylinux_2_17 wheel compatible with older glibc.
           # GNU voice libraries belong in the signed release package archives,
@@ -504,7 +501,8 @@ jobs:
             --platform-tag "$platform_tag"
           )
           python3 "${stage_runtime_args[@]}"
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+          uv build --offline --no-build-isolation --no-create-gitignore \
+            --python "${RUNNER_TEMP}/python-runtime-build-venv" --wheel --out-dir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' && runner.os != 'macOS' }}
@@ -575,6 +573,9 @@ jobs:
     needs: tag-check
     name: Build voice runtime - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    environment:
+      name: bazel
+      deployment: false
     timeout-minutes: 120
     permissions:
       contents: read
@@ -595,20 +596,24 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
-      - uses: bazel-contrib/setup-bazel@c5acdfb288317d0b5c0bbd7a396a3dc868bb0f86 # 0.19.0
+      - name: Prepare Bazel CI
+        uses: ./.github/actions/prepare-bazel-ci
         with:
-          bazelisk-version: 1.28.1
+          target: ${{ matrix.target }}
+          cache-scope: bazel-release-primary
       - name: Build matching helper and native runtime
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
           PREFIX: ${{ matrix.prefix }}
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: |
           set -euo pipefail
           # Release tags bump Cargo.toml without rewriting the workspace lockfile.
           # Refresh workspace versions before Bazel reads the Cargo dependency graph.
           (cd codex-rs && cargo update --workspace)
-          bazel build --config=release --macos_minimum_os=14.0 //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
+          python3 .github/scripts/run_bazel_with_buildbuddy.py build --config=release \
+            --macos_minimum_os=14.0 //codex-rs/voice-host:codex-voice-host //third_party/voice:native_runtime
           runtime="bazel-bin/third_party/voice/native_runtime_${PREFIX}"
           PYTHONPATH=third_party/voice python3 - "$runtime" "$TARGET" <<'PY'
           from pathlib import Path
@@ -657,19 +662,19 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -902,22 +907,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             build_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             build_dmg: "false"
 
     steps:
@@ -996,9 +1001,9 @@ jobs:
           mkdir -p "$dest"
 
           for binary in ${{ matrix.binaries }}; do
-            # Both variants package the host, but only the primary bundle publishes
+            # Both variants package the host and executor; only the primary publishes
             # standalone binary archives to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
             cp "target/${{ matrix.target }}/release/${binary}" "$dest/${binary}-${{ matrix.target }}"
@@ -1078,6 +1083,12 @@ jobs:
           path: codex-rs/target/${{ matrix.target }}/release/codex-${{ matrix.target }}.dmg
           if-no-files-found: error
 
+      - name: Set up Python release tools
+        if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' }}
+        uses: ./.github/actions/setup-python-release-tools
+        with:
+          group: runtime
+
       - name: Build Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' }}
         shell: bash
@@ -1096,9 +1107,6 @@ jobs:
               exit 1
               ;;
           esac
-
-          python3 -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m pip install build
 
           # The wheel keeps its macOS 10.9/11 tags. The native voice build
           # currently targets macOS 14, so keep it in the release archives and
@@ -1127,7 +1135,8 @@ jobs:
             "$wheel_archive" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
-          "${RUNNER_TEMP}/python-runtime-build-venv/bin/python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+          uv build --offline --no-build-isolation --no-create-gitignore \
+            --python "${RUNNER_TEMP}/python-runtime-build-venv" --wheel --out-dir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' && matrix.bundle == 'primary' }}
@@ -1291,22 +1300,22 @@ jobs:
           - target: aarch64-apple-darwin
             bundle: primary
             artifact_name: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             verify_dmg: "true"
           - target: aarch64-apple-darwin
             bundle: app-server
             artifact_name: aarch64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             verify_dmg: "false"
           - target: x86_64-apple-darwin
             bundle: primary
             artifact_name: x86_64-apple-darwin
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             verify_dmg: "true"
           - target: x86_64-apple-darwin
             bundle: app-server
             artifact_name: x86_64-apple-darwin-app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             verify_dmg: "false"
 
     steps:
@@ -1367,6 +1376,15 @@ jobs:
             normalized_actual="$(mktemp)"
             normalized_expected="$(mktemp)"
             codesign -d --entitlements :- "$path" >"$actual_entitlements"
+            # An omitted entitlement blob is valid only when the expected plist is empty.
+            python3 - "$expected_entitlements" "$actual_entitlements" <<'PY'
+          import plistlib
+          import sys
+          from pathlib import Path
+          expected, actual = map(Path, sys.argv[1:])
+          if not actual.stat().st_size and plistlib.loads(expected.read_bytes()) == {}:
+              actual.write_bytes(expected.read_bytes())
+          PY
             plutil -convert xml1 -o "$normalized_actual" "$actual_entitlements"
             plutil -convert xml1 -o "$normalized_expected" "$expected_entitlements"
             diff -u "$normalized_expected" "$normalized_actual"
@@ -1377,9 +1395,9 @@ jobs:
             binary_path="${RUNNER_TEMP}/signed-binaries/${binary}"
             verify_signed_binary "$binary_path" "$binary"
 
-            # The app-server package contains the host, but its standalone archives
+            # The app-server package contains both helpers, but their standalone archives
             # are omitted above to avoid duplicate release asset names.
-            if [[ "${{ matrix.bundle }}" == "app-server" && "$binary" == "codex-code-mode-host" ]]; then
+            if [[ "${{ matrix.bundle }}" == "app-server" && ( "$binary" == "codex-code-mode-host" || "$binary" == "codex-exec-server" ) ]]; then
               continue
             fi
 
@@ -1415,6 +1433,7 @@ jobs:
           tar -xzf "${packaged_dir}/${package_stem}-${target}.tar.gz" -C "$package_dir"
           verify_signed_binary "${package_dir}/bin/${package_entrypoint}" "$package_entrypoint"
           verify_signed_binary "${package_dir}/bin/codex-code-mode-host" "codex-code-mode-host"
+          verify_signed_binary "${package_dir}/bin/codex-exec-server" "codex-exec-server"
 
           for resource in \
             "${package_dir}/codex-path/rg"
@@ -1570,7 +1589,7 @@ jobs:
       - name: Setup Node.js for npm packaging
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: 22
+          node-version-file: .nvmrc
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -1884,8 +1903,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          # Node 24 bundles npm >= 11.5.1, which trusted publishing requires.
-          node-version: 24
+          # Trusted publishing requires the selected Node.js release to include npm >= 11.5.1.
+          node-version-file: .nvmrc
           registry-url: "https://registry.npmjs.org"
           scope: "@openai"
 
@@ -1919,6 +1938,9 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+          NPM_CONFIG_LOGLEVEL: verbose
+          NPM_CONFIG_LOGS_DIR: ${{ runner.temp }}/npm-publish-logs
+          NPM_CONFIG_LOGS_MAX: "100"
         run: |
           set -euo pipefail
           prefix=""
@@ -2010,24 +2032,41 @@ jobs:
               publish_cmd+=(--tag "${tag}")
             fi
 
-            echo "+ ${publish_cmd[*]}"
-            set +e
-            publish_output="$("${publish_cmd[@]}" 2>&1)"
-            publish_status=$?
-            set -e
+            # A fresh npm process obtains new OIDC credentials on each attempt.
+            for attempt in 1 2 3; do
+              echo "+ ${publish_cmd[*]} (attempt ${attempt}/3)"
+              set +e
+              publish_output="$("${publish_cmd[@]}" 2>&1)"
+              publish_status=$?
+              set -e
 
-            echo "${publish_output}"
-            if [[ ${publish_status} -eq 0 ]]; then
-              continue
-            fi
+              echo "${publish_output}"
+              if [[ ${publish_status} -eq 0 ]]; then
+                break
+              fi
 
-            if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
-              echo "Skipping already-published package version for ${filename}"
-              continue
-            fi
+              if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+                echo "Skipping already-published package version for ${filename}"
+                break
+              fi
 
-            exit "${publish_status}"
+              if [[ ${attempt} -eq 3 ]]; then
+                exit "${publish_status}"
+              fi
+              delay=$((attempt * 10))
+              echo "Publishing ${filename} failed; retrying in ${delay} seconds."
+              sleep "${delay}"
+            done
           done
+
+      - name: Retain npm debug logs
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: npm-publish-logs-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/npm-publish-logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
   deploy-dev-website:
     name: Trigger developers.openai.com deploy

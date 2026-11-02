@@ -1095,7 +1095,7 @@ impl LocalInfraConversation {
 
     async fn start_turn(&mut self, sess: &Arc<Session>, input: String) -> Result<(), String> {
         self.idle_since = None;
-        let turn_id = sess.route_local_voice_input(input).await?;
+        let turn_id = Box::pin(sess.route_local_voice_input(input)).await?;
         if let Some(heard) = self.answer_heard_at {
             info!(after_ms = heard.elapsed().as_millis() as u64, turn = %turn_id, "local-infra voice turn started");
         }

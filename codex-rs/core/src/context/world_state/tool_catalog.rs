@@ -265,7 +265,7 @@ impl ToolCatalogState {
             fragment: RenderedWorldStateFragment::new(
                 "developer",
                 (TOOL_CATALOG_OPEN_TAG, TOOL_CATALOG_CLOSE_TAG),
-                body,
+                codex_protocol::models::input_text(body),
             ),
             content_kind: ContentItemKind("tools.catalog".to_string()),
         }))

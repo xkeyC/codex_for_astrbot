@@ -423,6 +423,9 @@ impl Engine {
 
     pub async fn submit_turn(&self, thread_id: &str, request: TurnRequest) -> Result<JsonValue> {
         let thread = self.thread(thread_id).await?;
+        if let Some(tools) = request.dynamic_tools {
+            thread.replace_dynamic_tools(tools).await?;
+        }
         let mut turn = TurnInputRequest::user_input(request.input);
         turn.additional_context = request
             .additional_context
@@ -437,13 +440,13 @@ impl Engine {
                     AdditionalContextEntry {
                         value: entry.value,
                         kind,
+                        name: None,
                     },
                 )
             })
             .collect();
         turn.scopes = request.scopes;
         turn.thread_settings = ThreadSettingsOverrides {
-            dynamic_tools: request.dynamic_tools,
             model: request.model,
             effort: request.effort.map(Some),
             ..Default::default()
@@ -520,15 +523,7 @@ impl Engine {
         tools: Vec<DynamicToolSpec>,
     ) -> Result<()> {
         let thread = self.thread(thread_id).await?;
-        thread
-            .submit(Op::ThreadSettings {
-                thread_settings: ThreadSettingsOverrides {
-                    dynamic_tools: Some(tools),
-                    ..Default::default()
-                },
-                reply: None,
-            })
-            .await?;
+        thread.replace_dynamic_tools(tools).await?;
         Ok(())
     }
 
@@ -694,13 +689,16 @@ async fn build_config(
             .then_some(AskForApproval::UnlessTrusted),
         ..Default::default()
     };
-    ConfigBuilder::default()
+    let mut config = ConfigBuilder::default()
         .codex_home(options.codex_home.clone())
         .cli_overrides(cli_overrides.to_vec())
         .harness_overrides(harness)
         .build()
         .await
-        .context("load codex config")
+        .context("load codex config")?;
+    // AstrBot replaces a thread's tools when plugins or permissions change them.
+    config.allow_persistent_dynamic_tool_updates = true;
+    Ok(config)
 }
 
 fn build_extensions(
@@ -738,6 +736,12 @@ fn build_extensions(
     codex_skills_extension::install(&mut builder, |config: &Config| {
         codex_skills_extension::SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
+            catalog_deltas_enabled: config
+                .features
+                .enabled(codex_features::Feature::SkillCatalogDeltas),
+            omit_descriptions: config
+                .features
+                .enabled(codex_features::Feature::OmitSkillDescriptions),
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: config.bundled_skills_enabled(),
             cloud_skill_enabled: config.cloud_skill_enabled,

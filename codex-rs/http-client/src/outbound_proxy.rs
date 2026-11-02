@@ -173,6 +173,7 @@ pub struct HttpClientFactory {
     /// Proxy URL of [`OutboundProxyPolicy::Explicit`].
     explicit_proxy: Option<Arc<str>>,
     system_proxy_fallback: bool,
+    protect_sensitive_headers: bool,
     chatgpt_cookie_store: Option<Arc<ChatGptCookieStore>>,
     network_policy: NetworkPolicy,
 }
@@ -182,6 +183,7 @@ impl PartialEq for HttpClientFactory {
         self.outbound_proxy_policy == other.outbound_proxy_policy
             && self.explicit_proxy == other.explicit_proxy
             && self.system_proxy_fallback == other.system_proxy_fallback
+            && self.protect_sensitive_headers == other.protect_sensitive_headers
             && self.network_policy == other.network_policy
             && self
                 .chatgpt_cookie_store
@@ -201,6 +203,7 @@ impl fmt::Debug for HttpClientFactory {
         f.debug_struct("HttpClientFactory")
             .field("outbound_proxy_policy", &self.outbound_proxy_policy)
             .field("system_proxy_fallback", &self.system_proxy_fallback)
+            .field("protect_sensitive_headers", &self.protect_sensitive_headers)
             .field("network_policy", &self.network_policy)
             .finish()
     }
@@ -213,9 +216,22 @@ impl HttpClientFactory {
             outbound_proxy_policy,
             explicit_proxy: None,
             system_proxy_fallback: false,
+            protect_sensitive_headers: false,
             chatgpt_cookie_store: None,
             network_policy: NetworkPolicy::unmanaged(),
         }
+    }
+
+    /// Follows redirects while keeping headers marked sensitive on the original origin.
+    /// Reqwest's default redirect handling only recognizes standard credential headers.
+    pub fn with_sensitive_header_protection(mut self) -> Self {
+        self.protect_sensitive_headers = true;
+        self
+    }
+
+    /// Whether redirect handling removes sensitive headers when the origin changes.
+    pub fn protects_sensitive_headers(&self) -> bool {
+        self.protect_sensitive_headers
     }
 
     /// Creates a factory that sends every request through `proxy_url`
@@ -290,7 +306,8 @@ impl HttpClientFactory {
     /// WebSocket schemes are resolved through their HTTP equivalents so platform PAC and system
     /// proxy APIs apply the same policy to `ws`/`wss` and `http`/`https` destinations. When system
     /// resolution is unavailable, explicit environment settings are resolved before falling back
-    /// to a direct route.
+    /// to a direct route. Ordered PAC candidates are collapsed to one route on Windows and macOS;
+    /// later proxy or `DIRECT` candidates are not retried after a connection failure.
     pub fn resolve_proxy_route(&self, request_url: &str) -> OutboundProxyRoute {
         if let Some(route) = self.explicit_route() {
             return route;
@@ -351,25 +368,6 @@ impl HttpClientFactory {
         }
         cached_system_proxy_decision(&request_url)
             .map(|decision| route_from_system_decision(&ProcessEnv, env_proxy_kind, decision))
-    }
-
-    /// Builds a reqwest client for a concrete outbound route.
-    pub(crate) fn build_reqwest_client(
-        &self,
-        builder: reqwest::ClientBuilder,
-        request_url: &str,
-        route_class: ClientRouteClass,
-    ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-        if let Some(route) = self.explicit_route() {
-            let builder = configure_builder_for_resolved_route(builder, route_class, &route)?;
-            return build_reqwest_client_with_custom_ca(builder).map_err(Into::into);
-        }
-        build_reqwest_client_for_route(
-            builder,
-            request_url,
-            route_class,
-            self.outbound_proxy_policy,
-        )
     }
 }
 
@@ -492,29 +490,17 @@ impl From<BuildRouteAwareHttpClientError> for io::Error {
     }
 }
 
-/// Builds a reqwest client with conservative route selection and shared CA handling.
-///
-/// Unavailable platform resolution falls back to environment proxies and then direct. Errors after
-/// a route is selected are returned without trying another route. Ordered PAC candidates are
-/// currently collapsed to one route on both Windows and macOS; later proxy or `DIRECT` candidates
-/// are not retried after a connection failure.
-fn build_reqwest_client_for_route(
+/// Builds a reqwest client with the resolved route and shared CA handling.
+pub(crate) fn build_reqwest_client_for_route(
     builder: reqwest::ClientBuilder,
-    request_url: &str,
     route_class: ClientRouteClass,
-    outbound_proxy_policy: OutboundProxyPolicy,
+    route: &OutboundProxyRoute,
 ) -> Result<reqwest::Client, BuildRouteAwareHttpClientError> {
-    let builder = configure_proxy_for_route(
-        &ProcessEnv,
-        builder,
-        request_url,
-        route_class,
-        outbound_proxy_policy,
-        resolve_system_proxy,
-    )?;
+    let builder = configure_builder_for_resolved_route(builder, route_class, route)?;
     build_reqwest_client_with_custom_ca(builder).map_err(Into::into)
 }
 
+#[cfg(test)]
 fn configure_proxy_for_route(
     env: &dyn EnvSource,
     builder: reqwest::ClientBuilder,

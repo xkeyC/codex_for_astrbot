@@ -397,6 +397,7 @@ impl ToolRouter {
             tool_name,
             source,
             payload,
+            environments: Default::default(),
         };
 
         self.registry
@@ -407,7 +408,11 @@ impl ToolRouter {
 
 /// Records the registered inventory once per sampling request, before transport retries.
 /// Registrations do not imply model visibility or reachability; hosted tools are excluded.
-pub(crate) fn record_registration_metrics(router: &ToolRouter, telemetry: &SessionTelemetry) {
+pub(crate) fn record_registration_metrics(
+    router: &ToolRouter,
+    telemetry: &SessionTelemetry,
+    incremental_tools: bool,
+) {
     let mut direct = 0usize;
     let mut direct_model_only = 0usize;
     let mut deferred = 0usize;
@@ -430,6 +435,7 @@ pub(crate) fn record_registration_metrics(router: &ToolRouter, telemetry: &Sessi
         ToolMode::CodeMode => "code_mode",
         ToolMode::CodeModeOnly => "code_mode_only",
     };
+    let incremental_tools = if incremental_tools { "true" } else { "false" };
     for (exposure, count) in [
         (EXPOSURE_DIRECT, direct),
         (EXPOSURE_DIRECT_MODEL_ONLY, direct_model_only),
@@ -442,7 +448,11 @@ pub(crate) fn record_registration_metrics(router: &ToolRouter, telemetry: &Sessi
             TOOL_REGISTRATIONS_METRIC,
             i64::try_from(count).unwrap_or(i64::MAX),
             TOOL_REGISTRATIONS_METRIC_BUCKETS,
-            &[("exposure", exposure), ("tool_mode", tool_mode)],
+            &[
+                ("exposure", exposure),
+                ("tool_mode", tool_mode),
+                ("incremental_tools", incremental_tools),
+            ],
         );
     }
 }

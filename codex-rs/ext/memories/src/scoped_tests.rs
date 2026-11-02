@@ -324,6 +324,8 @@ async fn call_ad_hoc(
         .find(|tool| tool.tool_name() == name)
         .expect("ad hoc tool");
     tool.handle(ToolCall {
+        attachment_store: std::sync::Arc::new(codex_attachment_store::InlineAttachmentStore),
+        ephemeral: false,
         turn_id: "turn-1".to_string(),
         call_id: "call-1".to_string(),
         tool_name: name,

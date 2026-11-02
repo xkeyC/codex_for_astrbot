@@ -4,7 +4,7 @@ on:
   workflow_call:
 
 env:
-  WINDOWS_BINARIES: "codex codex-code-mode-host codex-responses-api-proxy codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner codex-app-server"
+  WINDOWS_BINARIES: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy codex-windows-sandbox-setup codex-windows-sandbox-service codex-command-runner codex-app-server"
 
 jobs:
   build-windows-binaries:
@@ -39,14 +39,14 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: primary
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: primary
-            binaries: "codex codex-code-mode-host codex-responses-api-proxy"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-responses-api-proxy"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-arm64
@@ -67,14 +67,14 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: app-server
-            binaries: "codex-app-server codex-code-mode-host"
+            binaries: "codex-app-server codex-code-mode-host codex-exec-server"
             runs_on:
               group: ${{ github.event.repository.name }}-runners
               labels: ${{ github.event.repository.name }}-windows-arm64
@@ -179,6 +179,9 @@ jobs:
   build-windows-voice:
     name: Build Windows voice - ${{ matrix.target }}
     runs-on: ${{ matrix.runs_on }}
+    environment:
+      name: bazel
+      deployment: false
     timeout-minutes: 120
     permissions:
       contents: read
@@ -250,7 +253,7 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
           VOICE_ARCH: ${{ matrix.arch }}
-          BUILDBUDDY_API_KEY: ""
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
         run: |
           (cd codex-rs && cargo update --workspace)
           python .github/scripts/watch_voice_bazel.py "$(cygpath -w "$BASH")" ./.github/scripts/run-bazel-ci.sh \
@@ -546,6 +549,26 @@ jobs:
             --entrypoint-dir "$CARGO_TARGET_DIR/$target/release" \
             --archive-dir "dist/$target"
 
+      - name: Verify packaged executor signatures and bytes
+        shell: pwsh
+        run: |
+          $target = "${{ matrix.target }}"
+          $source = Join-Path $env:CARGO_TARGET_DIR "$target/release/codex-exec-server.exe"
+          foreach ($stem in @("codex-package", "codex-app-server-package")) {
+            $package = Join-Path $env:RUNNER_TEMP "verify-executor-$stem-$target"
+            New-Item -ItemType Directory -Path $package | Out-Null
+            tar -xzf "dist/$target/$stem-$target.tar.gz" -C $package
+            if ($LASTEXITCODE -ne 0) { throw "Cannot extract executor package" }
+            $binary = Join-Path $package "bin/codex-exec-server.exe"
+            if ((Get-FileHash $binary).Hash -ne (Get-FileHash $source).Hash) {
+              throw "Packaged executor differs from the signed input"
+            }
+            $signature = Get-AuthenticodeSignature $binary
+            if ($signature.Status -ne "Valid" -or $null -eq $signature.TimeStamperCertificate) {
+              throw "Invalid or untimestamped executor signature"
+            }
+          }
+
       - name: Verify packaged Windows voice closure
         shell: pwsh
         run: |
@@ -563,6 +586,12 @@ jobs:
           if ($signature.Status -ne 'Valid') { throw "Packaged helper signature: $($signature.Status)" }
           python -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[3]); from package_runtime import runtime_files; runtime_files(Path(sys.argv[1]), sys.argv[2], public_release=True)' $voice $target (Join-Path $env:GITHUB_WORKSPACE 'third_party/voice')
           if ($LASTEXITCODE -ne 0) { throw 'Packaged runtime receipt verification failed' }
+
+      - name: Set up Python release tools
+        if: ${{ matrix.build-system == 'cargo' }}
+        uses: ./.github/actions/setup-python-release-tools
+        with:
+          group: runtime
 
       - name: Build Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' }}
@@ -583,9 +612,6 @@ jobs:
               ;;
           esac
 
-          python -m venv "${RUNNER_TEMP}/python-runtime-build-venv"
-          "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m pip install build
-
           # The wheel's Windows support floor predates the native voice
           # runtime's verified device/VC++ prerequisites. Keep it voice-free.
           wheel_package="${RUNNER_TEMP}/codex-package-${{ matrix.target }}"
@@ -602,7 +628,8 @@ jobs:
             "$wheel_package" \
             --codex-version "${GITHUB_REF_NAME}" \
             --platform-tag "$platform_tag"
-          "${RUNNER_TEMP}/python-runtime-build-venv/Scripts/python.exe" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+          uv build --offline --no-build-isolation --no-create-gitignore \
+            --python "${RUNNER_TEMP}/python-runtime-build-venv" --wheel --out-dir "$wheel_dir" "$stage_dir"
 
       - name: Upload Python runtime wheel
         if: ${{ matrix.build-system == 'cargo' }}

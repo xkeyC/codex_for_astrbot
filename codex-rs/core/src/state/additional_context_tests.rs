@@ -5,6 +5,7 @@ use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
 use pretty_assertions::assert_eq;
 
+use super::AdditionalContextFormat;
 use super::AdditionalContextStore;
 use super::is_fragment_of;
 
@@ -19,6 +20,7 @@ fn values(
                 AdditionalContextEntry {
                     value: (*value).to_string(),
                     kind: *kind,
+                    name: None,
                 },
             )
         })
@@ -37,6 +39,7 @@ fn each_key_carries_the_last_fragment_history_holds() {
             ("persona", "be a cat", AdditionalContextKind::Application),
             ("tab", "one", AdditionalContextKind::Untrusted),
         ]),
+        AdditionalContextFormat::Messages,
         /*max_tokens*/ 1_000,
     );
     // The persona changes and is recorded; then it changes again, but that
@@ -46,6 +49,7 @@ fn each_key_carries_the_last_fragment_history_holds() {
             ("persona", "be a dog", AdditionalContextKind::Application),
             ("tab", "one", AdditionalContextKind::Untrusted),
         ]),
+        AdditionalContextFormat::Messages,
         /*max_tokens*/ 1_000,
     ));
     let pending = store.merge(
@@ -53,6 +57,7 @@ fn each_key_carries_the_last_fragment_history_holds() {
             ("persona", "be a fox", AdditionalContextKind::Application),
             ("tab", "one", AdditionalContextKind::Untrusted),
         ]),
+        AdditionalContextFormat::Messages,
         /*max_tokens*/ 1_000,
     );
 
@@ -71,6 +76,7 @@ fn a_key_history_never_held_is_not_carried() {
     let mut store = AdditionalContextStore::default();
     store.merge(
         values(&[("persona", "be a cat", AdditionalContextKind::Application)]),
+        AdditionalContextFormat::Messages,
         /*max_tokens*/ 1_000,
     );
     assert!(store.last_fragments(std::iter::empty()).is_empty());
@@ -80,12 +86,24 @@ fn a_key_history_never_held_is_not_carried() {
 fn values_whose_fragments_were_dropped_are_sent_again() {
     let persona = |value| values(&[("persona", value, AdditionalContextKind::Application)]);
     let mut store = AdditionalContextStore::default();
-    store.merge(persona("be a cat"), /*max_tokens*/ 1_000);
-    let dropped = store.merge(persona("be a dog"), /*max_tokens*/ 1_000);
+    store.merge(
+        persona("be a cat"),
+        AdditionalContextFormat::Messages,
+        /*max_tokens*/ 1_000,
+    );
+    let dropped = store.merge(
+        persona("be a dog"),
+        AdditionalContextFormat::Messages,
+        /*max_tokens*/ 1_000,
+    );
 
     store.forget_unrecorded(dropped.iter());
     assert_eq!(
-        store.merge(persona("be a dog"), /*max_tokens*/ 1_000),
+        store.merge(
+            persona("be a dog"),
+            AdditionalContextFormat::Messages,
+            /*max_tokens*/ 1_000
+        ),
         dropped
     );
 }

@@ -118,6 +118,8 @@ async fn call_delete(tools: &[MemoryTool], path: &str) -> Result<(), String> {
         .find(|tool| tool.tool_name() == name)
         .expect("delete tool");
     tool.handle(ToolCall {
+        attachment_store: std::sync::Arc::new(codex_attachment_store::InlineAttachmentStore),
+        ephemeral: false,
         turn_id: "turn-1".to_string(),
         call_id: "call-1".to_string(),
         tool_name: name,
@@ -627,6 +629,8 @@ async fn ad_hoc_notes_can_be_added_and_deleted_again() {
         .expect("ad hoc tool");
     let filename = "2026-05-26T13-42-30-temporary.md";
     add.handle(ToolCall {
+        attachment_store: std::sync::Arc::new(codex_attachment_store::InlineAttachmentStore),
+        ephemeral: false,
         turn_id: "turn-1".to_string(),
         call_id: "call-1".to_string(),
         tool_name: ToolName::namespaced(MEMORY_TOOLS_NAMESPACE, ADD_AD_HOC_NOTE_TOOL_NAME),
@@ -664,6 +668,8 @@ async fn call_with_scopes(
         .find(|candidate| candidate.tool_name() == name)
         .expect("memory tool");
     tool.handle(ToolCall {
+        attachment_store: std::sync::Arc::new(codex_attachment_store::InlineAttachmentStore),
+        ephemeral: false,
         turn_id: "turn-1".to_string(),
         call_id: "call-1".to_string(),
         tool_name: name,

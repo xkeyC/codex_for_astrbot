@@ -117,6 +117,7 @@ impl RealtimeStartRequest {
         let attaches_existing_call =
             matches!(self.transport, Some(RealtimeTransport::ExistingCall { .. }));
         ConversationStartParams {
+            voice_session_id: None,
             client_managed_handoffs: self.client_managed_handoffs,
             delegation_ack_filler: self.delegation_ack_filler,
             flush_transcript_tail_on_session_end: self.flush_transcript_tail_on_session_end,

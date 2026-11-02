@@ -31,6 +31,7 @@ use std::time::Duration;
 
 fn start_params() -> ConversationStartParams {
     ConversationStartParams {
+        voice_session_id: None,
         backend_reasoning_status: false,
         client_managed_handoffs: false,
         delegation_ack_filler: None,

@@ -65,8 +65,11 @@ use crate::turn_input::TurnInputMode;
 use crate::turn_input::TurnInputRequest;
 use crate::turn_input::TurnInputSubmission;
 use crate::turn_input::TurnStartOptions;
+use codex_extension_items::image_generation::GeneratedImageRef;
 use codex_extension_items::image_generation::ImageGenerationFailure;
+use codex_extension_items::image_generation::ImageGenerationInputImage;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_utils_path_uri::LegacyAppPathString;
 use codex_utils_path_uri::PathUri;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -209,6 +212,9 @@ pub struct ConversationStartParams {
     pub realtime_end_instructions: Option<String>,
     pub prompt: Option<Option<String>>,
     pub realtime_session_id: Option<String>,
+    /// Client-generated identifier for the product voice session. This is distinct from the
+    /// Realtime API session identifier.
+    pub voice_session_id: Option<String>,
     pub transport: Option<ConversationStartTransport>,
     /// Overrides the configured realtime protocol version for this session only.
     pub version: Option<RealtimeConversationVersion>,
@@ -672,10 +678,6 @@ pub struct ThreadSettingsOverrides {
     /// Replace the thread's disabled plugin IDs. Omission preserves the current
     /// selection, and an empty list clears it.
     pub disabled_plugin_ids: Option<Vec<String>>,
-
-    /// Replace the thread's client-provided dynamic tools. Omission preserves
-    /// the current set, and an empty list clears it. History is kept.
-    pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
 }
 
 /// Source classification for client-supplied context.
@@ -690,6 +692,45 @@ pub enum AdditionalContextKind {
 pub struct AdditionalContextEntry {
     pub value: String,
     pub kind: AdditionalContextKind,
+    /// Optional name for untrusted context, used to label its tool output.
+    pub name: Option<String>,
+}
+
+impl AdditionalContextEntry {
+    /// Creates an unnamed context entry.
+    pub fn new(value: String, kind: AdditionalContextKind) -> Self {
+        Self {
+            value,
+            kind,
+            name: None,
+        }
+    }
+
+    /// Sets the name for untrusted context.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Validates the optional untrusted-context name before input admission.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let Some(name) = &self.name else {
+            return Ok(());
+        };
+        if self.kind == AdditionalContextKind::Application {
+            return Err("additional context name is only supported for untrusted context");
+        }
+        if name.is_empty()
+            || name.len() > 64
+            || !name.as_bytes()[0].is_ascii_lowercase()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        {
+            return Err("additional context name must match [a-z][a-z0-9_]{0,63}");
+        }
+        Ok(())
+    }
 }
 
 /// Submission operation
@@ -781,6 +822,13 @@ pub enum Op {
         /// When present, report validation errors here instead of emitting an error event.
         /// Successful updates still emit `ThreadSettingsApplied` for all callers.
         reply: Option<oneshot::Sender<CodexResult<()>>>,
+    },
+
+    /// Replace the dynamic tool catalog without starting a turn.
+    #[debug("ReplaceDynamicTools")]
+    ReplaceDynamicTools {
+        tools: Vec<DynamicToolSpec>,
+        reply: oneshot::Sender<CodexResult<()>>,
     },
 
     /// Update only the named running turn, without changing future settings.
@@ -1101,6 +1149,7 @@ impl Op {
             Self::RecoverTurn { .. } => "recover_turn",
             Self::SuspendTurnAndShutdown { .. } => "suspend_turn_and_shutdown",
             Self::ThreadSettings { .. } => "thread_settings",
+            Self::ReplaceDynamicTools { .. } => "replace_dynamic_tools",
             Self::TurnSettings { .. } => "turn_settings",
             Self::InterAgentCommunication { .. } => "inter_agent_communication",
             Self::ExecApproval { .. } => "exec_approval",
@@ -1698,6 +1747,12 @@ pub enum EventMsg {
     RawResponseItem(RawResponseItemEvent),
     RawResponseCompleted(RawResponseCompletedEvent),
 
+    /// In-process delivery from a private reviewer through its parent's subscription.
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    PrivateSessionEvent(PrivateSessionEvent),
+
     ItemStarted(ItemStartedEvent),
     ItemCompleted(ItemCompletedEvent),
     HookStarted(HookStartedEvent),
@@ -1733,6 +1788,34 @@ pub enum EventMsg {
     SubAgentActivity(SubAgentActivityEvent),
 }
 
+impl EventMsg {
+    /// Returns the ID and start time of the command this approval opens.
+    /// Stdin and network reviews have their own prompts for an existing operation.
+    pub fn command_approval_start(&self) -> Option<(&str, i64)> {
+        match self {
+            Self::ExecApprovalRequest(request)
+                if request.approval_id.is_none() && request.network_approval_context.is_none() =>
+            {
+                Some((&request.call_id, request.started_at_ms))
+            }
+            Self::GuardianAssessment(assessment)
+                if assessment.status == GuardianAssessmentStatus::InProgress
+                    && matches!(
+                        assessment.action,
+                        GuardianAssessmentAction::Command { .. }
+                            | GuardianAssessmentAction::Execve { .. }
+                    ) =>
+            {
+                Some((
+                    assessment.target_item_id.as_deref()?,
+                    assessment.started_at_ms,
+                ))
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS, EnumIter)]
 #[serde(rename_all = "snake_case")]
 pub enum HookEventName {
@@ -1748,6 +1831,8 @@ pub enum HookEventName {
     SubagentStop,
     Stop,
     Interrupt,
+    PreModelRequest,
+    PostModelRequest,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -1839,7 +1924,7 @@ pub struct HookRunSummary {
     pub handler_type: HookHandlerType,
     pub execution_mode: HookExecutionMode,
     pub scope: HookScope,
-    pub source_path: AbsolutePathBuf,
+    pub source_path: LegacyAppPathString,
     #[serde(default)]
     pub source: HookSource,
     pub display_order: i64,
@@ -2017,6 +2102,9 @@ pub enum CodexErrorInfo {
     RateLimitExceeded,
     FlexUnavailable,
     ServerOverloaded,
+    ModelNotFound,
+    /// Capacity is unavailable on a route restricted by server policy.
+    PolicyCapacityUnavailable,
     CyberPolicy,
     BioPolicy,
     MisalignmentPolicyViolation,
@@ -2062,6 +2150,8 @@ impl CodexErrorInfo {
             | Self::RateLimitExceeded
             | Self::FlexUnavailable
             | Self::ServerOverloaded
+            | Self::ModelNotFound
+            | Self::PolicyCapacityUnavailable
             | Self::CyberPolicy
             | Self::BioPolicy
             | Self::MisalignmentPolicyViolation
@@ -2083,6 +2173,20 @@ impl CodexErrorInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct RawResponseItemEvent {
     pub item: ResponseItem,
+}
+
+/// Observer events that a private session forwards without modifying its parent's history.
+#[derive(Debug, Clone)]
+pub struct PrivateSessionEvent {
+    pub thread_id: ThreadId,
+    pub event: PrivateSessionEventPayload,
+}
+
+/// Recorded state and cancellation needed by observers awaiting response acceptance.
+#[derive(Debug, Clone)]
+pub enum PrivateSessionEventPayload {
+    RecordedItem(RawResponseItemEvent),
+    TurnAborted(TurnAbortedEvent),
 }
 
 /// Exact usage and metadata reported by one upstream Responses API completion.
@@ -2407,8 +2511,8 @@ pub struct ThreadSettingsSnapshot {
     /// Thread-owned plugin selection, retained even when a plugin is unavailable.
     #[serde(default)]
     pub disabled_plugin_ids: Vec<String>,
-    /// Thread-owned dynamic tools. Absent in snapshots written before dynamic
-    /// tools became updatable; readers then fall back to session metadata.
+    /// Fork addition: read only. Threads that replaced their tools before
+    /// upstream's `DynamicToolsUpdated` carry them here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
@@ -2453,6 +2557,10 @@ pub struct TokenUsageRecord {
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
+    /// Whether the last context count includes reasoning retained from earlier turns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_usage_includes_reasoning: Option<bool>,
     // TODO(aibrahim): make this not optional
     #[ts(type = "number | null")]
     pub model_context_window: Option<i64>,
@@ -2461,33 +2569,26 @@ pub struct TokenUsageInfo {
 impl TokenUsageInfo {
     pub fn new_or_append(
         info: &Option<TokenUsageInfo>,
-        last: &Option<TokenUsage>,
+        last: &TokenUsage,
+        includes_reasoning: bool,
         model_context_window: Option<i64>,
-    ) -> Option<Self> {
-        if info.is_none() && last.is_none() {
-            return None;
-        }
-
+    ) -> Self {
         let mut info = match info {
             Some(info) => info.clone(),
             None => Self {
                 total_token_usage: TokenUsage::default(),
+                last_usage_includes_reasoning: None,
                 last_token_usage: TokenUsage::default(),
                 model_context_window,
             },
         };
-        if let Some(last) = last {
-            info.append_last_usage(last);
-        }
+        info.total_token_usage.add_assign(last);
+        info.last_token_usage = last.clone();
+        info.last_usage_includes_reasoning = Some(includes_reasoning);
         if let Some(model_context_window) = model_context_window {
             info.model_context_window = Some(model_context_window);
         }
-        Some(info)
-    }
-
-    pub fn append_last_usage(&mut self, last: &TokenUsage) {
-        self.total_token_usage.add_assign(last);
-        self.last_token_usage = last.clone();
+        info
     }
 
     pub fn fill_to_context_window(&mut self, context_window: i64) {
@@ -2499,6 +2600,7 @@ impl TokenUsageInfo {
             total_tokens: context_window,
             ..TokenUsage::default()
         };
+        self.last_usage_includes_reasoning = None;
         self.last_token_usage = TokenUsage {
             total_tokens: delta,
             ..TokenUsage::default()
@@ -2508,6 +2610,7 @@ impl TokenUsageInfo {
     pub fn full_context_window(context_window: i64) -> Self {
         let mut info = Self {
             total_token_usage: TokenUsage::default(),
+            last_usage_includes_reasoning: None,
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(context_window),
         };
@@ -2976,7 +3079,8 @@ pub struct ImageGenerationEndEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub revised_prompt: Option<String>,
-    pub result: String,
+    #[serde(flatten)]
+    pub image: GeneratedImageRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub transparent_background: Option<bool>,
@@ -2986,6 +3090,12 @@ pub struct ImageGenerationEndEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub saved_path: Option<AbsolutePathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<_>", optional)]
+    pub input_images: Vec<ImageGenerationInputImage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub generation_id: Option<String>,
 }
 
 // Conversation kept for backward compatibility.
@@ -3309,6 +3419,9 @@ pub struct SessionMeta {
     pub id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
+    /// Marks a persisted fork as attached to `forked_from_id`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub attached_thread: bool,
     /// Exclusive ordinal inherited from the logical fork parent, independent of `history_base`.
     /// Revert may replace the physical history base while retaining this fork boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3383,6 +3496,7 @@ impl Default for SessionMeta {
             session_id: id.into(),
             id,
             forked_from_id: None,
+            attached_thread: false,
             forked_from_ordinal_exclusive: None,
             parent_thread_id: None,
             timestamp: String::new(),
@@ -3616,13 +3730,6 @@ pub struct GitInfo {
     )]
     #[schemars(with = "Option<String>")]
     pub repository_url: Option<SanitizedGitUrl>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewDelivery {
-    Inline,
-    Detached,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, TS)]
@@ -5646,7 +5753,12 @@ mod tests {
                 assert_eq!(event.call_id, "ig-1");
                 assert_eq!(event.status, "completed");
                 assert_eq!(event.revised_prompt.as_deref(), Some("A tiny blue square"));
-                assert_eq!(event.result, "Zm9v");
+                assert_eq!(
+                    event.image,
+                    GeneratedImageRef::Inline {
+                        result: "Zm9v".to_string(),
+                    }
+                );
                 assert_eq!(
                     event.saved_path.as_ref().map(AbsolutePathBuf::as_path),
                     Some(test_path_buf("/tmp/ig-1.png").as_path())
@@ -6565,10 +6677,11 @@ mod tests {
     fn token_usage_info_new_or_append_updates_context_window_when_provided() {
         let initial = Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
+            last_usage_includes_reasoning: None,
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
         });
-        let last = Some(TokenUsage {
+        let last = TokenUsage {
             input_tokens: 10,
             cached_input_tokens: 0,
             cache_write_input_tokens: 0,
@@ -6576,10 +6689,14 @@ mod tests {
             reasoning_output_tokens: 0,
             total_tokens: 10,
             codex_rollout_budget_units: None,
-        });
+        };
 
-        let info = TokenUsageInfo::new_or_append(&initial, &last, Some(128_000))
-            .expect("new_or_append should return info");
+        let info = TokenUsageInfo::new_or_append(
+            &initial,
+            &last,
+            /*includes_reasoning*/ true,
+            Some(128_000),
+        );
 
         assert_eq!(info.model_context_window, Some(128_000));
     }
@@ -6588,10 +6705,11 @@ mod tests {
     fn token_usage_info_new_or_append_preserves_context_window_when_not_provided() {
         let initial = Some(TokenUsageInfo {
             total_token_usage: TokenUsage::default(),
+            last_usage_includes_reasoning: None,
             last_token_usage: TokenUsage::default(),
             model_context_window: Some(258_400),
         });
-        let last = Some(TokenUsage {
+        let last = TokenUsage {
             input_tokens: 10,
             cached_input_tokens: 0,
             cache_write_input_tokens: 0,
@@ -6599,11 +6717,11 @@ mod tests {
             reasoning_output_tokens: 0,
             total_tokens: 10,
             codex_rollout_budget_units: None,
-        });
+        };
 
-        let info =
-            TokenUsageInfo::new_or_append(&initial, &last, /*model_context_window*/ None)
-                .expect("new_or_append should return info");
+        let info = TokenUsageInfo::new_or_append(
+            &initial, &last, /*includes_reasoning*/ true, /*model_context_window*/ None,
+        );
 
         assert_eq!(info.model_context_window, Some(258_400));
     }

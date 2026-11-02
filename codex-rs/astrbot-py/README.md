@@ -73,7 +73,7 @@ through file tools of the memories extension instead of a shell. Code mode
 
 Requests carry the `codex exec` identity (`originator: codex_exec`) and a
 User-Agent such as
-`codex_exec/0.163.0 (Linux 22.04; x86_64) unknown; xkeyC/codex_for_astrbot`.
+`codex_exec/0.166.0 (Linux 22.04; x86_64) unknown; xkeyC/codex_for_astrbot`.
 `originator` sends another client identity (header and User-Agent prefix), e.g.
 `codex-tui`; the User-Agent keeps the fork tag, and only the first runtime of a
 process can set it. Resumed threads keep the originator recorded in their
