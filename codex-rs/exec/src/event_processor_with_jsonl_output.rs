@@ -15,6 +15,7 @@ use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WebSearchAction as ApiWebSearchAction;
 use codex_core::config::Config;
+use codex_exec_server::BoundOutput;
 use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use serde_json::json;
@@ -614,6 +615,12 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         self.emit(Self::thread_started_event(session_configured));
     }
 
+    fn print_thread_started(&mut self, thread_id: &str) {
+        self.emit(ThreadEvent::ThreadStarted(ThreadStartedEvent {
+            thread_id: thread_id.to_owned(),
+        }));
+    }
+
     fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus {
         let collected = self.collect_thread_events(notification);
         for event in collected.events {
@@ -630,12 +637,13 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         collected.status
     }
 
-    fn print_final_output(&mut self) {
+    fn print_final_output(&mut self, output: Option<BoundOutput>) -> anyhow::Result<()> {
         if self.emit_final_message_on_shutdown
-            && let Some(path) = self.last_message_path.as_deref()
+            && let (Some(path), Some(file)) = (self.last_message_path.as_deref(), output)
         {
-            handle_last_message(self.final_message.as_deref(), path);
+            handle_last_message(self.final_message.as_deref(), path, file)?;
         }
+        Ok(())
     }
 }
 

@@ -38,7 +38,10 @@ fn render(
                 codex_protocol::models::ContentItem::InputText { text } => text,
                 other => unreachable!("catalog fragments are text: {other:?}"),
             },
-            super::super::WorldStateUpdateContent::Item(_) => unreachable!("catalog renders text"),
+            super::super::WorldStateUpdateContent::Environment(_)
+            | super::super::WorldStateUpdateContent::Item(_) => {
+                unreachable!("catalog renders text")
+            }
         })
 }
 

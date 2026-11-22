@@ -18,6 +18,7 @@ use crate::safety_buffering::treatment_from_headers;
 use crate::sse::ResponsesStreamEvent;
 use crate::sse::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
+use bytes::Bytes;
 use codex_client::TransportError;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::RetryAfter;
@@ -41,9 +42,14 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+use tokio_tungstenite::tungstenite::protocol::frame::Fragment;
+use tokio_tungstenite::tungstenite::protocol::frame::Frame;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+use tokio_tungstenite::tungstenite::protocol::frame::coding::Data;
 use tracing::Instrument;
 use tracing::Span;
 use tracing::debug;
@@ -56,6 +62,7 @@ use tungstenite::protocol::WebSocketConfig;
 use url::Url;
 
 struct WsStream {
+    max_message_bytes: Option<usize>,
     routing_affinity: Option<codex_http_client::ChatGptRoutingAffinity>,
     tx_command: mpsc::Sender<WsCommand>,
     rx_message: mpsc::UnboundedReceiver<Result<Message, WsError>>,
@@ -69,8 +76,38 @@ enum WsCommand {
     },
 }
 
+/// Send large Responses turns as one text message with backpressure between frames.
+async fn send_message(
+    socket: &mut (impl futures::Sink<Message, Error = WsError> + Unpin),
+    message: Message,
+) -> Result<(), WsError> {
+    const FRAGMENT_SIZE: usize = 1024 * 1024;
+
+    let Message::Text(text) = message else {
+        return socket.send(message).await;
+    };
+    if text.len() <= FRAGMENT_SIZE {
+        return socket.send(Message::Text(text)).await;
+    }
+
+    let mut data = Bytes::from(text);
+    let mut opcode = Data::Text;
+    while !data.is_empty() {
+        let payload = data.split_to(data.len().min(FRAGMENT_SIZE));
+        let fragment = if data.is_empty() {
+            Fragment::Final
+        } else {
+            Fragment::More
+        };
+        let frame = Frame::message_fragment(payload, opcode, fragment);
+        socket.send(Message::Frame(frame)).await?;
+        opcode = Data::Continue;
+    }
+    Ok(())
+}
+
 impl WsStream {
-    fn new(inner: WebSocketConnection) -> Self {
+    fn new(inner: WebSocketConnection, max_message_bytes: Option<usize>) -> Self {
         let routing_affinity = inner.routing_affinity().cloned();
         let (tx_command, mut rx_command) = mpsc::channel::<WsCommand>(32);
         let (tx_message, rx_message) = mpsc::unbounded_channel::<Result<Message, WsError>>();
@@ -85,7 +122,7 @@ impl WsStream {
                         };
                         match command {
                             WsCommand::Send { message, tx_result } => {
-                                let result = inner.send(message).await;
+                                let result = send_message(&mut inner, message).await;
                                 let should_break = result.is_err();
                                 let _ = tx_result.send(result);
                                 if should_break {
@@ -129,6 +166,7 @@ impl WsStream {
         });
 
         Self {
+            max_message_bytes,
             routing_affinity,
             tx_command,
             rx_message,
@@ -169,6 +207,7 @@ impl Drop for WsStream {
 }
 
 const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+const X_CODEX_WEBSOCKET_MAX_MESSAGE_BYTES_HEADER: &str = "x-codex-websocket-max-message-bytes";
 const X_MODELS_ETAG_HEADER: &str = "x-models-etag";
 const X_REASONING_INCLUDED_HEADER: &str = "x-reasoning-included";
 const OPENAI_MODEL_HEADER: &str = "openai-model";
@@ -245,17 +284,29 @@ impl ResponsesWebsocketConnection {
             .is_none_or(|stream| stream.pump_task.is_finished())
     }
 
+    pub async fn stream_request(
+        &self,
+        request: ResponsesWsRequest<'_>,
+        connection_reused: bool,
+        turn_state: Option<Arc<OnceLock<String>>>,
+    ) -> Result<ResponseStream, ApiError> {
+        self.stream_request_with_observer(request, connection_reused, turn_state, |_| {})
+            .await
+    }
+
+    /// Gives the observer a shared copy of the exact JSON before transport dispatch.
     #[instrument(
         name = "responses_websocket.stream_request",
         level = "info",
         skip_all,
         fields(transport = "responses_websocket", api.path = "/responses")
     )]
-    pub async fn stream_request(
+    pub async fn stream_request_with_observer(
         &self,
         request: ResponsesWsRequest<'_>,
         connection_reused: bool,
         turn_state: Option<Arc<OnceLock<String>>>,
+        on_encoded: impl FnOnce(&bytes::Bytes),
     ) -> Result<ResponseStream, ApiError> {
         let (tx_event, rx_event) =
             mpsc::channel::<std::result::Result<ResponseEvent, ApiError>>(1600);
@@ -290,7 +341,8 @@ impl ResponsesWebsocketConnection {
             warmup: ws_request.generate == Some(false),
             connection_reused,
         };
-        let request_text = serialize_websocket_request(&request)?;
+        let request_text = Utf8Bytes::from(serialize_websocket_request(&request)?);
+        on_encoded(request_text.as_ref());
 
         let current_span = Span::current();
         tokio::spawn(
@@ -338,54 +390,70 @@ impl ResponsesWebsocketConnection {
                 if tx_event.is_closed() {
                     return;
                 }
+                let Some(mut ws_stream) = guard.take() else {
+                    let _ = tx_event
+                        .send(Err(ApiError::Stream(
+                            "websocket connection is closed".to_string(),
+                        )))
+                        .await;
+                    return;
+                };
                 let mut completion = None;
                 let result = {
-                    let Some(ws_stream) = guard.as_mut() else {
-                        let _ = tx_event
-                            .send(Err(ApiError::Stream(
-                                "websocket connection is closed".to_string(),
-                            )))
-                            .await;
-                        return;
-                    };
+                    let response = run_websocket_response_stream(
+                        &mut ws_stream,
+                        tx_event.clone(),
+                        request_text,
+                        idle_timeout,
+                        telemetry,
+                        turn_state.as_deref(),
+                        &timing_log_context,
+                        interrupt.clone(),
+                        &mut completion,
+                    );
+                    tokio::pin!(response);
 
                     tokio::select! {
                         biased;
-                        result = run_websocket_response_stream(
-                            ws_stream,
-                            tx_event.clone(),
-                            request_text,
-                            idle_timeout,
-                            telemetry,
-                            turn_state.as_deref(),
-                            &timing_log_context,
-                            interrupt.clone(),
-                            &mut completion,
-                        ) => result,
+                        result = &mut response => result,
                         () = &mut interrupt_timeout => Err(ApiError::Stream(
                             "timed out draining interrupted response".into(),
                         )),
-                        _ = tx_event.closed() => Err(ApiError::Stream(
-                            "response event consumer dropped".to_string(),
-                        )),
+                        () = tx_event.closed() => {
+                            // Release the lock so later requests can open a new connection
+                            // while this task finishes cleanup on the detached socket.
+                            drop(guard);
+                            if matches!(
+                                interrupt.clone().now_or_never(),
+                                Some(ResponseInterrupt::Cancel { .. })
+                            ) {
+                                tokio::select! {
+                                    _ = &mut response => {}
+                                    () = &mut interrupt_timeout => {}
+                                }
+                            }
+                            return;
+                        }
                     }
                 };
 
                 if let Err(err) = result {
                     // A terminal stream error should reach the caller immediately. Waiting for a
                     // graceful close handshake here can stall indefinitely and mask the error.
-                    let failed_stream = guard.take();
                     drop(guard);
-                    drop(failed_stream);
+                    drop(ws_stream);
                     // Failed cancellation retires the socket while preserving any received
                     // completion and its usage for the abandoned classifier's cleanup.
                     let event = completion.map_or_else(|| Err(err), Ok);
                     let _ = tx_event.send(event).await;
-                } else if let Some(completed) = completion {
-                    // The handshake is finished. Consumer backpressure must not let the
-                    // interruption deadline discard completion or its usage accounting.
-                    drop(guard);
-                    let _ = tx_event.send(Ok(completed)).await;
+                } else {
+                    *guard = Some(ws_stream);
+                    if let Some(completed) = completion {
+                        // The handshake is finished. Consumer backpressure must not let the
+                        // interruption deadline discard completion or its usage accounting.
+                        drop(guard);
+                        let _ = tx_event.send(Ok(completed)).await;
+                    }
                 }
             }
             .instrument(current_span),
@@ -598,6 +666,11 @@ async fn connect_websocket(
         }
     };
 
+    let max_message_bytes = response
+        .headers()
+        .get(X_CODEX_WEBSOCKET_MAX_MESSAGE_BYTES_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok());
     let reasoning_included = response.headers().contains_key(X_REASONING_INCLUDED_HEADER);
     let server_model = response
         .headers()
@@ -613,7 +686,7 @@ async fn connect_websocket(
         let _ = turn_state.set(header_value.to_string());
     }
     Ok((
-        WsStream::new(stream),
+        WsStream::new(stream, max_message_bytes),
         response,
         reasoning_included,
         server_model,
@@ -752,11 +825,23 @@ struct InterruptAcknowledgement {
     response_id: String,
 }
 
+fn is_websocket_receive_failure(
+    response: &Result<Option<Result<Message, WsError>>, ApiError>,
+) -> bool {
+    match response {
+        Ok(Some(Ok(message))) => match message {
+            Message::Text(_) | Message::Ping(_) | Message::Pong(_) => false,
+            Message::Binary(_) | Message::Close(_) | Message::Frame(_) => true,
+        },
+        Ok(Some(Err(_))) | Ok(None) | Err(_) => true,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_websocket_response_stream(
     ws_stream: &mut WsStream,
     tx_event: mpsc::Sender<std::result::Result<ResponseEvent, ApiError>>,
-    request_text: String,
+    request_text: Utf8Bytes,
     idle_timeout: Duration,
     telemetry: Option<Arc<dyn WebsocketTelemetry>>,
     turn_state: Option<&OnceLock<String>>,
@@ -786,6 +871,7 @@ async fn run_websocket_response_stream(
     let mut interrupt_request = interrupt.clone().fuse();
     let mut interruption = None;
     let mut response_id = None;
+    let mut received_text = false;
     let mut awaiting_interrupt_ack = false;
     loop {
         let poll_start = Instant::now();
@@ -801,7 +887,7 @@ async fn run_websocket_response_stream(
                         "type": "response.interrupt",
                         "response_id": response_id,
                         "mode": "discard_partial_items",
-                    }).to_string(),
+                    }).to_string().into(),
                     idle_timeout,
                     /*telemetry*/ None,
                     timing_log_context.connection_reused,
@@ -811,8 +897,11 @@ async fn run_websocket_response_stream(
                 continue;
             }
         };
-        if let Some(t) = telemetry.as_ref() {
-            t.on_ws_event(&response, poll_start.elapsed());
+        let poll_duration = poll_start.elapsed();
+        if let Some(telemetry) = &telemetry
+            && is_websocket_receive_failure(&response)
+        {
+            telemetry.on_ws_receive_failure(poll_duration);
         }
         let message = match response {
             Ok(Some(Ok(msg))) => msg,
@@ -831,14 +920,22 @@ async fn run_websocket_response_stream(
 
         match message {
             Message::Text(text) => {
-                if let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
+                received_text = true;
+                let event = serde_json::from_str::<ResponsesStreamEvent>(&text);
+                let kind = event.as_ref().ok().map(ResponsesStreamEvent::kind);
+                if let Some(t) = telemetry.as_ref() {
+                    t.on_ws_text_event(&text, kind, poll_duration);
+                }
+                // A wrapped error can still be valid when an unrelated stream field is malformed.
+                if matches!(kind, Some("error") | None)
+                    && let Some(wrapped_error) = parse_wrapped_websocket_error_event(&text)
                     && let Some(error) =
                         map_wrapped_websocket_error_event(wrapped_error, text.to_string())
                 {
                     return Err(error);
                 }
 
-                let event = match serde_json::from_str::<ResponsesStreamEvent>(&text) {
+                let event = match event {
                     Ok(event) => event,
                     Err(err) => {
                         debug!("failed to parse websocket event: {err}, data: {text}");
@@ -925,11 +1022,7 @@ async fn run_websocket_response_stream(
                     last_server_model = Some(model);
                 }
                 for metadata_event in metadata_events {
-                    if tx_event.send(Ok(metadata_event)).await.is_err() {
-                        return Err(ApiError::Stream(
-                            "response event consumer dropped".to_string(),
-                        ));
-                    }
+                    let _ = tx_event.send(Ok(metadata_event)).await;
                 }
                 match event {
                     Ok(Some(event)) => {
@@ -964,6 +1057,9 @@ async fn run_websocket_response_stream(
             }
             Message::Binary(_) => {
                 return Err(ApiError::Stream("unexpected binary websocket event".into()));
+            }
+            Message::Close(Some(frame)) if frame.code == CloseCode::Size && !received_text => {
+                return Err(ApiError::WebsocketMessageTooLarge);
             }
             Message::Close(_) => {
                 return Err(ApiError::Stream(
@@ -1022,19 +1118,22 @@ fn safety_buffering_for_event(
 
 async fn send_websocket_request(
     ws_stream: &mut WsStream,
-    request_text: String,
+    request_text: Utf8Bytes,
     idle_timeout: Duration,
     telemetry: Option<&Arc<dyn WebsocketTelemetry>>,
     connection_reused: bool,
 ) -> Result<(), ApiError> {
+    if ws_stream
+        .max_message_bytes
+        .is_some_and(|limit| request_text.len() > limit)
+    {
+        return Err(ApiError::WebsocketMessageTooLarge);
+    }
     let request_start = Instant::now();
-    let result = tokio::time::timeout(
-        idle_timeout,
-        ws_stream.send(Message::Text(request_text.into())),
-    )
-    .await
-    .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
-    .and_then(|result| result.map_err(map_ws_stream_error));
+    let result = tokio::time::timeout(idle_timeout, ws_stream.send(Message::Text(request_text)))
+        .await
+        .map_err(|_| ApiError::Stream("idle timeout sending websocket request".into()))
+        .and_then(|result| result.map_err(map_ws_stream_error));
 
     if let Some(t) = telemetry.as_ref() {
         t.on_ws_request(
@@ -1072,7 +1171,22 @@ mod tests {
 
     #[test]
     fn direct_serialization_preserves_websocket_request_payload() {
+        for (country_code, expected_country) in [
+            (None, None),
+            (Some(" de "), Some(json!("DE"))),
+            (Some("xX"), Some(Value::Null)),
+        ] {
+            assert_serialized_request(country_code, expected_country);
+        }
+    }
+
+    fn assert_serialized_request(country_code: Option<&str>, expected_country: Option<Value>) {
         let api_request = ResponsesApiRequest {
+            request_country: country_code
+                .map(codex_protocol::RequestCountry::from_iso_code)
+                .transpose()
+                .expect("country is valid")
+                .unwrap_or_default(),
             model: "gpt-test".to_string(),
             input: vec![ResponseItem::Message {
                 status: None,
@@ -1105,6 +1219,9 @@ mod tests {
             include: vec!["reasoning.encrypted_content".to_string()],
             service_tier: Some("priority".to_string()),
             prompt_cache_key: Some("cache-key".to_string()),
+            prompt_cache_options: Some(crate::PromptCacheOptions {
+                ttl: codex_protocol::turn_input::PromptCacheTtl::TwelveHours,
+            }),
             text: None,
             access_programs: Some(
                 codex_protocol::turn_input::CyberAccessProgram::DaybreakBlue.into(),
@@ -1122,6 +1239,10 @@ mod tests {
 
         let mut expected_payload =
             serde_json::to_value(&api_request).expect("serialize responses API request");
+        assert_eq!(
+            expected_payload.get("request_country"),
+            expected_country.as_ref()
+        );
         expected_payload["type"] = json!("response.create");
         expected_payload["previous_response_id"] = json!("resp-1");
         expected_payload["generate"] = json!(false);
@@ -1133,7 +1254,43 @@ mod tests {
         let wire_payload =
             serde_json::from_str::<Value>(&request_text).expect("parse websocket request");
 
+        assert_eq!(
+            wire_payload.get("request_country"),
+            expected_country.as_ref()
+        );
         assert_eq!(wire_payload, expected_payload);
+    }
+
+    #[tokio::test]
+    async fn large_turn_is_one_text_message_in_bounded_frames() {
+        const MIB: usize = 1024 * 1024;
+        let (tx, mut frames) = futures::channel::mpsc::unbounded();
+        let mut socket = tx.sink_map_err(|_| WsError::ConnectionClosed);
+
+        let at_limit = Message::text("a".repeat(MIB));
+        send_message(&mut socket, at_limit.clone()).await.unwrap();
+        assert_eq!(frames.next().await, Some(at_limit));
+
+        let mut text = "a".repeat(MIB - 1);
+        text.push('🌱');
+        text.push_str(&"b".repeat(MIB));
+        send_message(&mut socket, Message::text(text.clone()))
+            .await
+            .unwrap();
+        drop(socket);
+        for (i, expected) in text.as_bytes().chunks(MIB).enumerate() {
+            let Some(Message::Frame(frame)) = frames.next().await else {
+                panic!("expected a data frame");
+            };
+            let opcode = if i == 0 { Data::Text } else { Data::Continue };
+            assert_eq!(
+                frame.header().opcode,
+                tokio_tungstenite::tungstenite::protocol::frame::coding::OpCode::Data(opcode)
+            );
+            assert_eq!(frame.header().is_final, (i + 1) * MIB >= text.len());
+            assert_eq!(frame.payload(), expected);
+        }
+        assert!(frames.next().await.is_none());
     }
 
     #[test]
@@ -1287,6 +1444,32 @@ mod tests {
         let body = body.expect("expected body");
         assert!(body.contains("invalid_request_error"));
         assert!(body.contains("Model does not support image inputs"));
+    }
+
+    #[test]
+    fn wrapped_context_length_error_respects_http_status() {
+        for status in [400, 503] {
+            let payload = json!({
+                "type": "error",
+                "status": status,
+                "error": {"code": "context_length_exceeded"}
+            })
+            .to_string();
+            let event = parse_wrapped_websocket_error_event(&payload).unwrap();
+            let error = map_wrapped_websocket_error_event(event, payload).unwrap();
+            let error = crate::api_bridge::map_api_error(error);
+            assert_eq!(
+                matches!(
+                    error.details(),
+                    codex_protocol::error::CodexErrorDetails::ContextWindowExceeded
+                ),
+                status == 400
+            );
+            assert_eq!(
+                error.retry_delay(/*retry_count*/ 1).is_some(),
+                status == 503
+            );
+        }
     }
 
     #[test]

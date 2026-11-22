@@ -39,6 +39,8 @@ async fn execution_timing_includes_javascript_but_excludes_delayed_reads() -> Re
     let mut client = CodeModeHostClient::connect(host.endpoint).await?;
     let mut events = client
         .open_session(grpc::OpenSessionRequest {
+            heartbeat_interval_s: 0,
+            max_pending_delegate_calls: None,
             cell_execution_limits: None,
             output_truncation: None,
         })
@@ -56,6 +58,7 @@ async fn execution_timing_includes_javascript_but_excludes_delayed_reads() -> Re
         let observed = Instant::now();
         let mut execution = client
             .execute(grpc::ExecuteRequest {
+                catalog_revision: None,
                 session_id: opened.session_id.clone(),
                 execution_id: format!("execution-{index}"),
                 tool_call_id: format!("call-{index}"),
@@ -165,11 +168,10 @@ async fn stdio_execution_timing_includes_javascript_but_excludes_delayed_reads()
         if suffix.is_empty() {
             assert_eq!(error_text, None);
         } else {
-            assert!(
-                error_text
-                    .context("expected JS failure")?
-                    .contains("timed failure")
-            );
+            let Some(error_text) = error_text else {
+                anyhow::bail!("expected JS failure");
+            };
+            assert!(error_text.contains("timed failure"));
         }
     }
     session.shutdown().await.map_err(anyhow::Error::msg)?;

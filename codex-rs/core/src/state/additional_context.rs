@@ -1,15 +1,25 @@
-//! Deduplicates the active client context using its selected model-visible representation.
+//! Deduplicates active client context and tracks its history item IDs across compaction.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::context::AdditionalContextDeveloperFragment;
 use crate::context::AdditionalContextToolOutput;
 use crate::context::AdditionalContextUserFragment;
 use crate::context::ContextualUserFragment;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
+use codex_context_fragments::MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS;
+use codex_history::CodexHarnessMetadata;
+use codex_history::ResponseItemEnvelope;
+use codex_otel::ADDITIONAL_CONTEXT_COUNT_METRIC;
+use codex_otel::ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS;
+use codex_otel::ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC;
+use codex_otel::SessionTelemetry;
+use codex_protocol::ItemIdGenerator;
+use codex_protocol::ResponseItemId;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
+use codex_utils_string::truncate_middle_with_token_budget;
 
 pub(crate) enum AdditionalContextFormat {
     Messages,
@@ -36,9 +46,47 @@ impl PartialEq for StoredAdditionalContext {
     }
 }
 
+impl StoredAdditionalContext {
+    fn new(key: &str, entry: AdditionalContextEntry, format: &AdditionalContextFormat) -> Self {
+        match (format, entry.kind) {
+            (AdditionalContextFormat::ToolOutputs, AdditionalContextKind::Untrusted) => {
+                Self::ToolOutput(AdditionalContextToolOutput::new(
+                    key,
+                    entry.name,
+                    &entry.value,
+                ))
+            }
+            (AdditionalContextFormat::Messages, AdditionalContextKind::Untrusted)
+            | (_, AdditionalContextKind::Application) => Self::Message(entry),
+        }
+    }
+
+    fn envelope(&self, key: &str, max_tokens: usize) -> ResponseItemEnvelope {
+        match self {
+            Self::ToolOutput(output) => ResponseItemEnvelope {
+                item: output.clone().into(),
+                metadata: Some(CodexHarnessMetadata {
+                    additional_context_tool_output: true,
+                    ..Default::default()
+                }),
+            },
+            Self::Message(entry) => ResponseItemEnvelope::new(match entry.kind {
+                AdditionalContextKind::Untrusted => ContextualUserFragment::into(
+                    AdditionalContextUserFragment::new(key.to_owned(), entry.value.clone())
+                        .with_max_tokens(max_tokens),
+                ),
+                AdditionalContextKind::Application => ContextualUserFragment::into(
+                    AdditionalContextDeveloperFragment::new(key.to_owned(), entry.value.clone())
+                        .with_max_tokens(max_tokens),
+                ),
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AdditionalContextStore {
-    values: BTreeMap<String, StoredAdditionalContext>,
+    values: BTreeMap<String, (StoredAdditionalContext, ResponseItemId)>,
 }
 
 impl AdditionalContextStore {
@@ -46,120 +94,116 @@ impl AdditionalContextStore {
         &mut self,
         values: BTreeMap<String, AdditionalContextEntry>,
         format: AdditionalContextFormat,
+        telemetry: &SessionTelemetry,
+        item_id_generator: &ItemIdGenerator,
         max_tokens: usize,
-    ) -> Vec<ResponseItem> {
-        let values =
-            values
-                .into_iter()
-                .map(|(key, entry)| {
-                    let value = match (&format, entry.kind) {
-                        (
-                            AdditionalContextFormat::ToolOutputs,
-                            AdditionalContextKind::Untrusted,
-                        ) => StoredAdditionalContext::ToolOutput(AdditionalContextToolOutput::new(
-                            &key,
-                            entry.name,
-                            &entry.value,
-                        )),
-                        (AdditionalContextFormat::Messages, AdditionalContextKind::Untrusted)
-                        | (AdditionalContextFormat::Messages, AdditionalContextKind::Application)
-                        | (
-                            AdditionalContextFormat::ToolOutputs,
-                            AdditionalContextKind::Application,
-                        ) => StoredAdditionalContext::Message(entry),
-                    };
-                    (key, value)
-                })
-                .collect::<BTreeMap<_, _>>();
-        let fragments = values
-            .iter()
-            .filter(|(key, value)| self.values.get(*key) != Some(*value))
-            .map(|(key, entry)| match entry {
-                StoredAdditionalContext::ToolOutput(output) => output.clone().into(),
-                StoredAdditionalContext::Message(entry) => fragment(key, entry, max_tokens),
-            })
-            .collect();
-        self.values = values;
+    ) -> Vec<ResponseItemEnvelope> {
+        self.values.retain(|key, _| values.contains_key(key));
+        self.extend(values, format, telemetry, item_id_generator, max_tokens)
+    }
+
+    /// Adds a producer's updates without dropping unrelated client context.
+    pub(crate) fn extend(
+        &mut self,
+        values: BTreeMap<String, AdditionalContextEntry>,
+        format: AdditionalContextFormat,
+        telemetry: &SessionTelemetry,
+        item_id_generator: &ItemIdGenerator,
+        max_tokens: usize,
+    ) -> Vec<ResponseItemEnvelope> {
+        let mut fragments = Vec::new();
+        for (key, entry) in values {
+            Self::record_metrics(&entry, telemetry);
+            let value = StoredAdditionalContext::new(&key, entry, &format);
+            if self
+                .values
+                .get(&key)
+                .is_some_and(|(previous, _)| previous == &value)
+            {
+                continue;
+            }
+            let mut envelope = value.envelope(&key, max_tokens);
+            let Some(prefix) = envelope.id_prefix() else {
+                unreachable!("additional context has an item ID")
+            };
+            let id = item_id_generator(prefix);
+            envelope.set_id(Some(id.clone()));
+            self.values.insert(key, (value, id));
+            fragments.push(envelope);
+        }
         fragments
     }
 
-    /// Fork addition: forgets the keys whose fragments are in `dropped`, input
-    /// that will never be recorded, so their values are sent again.
+    /// Fork addition: forgets the values whose items are in `dropped`, input
+    /// that will never be recorded, so they are sent again.
     pub(crate) fn forget_unrecorded<'a>(
         &mut self,
-        dropped: impl Clone + Iterator<Item = &'a ResponseItem>,
+        dropped: impl Iterator<Item = &'a ResponseItemEnvelope>,
     ) {
-        self.values
-            .retain(|key, _| !dropped.clone().any(|item| is_fragment_of(item, key)));
+        let dropped: HashSet<&ResponseItemId> = dropped.filter_map(|item| item.id()).collect();
+        if !dropped.is_empty() {
+            self.values.retain(|_, (_, id)| !dropped.contains(&*id));
+        }
     }
 
-    /// Fork addition: for each stored key, the last fragment `history`
-    /// holds for it, to carry into a history that will not (compaction). What
-    /// the model saw stays as it was: a value submitted but not recorded yet
-    /// follows as its own fragment, and a key history lost stays lost.
-    pub(crate) fn last_fragments<'a>(
+    /// Refresh retained active items in place and return the missing ones in history order.
+    /// Queued updates are absent from the replaced prefix and arrive with their input.
+    pub(crate) fn restore_compacted_items(
         &self,
-        history: impl Clone + DoubleEndedIterator<Item = &'a ResponseItem>,
-    ) -> Vec<(String, ResponseItem)> {
-        self.values
-            .keys()
-            .filter_map(|key| {
-                history
-                    .clone()
-                    .rev()
-                    .find(|item| is_fragment_of(item, key))
-                    .map(|item| (key.clone(), item.clone()))
-            })
-            .collect()
-    }
-}
-
-/// Fork addition: whether `item` is a fragment for `key`, whatever its value.
-pub(crate) fn is_fragment_of(item: &ResponseItem, key: &str) -> bool {
-    if let ResponseItem::Message {
-        internal_chat_message_metadata_passthrough: Some(metadata),
-        ..
-    } = item
-        && let Some(kinds) = &metadata.content_item_kinds
-        && !kinds
-            .iter()
-            .any(|kind| kind.0 == format!("additional_content.{key}"))
-    {
-        return false;
-    }
-    match message_text(item) {
-        Some(("developer", text)) => {
-            text.starts_with(&format!("<{key}>")) && text.ends_with(&format!("</{key}>"))
+        replaced: &[ResponseItemEnvelope],
+        retained: &mut [ResponseItemEnvelope],
+    ) -> Vec<ResponseItemEnvelope> {
+        if self.values.is_empty() {
+            return Vec::new();
         }
-        Some(("user", text)) => {
-            text.starts_with(&format!("<external_{key}>"))
-                && text.ends_with(&format!("</external_{key}>"))
+        let mut active: HashMap<_, _> = self.values.values().map(|(_, id)| (id, None)).collect();
+        for (index, item) in retained.iter().enumerate() {
+            if let Some(slot) = item.id().and_then(|id| active.get_mut(id)) {
+                *slot = Some(index);
+            }
         }
-        Some(_) | None => false,
+        let mut missing = Vec::new();
+        for item in replaced {
+            let Some(slot) = item.id().and_then(|id| active.remove(id)) else {
+                continue;
+            };
+            if let Some(index) = slot {
+                // Generic client-message retention may have shortened the active value.
+                // Keep its position and checkpoint metadata, with the original bounded payload.
+                retained[index].item.clone_from(&item.item);
+            } else {
+                missing.push(item.clone());
+            }
+        }
+        missing
     }
-}
 
-/// Role and text of a single-text message.
-fn message_text(item: &ResponseItem) -> Option<(&str, &str)> {
-    let ResponseItem::Message { role, content, .. } = item else {
-        return None;
-    };
-    match content.as_slice() {
-        [ContentItem::InputText { text }] => Some((role.as_str(), text.as_str())),
-        _ => None,
-    }
-}
-
-fn fragment(key: &str, entry: &AdditionalContextEntry, max_tokens: usize) -> ResponseItem {
-    match entry.kind {
-        AdditionalContextKind::Untrusted => ContextualUserFragment::into(
-            AdditionalContextUserFragment::new(key.to_string(), entry.value.clone())
-                .with_max_tokens(max_tokens),
-        ),
-        AdditionalContextKind::Application => ContextualUserFragment::into(
-            AdditionalContextDeveloperFragment::new(key.to_string(), entry.value.clone())
-                .with_max_tokens(max_tokens),
-        ),
+    fn record_metrics(entry: &AdditionalContextEntry, telemetry: &SessionTelemetry) {
+        let (bounded_value, original_tokens) =
+            truncate_middle_with_token_budget(&entry.value, MAX_ADDITIONAL_CONTEXT_VALUE_TOKENS);
+        let kind = match entry.kind {
+            AdditionalContextKind::Untrusted => "untrusted",
+            AdditionalContextKind::Application => "application",
+        };
+        let truncated = original_tokens.is_some().to_string();
+        let mut tags = vec![("kind", kind), ("truncated", truncated.as_str())];
+        if let Some(name) = entry.name.as_deref() {
+            tags.push(("name", name));
+        }
+        telemetry.counter(ADDITIONAL_CONTEXT_COUNT_METRIC, /*inc*/ 1, &tags);
+        for (stage, bytes) in [
+            ("before", entry.value.len()),
+            ("after", bounded_value.len()),
+        ] {
+            let mut size_tags = tags.clone();
+            size_tags.push(("stage", stage));
+            telemetry.histogram_with_boundaries(
+                ADDITIONAL_CONTEXT_VALUE_BYTES_METRIC,
+                i64::try_from(bytes).unwrap_or(i64::MAX),
+                ADDITIONAL_CONTEXT_VALUE_BYTES_BUCKETS.as_slice(),
+                &size_tags,
+            );
+        }
     }
 }
 

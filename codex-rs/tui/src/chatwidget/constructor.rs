@@ -4,7 +4,9 @@ use super::*;
 
 impl ChatWidget {
     pub(crate) fn new_with_app_event(common: ChatWidgetInit) -> Self {
-        Self::new_with_op_target(common, CodexOpTarget::AppEvent)
+        let mut widget = Self::new_with_op_target(common, CodexOpTarget::AppEvent);
+        widget.bottom_pane.enable_agents_navigation();
+        widget
     }
 
     pub(super) fn new_with_op_target(
@@ -74,7 +76,11 @@ impl ChatWidget {
             &header_model,
             &model_catalog.try_list_models().unwrap_or_default(),
         );
-        let runtime_keymap = RuntimeKeymap::from_config(&local_settings.tui.keymap).ok();
+        let runtime_keymap = RuntimeKeymap::for_session(
+            &local_settings.tui.keymap,
+            local_settings.workspace_enabled(&config),
+        )
+        .ok();
         let default_keymap = RuntimeKeymap::defaults();
         let copy_last_response_binding = runtime_keymap
             .as_ref()
@@ -128,6 +134,8 @@ impl ChatWidget {
             has_codex_backend_auth,
             model_catalog,
             model_popup_request_id: None,
+            cloud_picker_selection: None,
+            pending_cloud_turn_settings: None,
             permission_popup_pending: false,
             permission_popup_request_id: None,
             permission_discovery: None,
@@ -140,7 +148,11 @@ impl ChatWidget {
             initial_user_message,
             status_account_display,
             remote_connection: None,
+            statusline_feature_enabled: false,
+            statusline_read: None,
+            statusline_disconnected: false,
             snapshot_local_images: false,
+            thread_params_mode: crate::app_server_session::ThreadParamsMode::Embedded,
             pending_image_submission: None,
             local_worktree_operations: true,
             windows_sandbox_local_server: false,
@@ -151,6 +163,7 @@ impl ChatWidget {
             token_info: None,
             token_usage_pending: false,
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
+            inherited_quota_provider: None,
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
             pending_rate_limit_reset_request_id: None,
@@ -161,6 +174,8 @@ impl ChatWidget {
             pending_rate_limit_reset_hint: None,
             available_rate_limit_reset_credits: None,
             next_rate_limit_reset_request_id: 0,
+            account_plan: initial_plan_type,
+            quota_plan: None,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
             codex_spend_control_reached: None,
@@ -176,6 +191,7 @@ impl ChatWidget {
             backend_banner_notice_model: None,
             luna_reserve_notice_account_id: None,
             warning_display_state: WarningDisplayState::default(),
+            composer_images: None,
             rendered_selection: Default::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
             add_credits_nudge_email_in_flight: None,
@@ -199,12 +215,9 @@ impl ChatWidget {
             safety_buffering: SafetyBufferingState::default(),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
+            pending_terminal_restore: None,
             mcp_startup_status: None,
-            mcp_startup_expected_servers: None,
-            mcp_startup_ignore_updates_until_next_start: false,
-            mcp_startup_allow_terminal_only_next_round: false,
-            mcp_startup_pending_next_round: HashMap::new(),
-            mcp_startup_pending_next_round_saw_starting: false,
+            mcp_startup_last_diagnostics: HashMap::new(),
             connectors: ConnectorsState::default(),
             ide_context: IdeContextState::default(),
             plugins_cache: PluginsCacheState::default(),
@@ -238,7 +251,10 @@ impl ChatWidget {
             thread_rename_block_message: None,
             active_side_conversation: false,
             blocks_direct_input: false,
-            external_writer_view: false,
+            read_only_thread: None,
+            read_only_history: false,
+            thread_settings_confirmed: false,
+            provider_error: None,
             fork_in_progress: false,
             misalignment_policy_violation: None,
             normal_placeholder_text: placeholder,
@@ -246,6 +262,7 @@ impl ChatWidget {
             forked_from: None,
             interrupted_turn_notice_mode: InterruptedTurnNoticeMode::Default,
             input_queue: InputQueueState::default(),
+            thread_stream_disconnected: false,
             safety_buffering_prompt: None,
             safety_buffering_source: UserMessageSource::Prompt,
             chat_keymap,
@@ -256,6 +273,8 @@ impl ChatWidget {
             suppress_initial_user_message_submit: false,
             pending_notification: None,
             quit_shortcut_expires_at: None,
+            new_backend_label: None,
+            cloud_environment_name: None,
             quick_dial_menu: false,
             quick_dial_menu_key_guard: None,
             quit_shortcut_key: None,
@@ -264,6 +283,7 @@ impl ChatWidget {
             feedback,
             current_rollout_path: None,
             current_cwd,
+            primary_environment_cwd: None,
             workspace_command_runner,
             instruction_source_paths: Vec::new(),
             session_network_proxy: None,
@@ -286,7 +306,6 @@ impl ChatWidget {
             status_line_git_summary_lookup_complete: false,
             status_line_workspace_headline: None,
             status_line_workspace_headline_pending_request_id: None,
-            next_status_line_workspace_headline_request_id: 0,
             status_line_workspace_headline_last_requested_at: None,
             status_line_workspace_messages_disabled: false,
             thread_usage: thread_usage::ThreadUsageState::default(),

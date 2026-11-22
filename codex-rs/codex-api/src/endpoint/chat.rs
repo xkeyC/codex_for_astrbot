@@ -1080,6 +1080,7 @@ impl ChatStream {
                 response_id,
                 token_usage: self.usage.take(),
                 usage_metadata: None,
+                reasoning_removals: None,
                 end_turn: None,
             }))
             .await;

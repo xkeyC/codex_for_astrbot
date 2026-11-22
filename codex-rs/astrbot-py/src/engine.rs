@@ -16,8 +16,9 @@ use codex_core::CodexAppsToolsCache;
 use codex_core::CodexThread;
 use codex_core::StartThreadOptions;
 use codex_core::ThreadManager;
+use codex_core::ThreadStoreBuilder;
 use codex_core::TurnInputSubmission;
-use codex_core::build_models_manager;
+use codex_core::build_startup_models;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -25,7 +26,6 @@ use codex_core::init_state_db;
 use codex_core::local_agent_graph_store_from_state_db;
 use codex_core::passthrough_image_store;
 use codex_core::resolve_installation_id;
-use codex_core::thread_store_from_config;
 use codex_exec_server::EnvironmentManager;
 use codex_exec_server::ExecServerRuntimeOptions;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -259,7 +259,7 @@ impl Engine {
             .map_err(|err| anyhow!("environment manager: {err}"))?,
             None => EnvironmentManager::without_environments(config.http_client_factory()),
         });
-        let thread_store = thread_store_from_config(&config, state_db.clone());
+        let thread_store = ThreadStoreBuilder::from_config(&config, state_db.clone()).build();
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
@@ -267,10 +267,17 @@ impl Engine {
         let saved_image_hook = SavedImageSlot::default();
         let extensions = build_extensions(Arc::clone(&auth_manager), Arc::clone(&saved_image_hook));
         let base_config = config.clone();
-        let mut thread_manager = ThreadManager::new(
+        let startup = build_startup_models(
             &config,
             Arc::clone(&auth_manager),
-            build_models_manager(&config, Arc::clone(&auth_manager)),
+            installation_id,
+            Arc::new(codex_models_manager::manager::ModelCatalogSettings::disk(
+                config.codex_home.to_path_buf(),
+            )),
+        );
+        let mut thread_manager = ThreadManager::new(
+            &config,
+            startup,
             CodexAppsToolsCache::default(),
             SessionSource::Custom(SESSION_SOURCE.to_string()),
             environment_manager,
@@ -280,7 +287,6 @@ impl Engine {
             passthrough_image_store(),
             thread_store,
             local_agent_graph_store_from_state_db(state_db.as_ref()),
-            installation_id,
             /*attestation_provider*/ None,
             /*external_time_provider*/ None,
         );
@@ -457,6 +463,10 @@ impl Engine {
         let not_submitted = |reason: codex_core::NotSubmittedReason| json!({"status": "not_submitted", "reason": format!("{reason:?}")});
         let (submission, was_started) = match request.mode {
             TurnMode::StartOrSteer => match thread.start_or_steer_turn(turn).await? {
+                // Only agent follow-ups delivered as messages are accepted this way.
+                TurnInputSubmission::Accepted => {
+                    (json!({"status": "steered", "turn_id": null}), false)
+                }
                 TurnInputSubmission::Started { turn_id, .. } => (started(turn_id), true),
                 TurnInputSubmission::Steered { turn_id, .. } => (steered(turn_id), false),
                 TurnInputSubmission::NotSubmitted { reason } => (not_submitted(reason), false),
@@ -537,7 +547,6 @@ impl Engine {
         let snapshot = thread.config_snapshot().await;
         codex_memories_write::start_memories_startup_task(
             Arc::clone(&self.thread_manager),
-            Arc::clone(&self.auth_manager),
             id,
             Arc::clone(thread),
             thread.config().await,
@@ -554,7 +563,6 @@ impl Engine {
         let snapshot = thread.config_snapshot().await;
         codex_memories_write::run_memories_consolidation_now(
             Arc::clone(&self.thread_manager),
-            Arc::clone(&self.auth_manager),
             id,
             Arc::clone(&thread),
             thread.config().await,

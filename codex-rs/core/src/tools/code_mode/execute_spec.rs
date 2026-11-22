@@ -29,7 +29,7 @@ pub(crate) fn compact_exec_description(
         deferred_nested_tools_guidance: Some(String::new()),
         ..messages.cloned().unwrap_or_default()
     };
-    let template = codex_code_mode::build_exec_tool_description(
+    let (template, _) = codex_code_mode::build_exec_tool_description_and_definitions(
         &[],
         &[],
         &BTreeMap::new(),
@@ -37,6 +37,7 @@ pub(crate) fn compact_exec_description(
         /*code_mode_only*/ false,
         image_detail_visibility,
         DeferredToolDiscovery::Catalog,
+        /*incremental_exec_enabled*/ false,
         Some(&messages),
     );
     if template.is_empty() {
@@ -158,7 +159,7 @@ mod compact_description_tests {
             (false, DeferredToolDiscovery::Catalog),
             (false, DeferredToolDiscovery::RankedSearch),
         ] {
-            let full = codex_code_mode::build_exec_tool_description(
+            let (full, _) = codex_code_mode::build_exec_tool_description_and_definitions(
                 &[],
                 &deferred,
                 &BTreeMap::new(),
@@ -166,6 +167,7 @@ mod compact_description_tests {
                 code_mode_only,
                 visibility,
                 discovery,
+                /*incremental_exec_enabled*/ false,
                 /*messages*/ None,
             );
             let compact = compact_exec_description(

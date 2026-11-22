@@ -126,15 +126,17 @@ async fn persona_survives_compaction_when_reinjected() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn persona_is_lost_after_compaction_without_reinjection() -> Result<()> {
+async fn persona_survives_compaction_without_reinjection() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
+    // Upstream keeps active additional context across compaction itself
+    // (rust-v0.171.0); `reinject_after_compaction` is no longer needed for it.
     let (first, after) = personas_after_compaction(
         /*reinject*/ false, /*max_value_tokens*/ None, "be a cat",
     )
     .await?;
     assert_eq!(first.len(), 1);
-    assert_eq!(after, Vec::<String>::new());
+    assert_eq!(after, first);
     Ok(())
 }
 

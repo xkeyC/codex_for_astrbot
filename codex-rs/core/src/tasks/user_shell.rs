@@ -210,6 +210,7 @@ pub(crate) async fn execute_user_shell_command(
 
     let permission_profile = PermissionProfile::Disabled;
     let exec_env = ExecRequest {
+        native_program: None,
         command: exec_command.clone(),
         cwd: cwd.clone().into(),
         env: exec_env_map,
@@ -370,6 +371,7 @@ async fn send_user_shell_error(session: &Session, turn_context: &TurnContext, me
                 misalignment: None,
                 message: message.to_string(),
                 codex_error_info: None,
+                rejected_audio_file_ids: Vec::new(),
             }),
         )
         .await;

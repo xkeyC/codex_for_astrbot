@@ -2,13 +2,16 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeSession;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeSessionDelegate;
+use codex_code_mode_protocol::CodeModeSessionOptions;
 use codex_code_mode_protocol::CodeModeSessionProvider;
 use codex_code_mode_protocol::CodeModeSessionProviderFuture;
 use codex_code_mode_protocol::CodeModeSessionResultFuture;
@@ -18,10 +21,14 @@ use codex_code_mode_protocol::TerminateRequest;
 use codex_code_mode_protocol::WaitOutcome;
 use codex_code_mode_protocol::WaitRequest;
 use codex_code_mode_protocol::host::SessionId;
+use codex_code_mode_protocol::host::TOOL_CATALOG_CAPABILITY;
+use codex_code_mode_protocol::host::WireExecuteRequest;
 use codex_install_context::InstallContext;
 use tokio::sync::Semaphore;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
+
+use crate::tool_catalog::CatalogAdmission;
 
 use self::connection::Connection;
 use self::connection::ConnectionError;
@@ -83,7 +90,17 @@ impl CodeModeSessionProvider for ProcessOwnedCodeModeSessionProvider {
         &'a self,
         limits: CodeModeSessionCellExecutionLimits,
     ) -> CodeModeSessionProviderFuture<'a> {
-        Box::pin(create_host_session(self.process_host(), limits))
+        self.create_session_with_options(CodeModeSessionOptions {
+            cell_execution_limits: limits,
+            ..CodeModeSessionOptions::default()
+        })
+    }
+
+    fn create_session_with_options<'a>(
+        &'a self,
+        options: CodeModeSessionOptions,
+    ) -> CodeModeSessionProviderFuture<'a> {
+        Box::pin(create_host_session(self.process_host(), options))
     }
 }
 
@@ -106,9 +123,9 @@ impl CodeModeSessionProvider for DisabledCodeModeSessionProvider {
 
 async fn create_host_session(
     host: Arc<OwnedCodeModeHost>,
-    limits: CodeModeSessionCellExecutionLimits,
+    options: CodeModeSessionOptions,
 ) -> Result<Arc<dyn CodeModeSession>, String> {
-    let session = ProcessOwnedCodeModeSession::with_host(host, limits);
+    let session = ProcessOwnedCodeModeSession::with_host(host, options);
     session.connection().await?;
     Ok(Arc::new(session))
 }
@@ -211,6 +228,7 @@ enum SessionState {
 
 #[derive(Clone)]
 struct SessionBinding {
+    catalog: Arc<tokio::sync::Mutex<crate::tool_catalog::Catalog>>,
     connection: Arc<Connection>,
     remote: RemoteSession,
     cleanup: SessionCleanup,
@@ -218,7 +236,9 @@ struct SessionBinding {
 
 struct SessionInner {
     host: Arc<OwnedCodeModeHost>,
-    limits: CodeModeSessionCellExecutionLimits,
+    options: CodeModeSessionOptions,
+    // The first successful open fixes the output policy for all generations of this session.
+    output_truncation: OnceLock<CodeModeOutputTruncation>,
     state: StdMutex<SessionState>,
     shutdown_requested: AtomicBool,
     shutdown_result: StdMutex<Option<ShutdownResultReceiver>>,
@@ -236,15 +256,16 @@ impl ProcessOwnedCodeModeSession {
             Arc::new(OwnedCodeModeHost::new(
                 InstallContext::current().code_mode_host_program(),
             )),
-            CodeModeSessionCellExecutionLimits::default(),
+            CodeModeSessionOptions::default(),
         )
     }
 
-    fn with_host(host: Arc<OwnedCodeModeHost>, limits: CodeModeSessionCellExecutionLimits) -> Self {
+    fn with_host(host: Arc<OwnedCodeModeHost>, options: CodeModeSessionOptions) -> Self {
         Self {
             inner: Arc::new(SessionInner {
                 host,
-                limits,
+                options,
+                output_truncation: OnceLock::new(),
                 state: StdMutex::new(SessionState::New),
                 shutdown_requested: AtomicBool::new(false),
                 shutdown_result: StdMutex::new(None),
@@ -257,9 +278,13 @@ impl ProcessOwnedCodeModeSession {
         self.inner.connection().await
     }
 
+    fn server_output_budget(&self, budget: Option<usize>) -> Option<usize> {
+        budget.filter(|_| self.output_truncation() == CodeModeOutputTruncation::Server)
+    }
+
     pub async fn execute(
         &self,
-        request: ExecuteRequest,
+        mut request: ExecuteRequest,
         delegate: Arc<dyn CodeModeSessionDelegate>,
         preempt: Option<CancellationToken>,
     ) -> Result<StartedCell, String> {
@@ -268,30 +293,51 @@ impl ProcessOwnedCodeModeSession {
             delegate,
             trace: codex_otel::current_span_w3c_trace_context(),
         });
-        binding
+        // V1 encodes the exec budget as i32. Its maximum already exceeds the host collector limit.
+        request.max_output_tokens = self
+            .server_output_budget(request.max_output_tokens)
+            .map(|tokens| tokens.min(i32::MAX as usize));
+        let admission = binding
+            .connection
+            .supports(TOOL_CATALOG_CAPABILITY)
+            .then(|| CatalogAdmission::prepare(&binding.catalog, &request.enabled_tools))
+            .flatten();
+        if admission
+            .as_ref()
+            .is_some_and(CatalogAdmission::reuses_catalog)
+        {
+            request.enabled_tools.clear();
+        }
+        let mut request = WireExecuteRequest::try_from(request)
+            .map_err(|error| format!("failed to encode code-mode execute request: {error}"))?;
+        request.catalog_revision = admission.as_ref().map(CatalogAdmission::revision);
+        let started = binding
             .connection
             .execute(binding.remote, request, delegate, preempt)
-            .await
+            .await?;
+        if let Some(admission) = admission {
+            admission.accepted();
+        }
+        Ok(started)
     }
 
     pub async fn wait(
         &self,
-        request: WaitRequest,
+        mut request: WaitRequest,
         preempt: Option<CancellationToken>,
     ) -> Result<WaitOutcome, String> {
         let binding = self.connection().await?;
+        request.max_output_tokens = self.server_output_budget(request.max_output_tokens);
         binding
             .connection
             .wait(binding.remote, request, preempt)
             .await
     }
 
-    pub async fn terminate(&self, request: TerminateRequest) -> Result<WaitOutcome, String> {
+    pub async fn terminate(&self, mut request: TerminateRequest) -> Result<WaitOutcome, String> {
         let binding = self.connection().await?;
-        binding
-            .connection
-            .terminate(binding.remote, request.cell_id)
-            .await
+        request.max_output_tokens = self.server_output_budget(request.max_output_tokens);
+        binding.connection.terminate(binding.remote, request).await
     }
 
     pub async fn shutdown(&self) -> Result<(), String> {
@@ -352,9 +398,14 @@ impl SessionInner {
         let result = match self.host.connection().await {
             Ok(connection) => {
                 let cleanup = connection
-                    .open_session(remote.clone(), self.limits.clone())
+                    .open_session(
+                        remote.clone(),
+                        self.options.clone(),
+                        &self.output_truncation,
+                    )
                     .await;
                 cleanup.map(|cleanup| SessionBinding {
+                    catalog: Default::default(),
                     connection,
                     remote: remote.clone(),
                     cleanup,
@@ -529,6 +580,14 @@ impl Default for ProcessOwnedCodeModeSession {
 }
 
 impl CodeModeSession for ProcessOwnedCodeModeSession {
+    fn output_truncation(&self) -> CodeModeOutputTruncation {
+        self.inner
+            .output_truncation
+            .get()
+            .copied()
+            .unwrap_or_default()
+    }
+
     fn execute<'a>(
         &'a self,
         request: ExecuteRequest,

@@ -26,6 +26,7 @@ use transcript::ConversationTranscriptSection;
 mod native_tool_call;
 
 pub use action::ActionPresentation;
+pub use action::EnclosingCall;
 pub use action::PlannedAction;
 pub use action::PlannedActionKind;
 pub use action::action_for_review;
@@ -69,6 +70,9 @@ pub use retained_instructions::RetainedInstructionItem;
 pub use retained_instructions::retained_assistant_message;
 
 mod action;
+mod allocation;
+pub use allocation::PreparedElasticContext;
+pub use allocation::ReservedElasticItemIds;
 mod enforcement;
 pub(crate) use enforcement::BudgetPriority;
 pub use enforcement::Budgeted;
@@ -78,6 +82,10 @@ mod budget;
 mod composition;
 mod cursor;
 pub use budget::DEFAULT_MAX_INPUT_TOKENS;
+pub use budget::ElasticBudgetConfig;
+pub use budget::ElasticSection;
+pub use budget::ElasticSectionLimits;
+pub use budget::ElasticSectionLimitsError;
 pub use budget::REQUEST_TOKENS_BOUNDARIES;
 pub use budget::REQUEST_TOKENS_METRIC;
 pub use budget::RequestBudget;
@@ -96,11 +104,14 @@ pub use codex_protocol::TranscriptFormat;
 pub use composition::CollectedContext;
 pub use composition::ComposedContext;
 pub use composition::ContextPresentation;
+pub use composition::MAX_TEXT_PART_ESTIMATED_TOKENS;
 pub use composition::PreparedTranscript;
+pub use preparation::ContextBudgeting;
 pub use preparation::ContextProfile;
 pub use preparation::SyncImagePreparer;
 pub use preparation::SyncPreparation;
-pub use preparation::prepare_sync_context;
+pub use preparation::prepare_async_context;
+pub use preparation::prepare_context;
 pub use preparation::prepare_sync_context_with_facts;
 pub use preparation::prepare_sync_delivery;
 pub use preparation::prepare_sync_images;
@@ -172,6 +183,9 @@ impl SectionScope {
     }
 }
 
+/// Identifies exec outputs eligible for this review's configured section budget.
+pub type SelectedExecOutputPredicate<'a> = dyn Fn(&ResponseItem) -> bool + Sync + 'a;
+
 /// Borrowed host inputs available while one Guardian context section is built.
 #[derive(Clone, Copy)]
 pub struct SectionInput<'a> {
@@ -179,13 +193,15 @@ pub struct SectionInput<'a> {
     pub target: ContextTarget,
     /// Parent conversation history available to this contribution.
     pub history: &'a dyn SectionHistory,
-    /// Evidence sources and per-entry limits for this collection.
+    /// Evidence sources and request-time entry limits.
     pub transcript: &'a ConversationTranscriptConfig,
+    /// Supplied by the sync host when selected exec results have a configured budget.
+    pub is_selected_exec_output: Option<&'a SelectedExecOutputPredicate<'a>>,
     /// Bounded root evidence resolved by the host; empty when not applicable.
     pub root_conversation: &'a [GuardianRootMessage],
-    /// Sync originals retained until request preparation; preferred over the bounded view.
+    /// Originals retained until request preparation; preferred over the bounded view.
     pub root_conversation_candidates: Option<&'a RootConversationInput>,
-    /// Role-labeled sync answer candidates or already-bounded answers from other consumers.
+    /// Role-labeled original answer candidates or already-bounded answers from other consumers.
     pub trusted_user_answers: &'a [TrustedUserAnswer],
     /// Exact action JSON; sync composition bounds the reason and descriptions.
     pub planned_action: Option<&'a PlannedAction>,
@@ -227,7 +243,7 @@ pub trait SectionHistory: Send + Sync {
     }
 
     /// Renders an original complete assistant message without request-size selection.
-    /// Sync preparation applies admission after collection; hosts preserve their fragment boundary.
+    /// Request preparation applies admission after collection; hosts preserve their fragment boundary.
     fn render_original_assistant(
         &self,
         message: &codex_history::RetainedUserMessage,
@@ -285,6 +301,8 @@ pub trait SectionContributor: Send + Sync {
 pub enum SectionError {
     /// One native message or tool-call ID identifies different evidence.
     ConflictingNativeMessage,
+    /// Configured reservations must neither overcommit nor underfill the nominal budget.
+    SectionMinimumTotalMismatch { total: u128 },
     /// Evidence required by this contributor for the current input is missing.
     MissingRequiredEvidence { section: &'static str },
     /// A section cannot be delivered by the requested consumer.
@@ -296,6 +314,10 @@ pub enum SectionError {
 impl std::fmt::Display for SectionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::SectionMinimumTotalMismatch { total } => write!(
+                formatter,
+                "elastic section minimums must sum to DEFAULT_MAX_INPUT_TOKENS ({DEFAULT_MAX_INPUT_TOKENS}), got {total}"
+            ),
             Self::ConflictingNativeMessage => {
                 formatter.write_str("conflicting native messages or tool calls share an ID")
             }

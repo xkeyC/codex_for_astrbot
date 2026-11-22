@@ -245,7 +245,7 @@ impl ToolCatalogState {
     fn render_fragment(
         &self,
         previous: PreviousSectionState<'_, ToolCatalogSnapshot>,
-    ) -> Option<Box<dyn ContextualUserFragment>> {
+    ) -> Option<Box<dyn ContextualUserFragment + Send>> {
         let current = &self.catalog;
         let body = match previous {
             PreviousSectionState::Known(previous) => {

@@ -1,16 +1,7 @@
+pub use codex_protocol::models::DEFAULT_IMAGE_DETAIL;
+pub use codex_protocol::models::ImageDetail;
 use serde::Deserialize;
 use serde::Serialize;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ImageDetail {
-    Auto,
-    Low,
-    High,
-    Original,
-}
-
-pub const DEFAULT_IMAGE_DETAIL: ImageDetail = ImageDetail::High;
 
 /// Fork addition: a nested tool result object may carry the images it
 /// returned under this key (data URLs). The runtime shows them to the model

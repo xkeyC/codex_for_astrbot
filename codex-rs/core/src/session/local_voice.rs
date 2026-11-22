@@ -56,17 +56,23 @@ impl Session {
                 return;
             }
         };
-        let (fragments, world_state_item) = self
+        let (world_state_snapshot, mut fragments, world_state_item) = self
             .state
             .lock()
             .await
             .history
-            .update_world_state(&world_state);
+            .render_step_world_state(&world_state);
+        world_state.resolve_host_roster(&mut fragments).await;
         let items = crate::context_manager::updates::merge_world_state_updates(fragments);
         if !items.is_empty() {
             self.record_conversation_items(&turn, &step.settings.model_info, &items)
                 .await;
         }
+        self.state
+            .lock()
+            .await
+            .history
+            .set_world_state_baseline(world_state_snapshot);
         if let Some(world_state_item) = world_state_item {
             self.persist_rollout_items(&[RolloutItem::WorldState(world_state_item)])
                 .await;

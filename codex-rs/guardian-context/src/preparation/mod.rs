@@ -1,21 +1,26 @@
-//! Prepares synchronous request evidence before final aggregate admission.
+//! Prepares captured request evidence before final aggregate admission.
 //! Collection keeps captured sources intact. This owner applies text and image policy;
 //! delivery checks repeat against current reviewer history after compaction.
 
+mod async_entries;
+mod elastic;
 pub(crate) mod repl;
 pub(crate) mod root;
 mod transcript;
 pub use transcript::ContextProfile;
 pub(crate) use transcript::HeartbeatInstruction;
-pub(crate) use transcript::HeartbeatReferences;
 
 use crate::CollectedContext;
 use crate::ComposedContext;
 use crate::ContextPresentation;
 use crate::ContextSection;
+use crate::ElasticBudgetConfig;
 use crate::GuardianRootMessage;
+use crate::PlannedAction;
+use crate::PlannedActionKind;
 use crate::RetainedInstructionItem;
 use crate::SectionError;
+use crate::composition::FixedImageBudget;
 use crate::retained_instructions::RetainedInstructionKind;
 use crate::retained_instructions::USER_OMISSION;
 use codex_history::ResponseItemEnvelope;
@@ -31,47 +36,209 @@ pub(crate) const MAX_INSTRUCTION_TOKENS: usize = 900;
 const MAX_APPROVAL_REASON_TOKENS: usize = 512;
 const MAX_DESCRIPTION_TOKENS: usize = 400;
 
-/// Prepares the host-selected transcript suffix and all synchronous context sections.
+/// Evidence budgeting policy; persistent byte bounds remain independent of request allocation.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ContextBudgeting {
+    /// Preserve existing per-section request selection.
+    #[default]
+    Fixed,
+    /// Defer transcript selection and entry caps to configured allocation.
+    Elastic,
+}
+
+#[cfg(test)]
+#[path = "source_tests.rs"]
+mod source_tests;
+
+/// Prepares the host-selected transcript suffix and target-specific context sections.
 /// Cursor selection remains with the host; its offset addresses the collected entries.
+/// Owned contexts are consumed; borrowed contexts copy only non-transcript sections.
 /// No storage, reviewer history or cursor state is changed by this operation.
-pub fn prepare_sync_context(
-    mut context: CollectedContext,
+/// Elastic callers apply entry caps, then deduplicate delivery and enforce
+/// the global request budget through `PreparedElasticContext`.
+pub fn prepare_context(
+    context: Cow<'_, CollectedContext>,
     profile: &ContextProfile,
     entry_number_offset: usize,
     presentation: ContextPresentation<'_>,
+    budgeting: ContextBudgeting,
+    reviewer_history: &[ResponseItemEnvelope],
 ) -> Result<ComposedContext, SectionError> {
-    let placeholder = match &presentation {
-        ContextPresentation::SyncFull { .. } => "<no retained transcript entries>",
-        ContextPresentation::SyncDelta { .. } => "<no retained transcript delta entries>",
+    prepare_context_with_async_caps(
+        context,
+        profile,
+        entry_number_offset,
+        presentation,
+        budgeting,
+        reviewer_history,
+        /*async_elastic*/ None,
+    )
+}
+
+/// Prepares the classifier suffix, applying typed async entry caps before rendering.
+pub fn prepare_async_context(
+    context: &CollectedContext,
+    profile: &ContextProfile,
+    entry_number_offset: usize,
+    presentation: ContextPresentation<'_>,
+    reviewer_history: &[ResponseItemEnvelope],
+    elastic: Option<&ElasticBudgetConfig>,
+) -> Result<ComposedContext, SectionError> {
+    let budgeting = if elastic.is_some() {
+        ContextBudgeting::Elastic
+    } else {
+        ContextBudgeting::Fixed
+    };
+    prepare_context_with_async_caps(
+        Cow::Borrowed(context),
+        profile,
+        entry_number_offset,
+        presentation,
+        budgeting,
+        reviewer_history,
+        elastic,
+    )
+}
+
+fn prepare_context_with_async_caps(
+    context: Cow<'_, CollectedContext>,
+    profile: &ContextProfile,
+    entry_number_offset: usize,
+    presentation: ContextPresentation<'_>,
+    budgeting: ContextBudgeting,
+    reviewer_history: &[ResponseItemEnvelope],
+    async_elastic: Option<&ElasticBudgetConfig>,
+) -> Result<ComposedContext, SectionError> {
+    let (target, placeholder) = match &presentation {
+        ContextPresentation::SyncFull { .. } => (
+            crate::ContextTarget::Sync,
+            Some("<no retained transcript entries>"),
+        ),
+        ContextPresentation::SyncDelta { .. } => (
+            crate::ContextTarget::Sync,
+            Some("<no retained transcript delta entries>"),
+        ),
         ContextPresentation::Async | ContextPresentation::AsyncDelta => {
-            return Err(SectionError::UnsupportedDelivery {
-                section: "sync_preparation",
-            });
+            (crate::ContextTarget::Async, None)
         }
     };
-    transcript::prepare_sync_heartbeats(&mut context);
-    let entries = context
-        .transcript_entries()
-        .get(entry_number_offset..)
-        .ok_or(SectionError::UnsupportedDelivery {
+    if profile.target != target {
+        return Err(SectionError::UnsupportedDelivery {
+            section: "context_preparation",
+        });
+    }
+    let entries = context.transcript_entries();
+    if entry_number_offset > entries.len() {
+        return Err(SectionError::UnsupportedDelivery {
             section: "conversation_transcript",
-        })?;
-    let mut transcript = profile.prepare_transcript(entries, entry_number_offset);
-    if entries.is_empty() {
+        });
+    }
+    let enclosing_call = if target == crate::ContextTarget::Sync
+        && let Some(index) = context.sections.iter().position(|section| {
+            matches!(
+                section,
+                ContextSection::PlannedAction(PlannedAction {
+                    kind: PlannedActionKind::Nested { .. },
+                    ..
+                })
+            )
+        }) {
+        // The transcript delta may start after the still-running tool call.
+        let max_bytes = TruncationPolicy::Tokens(
+            profile
+                .transcript
+                .entry_limits
+                .tool_tokens
+                .min(crate::MAX_TEXT_PART_ESTIMATED_TOKENS),
+        )
+        .byte_budget();
+        entries.iter().find_map(|entry| {
+            let (
+                crate::ConversationTranscriptEntryKind::EnclosingToolCall(tool),
+                crate::TranscriptContent::Text(arguments),
+            ) = (&entry.kind, &entry.content)
+            else {
+                return None;
+            };
+            (arguments.len() <= max_bytes).then(|| {
+                (
+                    index,
+                    crate::EnclosingCall {
+                        tool: tool.clone(),
+                        arguments: arguments.clone(),
+                        max_bytes,
+                    },
+                )
+            })
+        })
+    } else {
+        None
+    };
+    let mut transcript = profile.prepare_transcript_for_budgeting(
+        transcript::prepare_heartbeats(entries, entry_number_offset),
+        entry_number_offset,
+        budgeting,
+    );
+    if entries.len() == entry_number_offset
+        && let Some(placeholder) = placeholder
+    {
         transcript
             .items
             .push(crate::Budgeted::required(crate::TranscriptContent::Text(
                 placeholder.to_owned(),
             )));
     }
-    prepare_sync_sections(&mut context);
+    let mut context = match context {
+        Cow::Owned(context) => context,
+        Cow::Borrowed(context) => CollectedContext {
+            sections: context
+                .sections
+                .iter()
+                .map(|section| match section {
+                    ContextSection::ConversationTranscript { .. } => {
+                        ContextSection::ConversationTranscript { items: Vec::new() }
+                    }
+                    _ => section.clone(),
+                })
+                .collect(),
+        },
+    };
+    if let Some((index, evidence)) = enclosing_call
+        && let ContextSection::PlannedAction(PlannedAction {
+            kind: PlannedActionKind::Nested { enclosing_call, .. },
+            ..
+        }) = &mut context.sections[index]
+    {
+        *enclosing_call = Some(evidence);
+    }
+    context.retain_new_reviews(reviewer_history);
+    if let Some(config) = async_elastic {
+        async_entries::apply(&mut context, config, &mut transcript.truncations);
+    }
+    prepare_sections(&mut context, budgeting)?;
     context.compose_prepared(presentation, transcript)
 }
 
-/// Applies synchronous section policy to the already bounded collection snapshot.
+/// Applies request section policy to the original collection snapshot.
 /// The host prepares its borrowed transcript selection before consuming the collection.
-pub(crate) fn prepare_sync_sections(context: &mut CollectedContext) {
-    {
+pub(crate) fn prepare_sections(
+    context: &mut CollectedContext,
+    budgeting: ContextBudgeting,
+) -> Result<(), SectionError> {
+    if budgeting == ContextBudgeting::Fixed {
+        for section in &context.sections {
+            if let ContextSection::PlannedAction(crate::PlannedAction {
+                kind: crate::PlannedActionKind::ToolCall(call),
+                ..
+            }) = section
+                && crate::native_tool_call::estimate_tokens(call)
+                    > crate::MAX_TEXT_PART_ESTIMATED_TOKENS
+            {
+                return Err(SectionError::EvidenceLimitExceeded {
+                    section: "native_tool_call",
+                });
+            }
+        }
         let max_bytes = TruncationPolicy::Tokens(MAX_INSTRUCTION_TOKENS).byte_budget();
         for section in &mut context.sections {
             if let ContextSection::RetainedUserInstructions { items } = section {
@@ -133,7 +300,7 @@ pub(crate) fn prepare_sync_sections(context: &mut CollectedContext) {
             }
         }
     }
-    {
+    if budgeting == ContextBudgeting::Fixed {
         for section in &mut context.sections {
             if let ContextSection::TrustedUserAnswers { items } = section {
                 let mut omitted = false;
@@ -158,7 +325,7 @@ pub(crate) fn prepare_sync_sections(context: &mut CollectedContext) {
             if let crate::ContextSection::RootConversation { content } = section
                 && let crate::RootConversationContent::Collected(candidates) = content
             {
-                let prepared = candidates.prepare();
+                let prepared = candidates.prepare(budgeting);
                 *content = crate::RootConversationContent::Prepared(
                     crate::authorization::root_conversation_items(prepared.messages),
                 );
@@ -177,6 +344,7 @@ pub(crate) fn prepare_sync_sections(context: &mut CollectedContext) {
                 responses,
                 omitted_responses: *omitted_responses,
                 mode: *mode,
+                budgeting,
             };
             let items = snapshot.render_inputs();
             evidence.content = crate::node_repl::NodeReplEvidenceContent::Prepared(items);
@@ -184,24 +352,25 @@ pub(crate) fn prepare_sync_sections(context: &mut CollectedContext) {
     }
     for section in &mut context.sections {
         if let ContextSection::PlannedAction(action) = section {
-            action.reason = action.reason.take().map(|reason| {
-                codex_utils_output_truncation::truncate_text(
-                    &reason,
-                    codex_utils_output_truncation::TruncationPolicy::Tokens(
-                        MAX_APPROVAL_REASON_TOKENS,
-                    ),
-                )
-            });
+            if budgeting == ContextBudgeting::Fixed {
+                action.reason = action.reason.take().map(|reason| {
+                    codex_utils_output_truncation::truncate_text(
+                        &reason,
+                        codex_utils_output_truncation::TruncationPolicy::Tokens(
+                            MAX_APPROVAL_REASON_TOKENS,
+                        ),
+                    )
+                });
+            }
             if let Some(descriptions) = &mut action.tool_descriptions {
-                // Escape before truncation, and budget each source independently.
-                descriptions.tool = crate::truncate_text(
-                    &descriptions.tool.replace("</", "<\\/"),
-                    MAX_DESCRIPTION_TOKENS,
-                );
-                descriptions.connector = crate::truncate_text(
-                    &descriptions.connector.replace("</", "<\\/"),
-                    MAX_DESCRIPTION_TOKENS,
-                );
+                descriptions.tool = descriptions.tool.replace("</", "<\\/");
+                descriptions.connector = descriptions.connector.replace("</", "<\\/");
+                if budgeting == ContextBudgeting::Fixed {
+                    descriptions.tool =
+                        crate::truncate_text(&descriptions.tool, MAX_DESCRIPTION_TOKENS);
+                    descriptions.connector =
+                        crate::truncate_text(&descriptions.connector, MAX_DESCRIPTION_TOKENS);
+                }
                 let tool = &descriptions.tool;
                 let connector = &descriptions.connector;
                 descriptions.text = format!(
@@ -210,6 +379,7 @@ pub(crate) fn prepare_sync_sections(context: &mut CollectedContext) {
             }
         }
     }
+    Ok(())
 }
 
 /// The original role-labeled message reserves the same 32 bytes before order framing.
@@ -235,12 +405,18 @@ pub async fn prepare_sync_images<'a, HistoryCost>(
         &'image ImageReference,
         &mut Option<ImageDetail>,
     ) -> Option<Cow<'image, ImageReference>>,
-    estimate_tokens: impl FnMut(&ResponseItem) -> i64,
+    estimate_tokens: fn(&ResponseItem) -> i64,
     measure_history_tokens: impl FnOnce() -> HistoryCost + Send,
+    budgeting: ContextBudgeting,
 ) where
     HistoryCost: Future<Output = i64> + Send,
 {
-    let admit_images = if let Some(context_window) = context_window {
+    if budgeting == ContextBudgeting::Elastic {
+        context.retain_new_images(history, prepare_image);
+        return;
+    }
+    let mut image_budget = None;
+    if let Some(context_window) = context_window {
         context.retain_new_images(history, prepare_image);
         let prompt_tokens = context
             .clone()
@@ -249,13 +425,20 @@ pub async fn prepare_sync_images<'a, HistoryCost>(
             .map(estimate_tokens)
             .fold(0i64, i64::saturating_add);
         let history_tokens = measure_history_tokens().await;
-        prompt_tokens <= GUARDIAN_MAX_IMAGE_ITEM_TOKENS
-            && prompt_tokens.saturating_add(history_tokens) <= context_window
-    } else {
-        false
-    };
-    if !admit_images {
+        let max_prompt_tokens =
+            GUARDIAN_MAX_IMAGE_ITEM_TOKENS.min(context_window.saturating_sub(history_tokens));
+        if prompt_tokens <= max_prompt_tokens {
+            image_budget = Some(FixedImageBudget {
+                max_prompt_tokens,
+                estimate_tokens,
+            });
+        }
+    }
+    if image_budget.is_none() {
         context.retain_images(|_, _| false);
+    }
+    if let Some(enclosing_call) = &mut context.enclosing_call {
+        enclosing_call.fixed_image_budget = image_budget;
     }
 }
 
@@ -281,6 +464,8 @@ pub trait SyncImagePreparer: Sync {
 /// Model and reviewer facts resolved before preparing any synchronous request.
 /// Image capability is independent of the model context window used for all evidence.
 pub struct SyncPreparation<'a> {
+    /// Fixed remains the production default until elastic rollout is enabled.
+    pub budgeting: ContextBudgeting,
     pub reviewer_history: &'a [ResponseItemEnvelope],
     pub context_window: Option<i64>,
     pub history_tokens: i64,
@@ -291,7 +476,8 @@ pub struct SyncPreparation<'a> {
 
 /// Prepares every synchronous request with host facts available before selection.
 /// Existing entrypoints and prepare-then-compose ordering stay unchanged.
-/// Image admission uses the exact framed cost, as in the existing image policy.
+/// Fixed image admission uses the existing framed-cost checks. Elastic images stay
+/// whole for configured group allocation and final request admission.
 pub async fn prepare_sync_context_with_facts(
     context: CollectedContext,
     profile: &ContextProfile,
@@ -299,8 +485,22 @@ pub async fn prepare_sync_context_with_facts(
     presentation: ContextPresentation<'_>,
     preparation: SyncPreparation<'_>,
 ) -> Result<ComposedContext, SectionError> {
-    let mut context = prepare_sync_context(context, profile, entry_number_offset, presentation)?;
-    if context
+    if profile.target != crate::ContextTarget::Sync {
+        return Err(SectionError::UnsupportedDelivery {
+            section: "sync_preparation",
+        });
+    }
+    let mut context = prepare_context(
+        Cow::Owned(context),
+        profile,
+        entry_number_offset,
+        presentation,
+        preparation.budgeting,
+        preparation.reviewer_history,
+    )?;
+    if preparation.budgeting == ContextBudgeting::Elastic && !preparation.supports_images {
+        context.retain_images(|_, _| false);
+    } else if context
         .section_costs()
         .any(|(_, cost)| cost.image_count > 0)
     {
@@ -316,6 +516,7 @@ pub async fn prepare_sync_context_with_facts(
             |image, detail| preparation.image_preparer.prepare(image, detail),
             preparation.estimate_tokens,
             || std::future::ready(preparation.history_tokens),
+            preparation.budgeting,
         )
         .await;
     }

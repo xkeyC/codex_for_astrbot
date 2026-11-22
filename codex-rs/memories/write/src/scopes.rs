@@ -26,7 +26,6 @@ use codex_core::CodexThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_features::Feature;
-use codex_login::AuthManager;
 use codex_protocol::MemoryVersion;
 use codex_protocol::ThreadId;
 use codex_protocol::models::PermissionProfile;
@@ -410,7 +409,6 @@ pub(crate) async fn run_scope_phase2(
 #[allow(clippy::too_many_arguments)]
 pub async fn run_memories_consolidation_now(
     thread_manager: Arc<ThreadManager>,
-    auth_manager: Arc<AuthManager>,
     thread_id: ThreadId,
     thread: Arc<CodexThread>,
     config: Arc<Config>,
@@ -421,6 +419,12 @@ pub async fn run_memories_consolidation_now(
     if config.ephemeral || !config.features.enabled(Feature::MemoryTool) {
         anyhow::bail!("memories are disabled for this thread");
     }
+    let Some(auth) = thread
+        .thread_extension_data()
+        .get::<codex_model_provider::ProviderAuthContext>()
+    else {
+        anyhow::bail!("the thread has no provider auth context");
+    };
     let versions = if config.memories.dual_write {
         vec![MemoryVersion::V1, MemoryVersion::V2]
     } else {
@@ -435,7 +439,7 @@ pub async fn run_memories_consolidation_now(
         let config = Arc::new(pipeline_config);
         let context = Arc::new(MemoryStartupContext::new(
             Arc::clone(&thread_manager),
-            Arc::clone(&auth_manager),
+            Arc::clone(&auth),
             thread_id,
             Arc::clone(&thread),
             config.as_ref(),
@@ -453,7 +457,7 @@ pub async fn run_memories_consolidation_now(
         }
         prepare_scope(context.as_ref(), &config).await;
         phase1::prune(context.as_ref(), &config).await;
-        if !guard::rate_limits_ok(&auth_manager, &config).await {
+        if !guard::rate_limits_ok(&auth, &config).await {
             context.counter(
                 MEMORY_STARTUP,
                 /*inc*/ 1,

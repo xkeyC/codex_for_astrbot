@@ -6,7 +6,7 @@ use pretty_assertions::assert_eq;
 #[test]
 fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     let message = crate::PreviousReviews::try_from_fragments(vec![crate::PreviousReview {
-        id: codex_protocol::ResponseItemId::new("review"),
+        id: codex_protocol_test_support::uuid_v7_item_id_generator_for_test()("review"),
         fragment: "host-attested review".into(),
     }])
     .unwrap()
@@ -32,7 +32,8 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     assert_eq!(
         ComposedContext {
             sections: sections(),
-            truncations: Vec::new()
+            truncations: Vec::new(),
+            enclosing_call: None,
         }
         .into_messages(),
         vec![
@@ -53,7 +54,8 @@ fn delivery_preserves_arbitrary_message_boundaries_and_rejects_them_for_sync() {
     assert_eq!(
         ComposedContext {
             sections: sections(),
-            truncations: Vec::new()
+            truncations: Vec::new(),
+            enclosing_call: None,
         }
         .into_user_inputs(),
         Err(SectionError::UnsupportedDelivery {
@@ -80,6 +82,7 @@ fn long_text_and_file_image_delivery_is_lossless_bounded_and_fully_budgeted() {
             ]),
         }],
         truncations: Vec::new(),
+        enclosing_call: None,
     };
     let estimated = context.estimated_tokens();
     let messages = context.clone().into_messages();
@@ -103,9 +106,8 @@ fn long_text_and_file_image_delivery_is_lossless_bounded_and_fully_budgeted() {
         .collect::<Vec<_>>();
     assert_eq!(parts.concat(), text);
     assert!(
-        parts
-            .iter()
-            .all(|part| part.len() <= TruncationPolicy::Tokens(9_000).byte_budget())
+        parts.iter().all(|part| part.len()
+            <= TruncationPolicy::Tokens(MAX_TEXT_PART_ESTIMATED_TOKENS).byte_budget())
     );
     assert!(estimated >= crate::estimate_input_tokens(&messages[0]));
     let mut expected_inputs = parts
@@ -142,7 +144,7 @@ fn sender_restrictions_survive_budget_trimming_for_both_reviewers() {
                 ContextSection::ConversationTranscript { items: Vec::new() },
             ],
         }
-        .compose(
+        .compose_prepared(
             presentation,
             PreparedTranscript {
                 items: vec![Budgeted::optional(

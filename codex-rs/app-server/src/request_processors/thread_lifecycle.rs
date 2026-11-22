@@ -1,6 +1,11 @@
+use super::thread_processor::THREAD_ITEMS_MAX_LIMIT;
+use super::thread_processor::thread_turns_page_size;
 use super::*;
+use crate::bespoke_event_handling::complete_command_execution_item;
 use crate::extensions::send_thread_warning;
 use crate::thread_state::ListenerStateCandidate;
+use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadQueueChangedNotification;
 use codex_core::ThreadEvictionOutcome;
 use codex_core::ThreadRegistration;
@@ -8,6 +13,7 @@ use codex_extension_api::ThreadIdleCause;
 use codex_protocol::config_types::MultiAgentMode;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::SessionSource;
+use std::borrow::Cow;
 
 #[cfg(test)]
 #[path = "thread_listener_shutdown_tests.rs"]
@@ -550,7 +556,7 @@ async fn start_listener(
                         let mut thread_state = thread_state.lock().await;
                         thread_state.track_current_turn_event(&event.id, &event.msg);
                         let terminal = matches!(event.msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_))
-                            .then(|| thread_state.turn_summary.clone());
+                            .then(|| thread_state.turn_summaries.get(&event.id).cloned().unwrap_or_default());
                         (thread_state.experimental_raw_events, terminal)
                     };
                     if matches!(
@@ -577,7 +583,7 @@ async fn start_listener(
                         ).await
                     {
                         super::thread_read_state::notify(
-                            &db, &thread_state_manager,
+                            &db,
                             &outgoing_for_task, conversation_id,
                         ).await;
                     }
@@ -750,6 +756,25 @@ async fn start_listener(
         drop(turn_cost_worker);
 
         if shutdown_complete {
+            // Close registration and take the queue under the same lock used by turn/interrupt.
+            // Detached finalizers can publish their terminal events after this listener retires.
+            let pending_interrupts = {
+                let mut state = thread_state.lock().await;
+                if state.listener_generation == listener_generation {
+                    state.listener_shutdown = true;
+                    std::mem::take(&mut state.pending_interrupts)
+                } else {
+                    Vec::new()
+                }
+            };
+            for (_, request_id) in pending_interrupts {
+                outgoing_for_task
+                    .send_error(
+                        request_id,
+                        internal_error("thread shut down before turn interruption completed"),
+                    )
+                    .await;
+            }
             drained_tx.send_replace(true);
             let relay_command = |command| {
                 handle_thread_listener_command(
@@ -995,6 +1020,31 @@ pub(super) async fn handle_thread_listener_command(
         ThreadListenerCommand::EmitThreadGoalSnapshot { state_db } => {
             send_thread_goal_snapshot_notification(outgoing, conversation_id, &state_db).await;
         }
+        ThreadListenerCommand::CompleteLateCommandApproval {
+            turn_id,
+            item_id,
+            completion_item,
+        } => {
+            let subscribers = thread_state_manager
+                .subscribed_connection_ids(conversation_id)
+                .await;
+            let outgoing = ThreadScopedOutgoingMessageSender::new(
+                Arc::clone(outgoing),
+                subscribers,
+                conversation_id,
+            );
+            complete_command_execution_item(
+                &conversation_id,
+                turn_id,
+                item_id,
+                *completion_item,
+                CommandExecutionStatus::Declined,
+                /*completed_at_ms*/ None,
+                &outgoing,
+                thread_state,
+            )
+            .await;
+        }
         ThreadListenerCommand::ResolveServerRequest {
             request_id,
             completion_tx,
@@ -1027,20 +1077,49 @@ pub(super) async fn handle_pending_thread_resume_request(
     pending_thread_unloads: &PendingThreadUnloads,
     mut pending: crate::thread_state::PendingThreadResumeRequest,
 ) {
-    let (active_turn_metadata, active_turn) = {
+    let (active_turn_metadata, mut active_turn, active_page_params) = {
         let state = thread_state.lock().await;
+        let active_page_params = pending.initial_turns_page.as_ref().filter(|params| {
+            pending
+                .paginated_initial_turns_page
+                .as_ref()
+                .is_none_or(|page| {
+                    params.sort_direction != Some(SortDirection::Asc)
+                        || (page.next_cursor.is_none()
+                            && page.data.len() < thread_turns_page_size(params.limit))
+                        || state.active_turn_id().is_some_and(|active_turn_id| {
+                            page.data.iter().any(|turn| turn.id == active_turn_id)
+                        })
+                })
+        });
         let items_view = if pending.include_turns {
             Some(TurnItemsView::Full)
         } else {
-            pending
-                .initial_turns_page
-                .as_ref()
-                .map(|page| page.items_view.unwrap_or(TurnItemsView::Summary))
+            active_page_params.map(|params| params.items_view.unwrap_or(TurnItemsView::Summary))
         };
         let active_turn =
             items_view.and_then(|view| state.active_turn_snapshot_with_items_view(view));
-        (state.active_turn_metadata_snapshot(), active_turn)
+        (
+            state.active_turn_metadata_snapshot(),
+            active_turn,
+            active_page_params,
+        )
     };
+    if let Some(store) = pending.resume_cursor_store.as_deref()
+        && let Some(turn) = &mut active_turn
+        && turn.items_view == TurnItemsView::Full
+    {
+        let stored = pending.paginated_turns.iter_mut().flatten().chain(
+            pending
+                .paginated_initial_turns_page
+                .iter_mut()
+                .flat_map(|page| &mut page.data),
+        );
+        if let Err(error) = restore_evicted_agent_text(store, conversation_id, turn, stored).await {
+            outgoing.send_error(pending.request_id, error).await;
+            return;
+        }
+    }
     tracing::debug!(
         thread_id = %conversation_id,
         request_id = ?pending.request_id,
@@ -1082,16 +1161,9 @@ pub(super) async fn handle_pending_thread_resume_request(
         thread_status.clone(),
         has_live_in_progress_turn,
     );
-    let active_turn = if pending.initial_turns_page.is_some() {
-        active_turn.or_else(|| active_turn_metadata.map(Turn::from))
-    } else {
-        None
-    };
     let mut initial_turns_page = if let Some(mut page) = pending.paginated_initial_turns_page.take()
     {
-        if let (Some(active_turn), Some(params)) =
-            (active_turn, pending.initial_turns_page.as_ref())
-        {
+        if let (Some(active_turn), Some(params)) = (active_turn, active_page_params) {
             let sort_direction = params.sort_direction.unwrap_or(SortDirection::Desc);
             let active_turn_is_in_page = page.data.iter().any(|turn| turn.id == active_turn.id);
             if matches!(sort_direction, SortDirection::Desc)
@@ -1317,7 +1389,6 @@ pub(super) async fn resolve_pending_server_request(
     outgoing: &Arc<OutgoingMessageSender>,
     request_id: RequestId,
 ) {
-    let thread_id = conversation_id.to_string();
     let subscribed_connection_ids = thread_state_manager
         .subscribed_connection_ids(conversation_id)
         .await;
@@ -1326,14 +1397,71 @@ pub(super) async fn resolve_pending_server_request(
         subscribed_connection_ids,
         conversation_id,
     );
-    outgoing
-        .send_server_notification(ServerNotification::ServerRequestResolved(
-            ServerRequestResolvedNotification {
-                thread_id,
-                request_id,
-            },
-        ))
-        .await;
+    outgoing.resolve_server_request(request_id).await;
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
+struct HistoryItemId<'a>(Cow<'a, str>);
+
+async fn restore_evicted_agent_text<'a>(
+    store: &dyn ThreadStore,
+    thread_id: ThreadId,
+    turn: &mut Turn,
+    stored: impl Iterator<Item = &'a mut Turn>,
+) -> Result<(), JSONRPCErrorError> {
+    // Live history skips empty assistant completions, so every empty slot was evicted.
+    let mut missing: HashMap<_, _> = turn
+        .items
+        .iter_mut()
+        .filter_map(|item| match &mut item.payload {
+            ThreadItemPayload::AgentMessage { id, text, .. } if text.is_empty() => {
+                Some((HistoryItemId(Cow::Borrowed(id)), text))
+            }
+            _ => None,
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    for stored in stored.filter(|stored| stored.id == turn.id) {
+        fill_agent_text(&mut missing, std::mem::take(&mut stored.items));
+        if missing.is_empty() {
+            return Ok(());
+        }
+    }
+    // The prepared page can predate some of the listener's items. Fetch only those gaps.
+    let ids: Vec<_> = missing.keys().cloned().collect();
+    for chunk in ids.chunks(THREAD_ITEMS_MAX_LIMIT) {
+        let params = ThreadItemsReadParams {
+            thread_id: thread_id.to_string(),
+            turn_id: turn.id.clone(),
+            item_ids: chunk.iter().map(|id| id.0.to_string()).collect(),
+        };
+        let saved = ThreadRequestProcessor::read_thread_items(store, params).await?;
+        fill_agent_text(&mut missing, saved.data.into_iter().map(|entry| entry.item));
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(internal_error(format!(
+            "saved history is missing completed assistant items for turn {}",
+            turn.id
+        )))
+    }
+}
+
+fn fill_agent_text(
+    missing: &mut HashMap<HistoryItemId<'_>, &mut String>,
+    items: impl IntoIterator<Item = ThreadItem>,
+) {
+    for item in items {
+        if let ThreadItemPayload::AgentMessage { id, text, .. } = item.payload
+            && !text.is_empty()
+            && let Some(slot) = missing.remove(&HistoryItemId(Cow::Owned(id)))
+        {
+            *slot = text;
+        }
+    }
 }
 
 pub(super) fn merge_turn_history_with_active_turn(turns: &mut Vec<Turn>, active_turn: Turn) {
@@ -1351,17 +1479,9 @@ fn merge_active_turn_into_page(
         params.items_view.unwrap_or(TurnItemsView::Summary),
     );
     let sort_direction = params.sort_direction.unwrap_or(SortDirection::Desc);
-    let page_size = super::thread_processor::thread_turns_page_size(params.limit);
-    let active_turn_is_in_page = page.data.iter().any(|turn| turn.id == active_turn.id);
     page.data.retain(|turn| turn.id != active_turn.id);
     match sort_direction {
-        SortDirection::Asc
-            if active_turn_is_in_page
-                || (page.data.len() < page_size && page.next_cursor.is_none()) =>
-        {
-            page.data.push(active_turn);
-        }
-        SortDirection::Asc => {}
+        SortDirection::Asc => page.data.push(active_turn),
         SortDirection::Desc => page.data.insert(0, active_turn),
     }
 }

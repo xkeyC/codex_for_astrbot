@@ -26,6 +26,7 @@ use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::memory_citation::MemoryCitation as CoreMemoryCitation;
 use codex_protocol::memory_citation::MemoryCitationEntry as CoreMemoryCitationEntry;
 use codex_protocol::models::AdditionalPermissionProfile as CoreAdditionalPermissionProfile;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
 use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
 use codex_protocol::models::ImageDetail;
@@ -303,6 +304,7 @@ fn thread_resume_response_round_trips_initial_turns_page() {
             extra: None,
             session_id: "thr_123".to_string(),
             forked_from_id: None,
+            attached_to_thread_id: None,
             parent_thread_id: None,
             preview: String::new(),
             ephemeral: false,
@@ -420,6 +422,7 @@ fn thread_items_list_round_trips() {
         cursor: Some(ThreadItemsListCursor::Opaque("cursor_1".to_string())),
         limit: Some(50),
         sort_direction: Some(SortDirection::Asc),
+        defer_output: None,
     };
 
     assert_eq!(
@@ -461,6 +464,7 @@ fn thread_items_list_round_trips() {
         let response = ThreadItemsListResponse {
             data: vec![ThreadItemEntry {
                 turn_id: "turn_456".to_string(),
+                output_deferred: false,
                 item: ThreadItem {
                     payload: ThreadItemPayload::ContextCompaction {
                         id: "item_1".to_string(),
@@ -500,6 +504,7 @@ fn thread_items_list_round_trips() {
         cursor: None,
         limit: None,
         sort_direction: None,
+        defer_output: None,
     };
 
     assert_eq!(
@@ -2129,6 +2134,7 @@ fn config_granular_approval_policy_is_marked_experimental() {
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
         web_search: None,
+        client_search_provider: None,
         tools: None,
         instructions: None,
         developer_instructions: None,
@@ -2164,6 +2170,7 @@ fn config_approvals_reviewer_is_marked_experimental() {
         forced_chatgpt_workspace_id: None,
         forced_login_method: None,
         web_search: None,
+        client_search_provider: None,
         tools: None,
         instructions: None,
         developer_instructions: None,
@@ -2687,6 +2694,7 @@ fn mcp_server_elicitation_response_serializes_nullable_content() {
 fn mcp_server_status_serializes_absent_server_info_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
+            environment_id: None,
             tool_list_meta: None,
             server_capabilities: None,
             tools_error: None,
@@ -2708,6 +2716,7 @@ fn mcp_server_status_serializes_absent_server_info_as_null() {
         json!({
             "data": [{
                 "name": "not-ready",
+                "environmentId": null,
                 "runtimeStatus": null,
                 "pluginId": null,
                 "httpOrigin": null,
@@ -2740,6 +2749,7 @@ fn mcp_server_status_accepts_older_inventory_without_runtime_status() {
     assert_eq!(
         status,
         McpServerStatus {
+            environment_id: None,
             tool_list_meta: None,
             server_capabilities: None,
             tools_error: None,
@@ -2768,6 +2778,7 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
     let expected = McpServerStatusUpdatedNotification {
         thread_id: None,
         name: "optional_broken".to_string(),
+        environment_id: None,
         status: McpServerStartupState::Failed,
         error: Some("handshake failed".to_string()),
         failure_reason: None,
@@ -2778,6 +2789,7 @@ fn mcp_server_status_updated_accepts_missing_thread_id() {
         json!({
             "threadId": null,
             "name": "optional_broken",
+            "environmentId": null,
             "status": "failed",
             "error": "handshake failed",
             "failureReason": null,
@@ -2791,6 +2803,7 @@ fn mcp_server_status_updated_serializes_failure_reason() {
         ServerNotification::McpServerStatusUpdated(McpServerStatusUpdatedNotification {
             thread_id: Some("thread-1".to_string()),
             name: "expired-oauth".to_string(),
+            environment_id: Some("remote".to_string()),
             status: McpServerStartupState::Failed,
             error: Some("OAuth credentials expired".to_string()),
             failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired),
@@ -2803,6 +2816,7 @@ fn mcp_server_status_updated_serializes_failure_reason() {
             "params": {
                 "threadId": "thread-1",
                 "name": "expired-oauth",
+                "environmentId": "remote",
                 "status": "failed",
                 "error": "OAuth credentials expired",
                 "failureReason": "reauthenticationRequired",
@@ -2815,6 +2829,7 @@ fn mcp_server_status_updated_serializes_failure_reason() {
 fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
     let response = ListMcpServerStatusResponse {
         data: vec![McpServerStatus {
+            environment_id: None,
             tool_list_meta: None,
             server_capabilities: None,
             tools_error: None,
@@ -2843,6 +2858,7 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
         json!({
             "data": [{
                 "name": "initialized",
+                "environmentId": null,
                 "runtimeStatus": null,
                 "pluginId": "lookup@test",
                 "httpOrigin": null,
@@ -2869,8 +2885,11 @@ fn mcp_server_status_serializes_absent_server_info_metadata_as_null() {
 
 #[test]
 fn sandbox_policy_round_trips_workspace_write_access() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let root = AbsolutePathBuf::from_absolute_path(directory.path()).expect("absolute root");
+    std::fs::create_dir(root.join(".git")).expect("git metadata");
     let v2_policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
+        writable_roots: vec![root.clone(), root.clone()],
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -2880,11 +2899,37 @@ fn sandbox_policy_round_trips_workspace_write_access() {
     assert_eq!(
         core_policy,
         codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
+            writable_roots: vec![root.clone(), root],
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         }
+    );
+
+    let profile = codex_protocol::models::PermissionProfile::from_legacy_sandbox_policy_template(
+        &v2_policy.to_core(),
+    );
+    assert!(
+        !profile
+            .file_system_sandbox_policy()
+            .entries
+            .iter()
+            .any(|entry| {
+                entry.access == codex_protocol::permissions::FileSystemAccessMode::Read
+                    && matches!(
+                        entry.path,
+                        codex_protocol::permissions::FileSystemPath::Path { .. }
+                    )
+            })
+    );
+
+    assert_eq!(
+        SandboxPolicy::from(
+            profile
+                .to_legacy_sandbox_policy_template()
+                .expect("portable legacy template")
+        ),
+        v2_policy,
     );
 
     let back_to_v2 = SandboxPolicy::from(core_policy);
@@ -3143,6 +3188,54 @@ fn network_requirements_serializes_canonical_and_legacy_fields() {
 }
 
 #[test]
+fn audio_references_round_trip_through_core_and_json() {
+    for wire in [
+        json!({"type": "audio", "url": "data:audio/wav;base64,AAA"}),
+        json!({"type": "audio", "fileId": "file_audio"}),
+    ] {
+        let input: UserInput = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(UserInput::from(input.into_core())).unwrap(),
+            wire
+        );
+    }
+    let old_input: UserInput = serde_json::from_value(
+        json!({"type": "audio", "fileId": "file_audio", "durationMs": 1_000}),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(UserInput::from(old_input.into_core())).unwrap(),
+        json!({"type": "audio", "fileId": "file_audio"})
+    );
+}
+
+#[test]
+fn answer_moderation_preserves_the_display_instruction() {
+    for display in [
+        JsonValue::Null,
+        json!({"version":1, "mode":"show", "trustedContacts":"check",
+            "annotation":{"kind":"wellbeingHelpline", "subject":"prompt"}}),
+        json!({"version":1, "mode":"hide", "replacement":{"kind":"wellbeingPromptHelpline"}}),
+        json!({"version":1, "mode":"block", "reason":{"kind":"protection","protectionType":"omnimod"}}),
+        json!({"version":1, "mode":"block", "reason":{"kind":"cyber","trustedAccess":false}}),
+    ] {
+        let stored = json!({"moderated": !display.is_null(), "display": display});
+        let mut with_extra_fields = stored.clone();
+        if let Some(object) = with_extra_fields["display"].as_object_mut() {
+            object.insert("additionalV1Field".into(), json!(true));
+        }
+        let core = serde_json::from_value::<codex_protocol::items::AgentMessageModeration>(
+            with_extra_fields,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(AgentMessageModeration::from(core)).unwrap(),
+            stored
+        );
+    }
+}
+
+#[test]
 fn core_turn_item_into_thread_item_converts_supported_variants() {
     let user_item = TurnItem::UserMessage(UserMessageItem {
         id: "user-1".to_string(),
@@ -3163,7 +3256,14 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                 detail: Some(ImageDetail::Original),
             },
             CoreUserInput::Audio {
-                audio_url: "data:audio/wav;base64,AAA".to_string(),
+                audio: AudioReference::Inline {
+                    audio_url: "data:audio/wav;base64,AAA".to_string(),
+                },
+            },
+            CoreUserInput::Audio {
+                audio: AudioReference::File {
+                    file_id: "file_audio".into(),
+                },
             },
             CoreUserInput::LocalAudio {
                 path: PathBuf::from("local/audio.mp3"),
@@ -3200,7 +3300,14 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
                     detail: Some(ImageDetail::Original),
                 },
                 UserInput::Audio {
-                    url: "data:audio/wav;base64,AAA".to_string(),
+                    audio: crate::AudioReference::Inline {
+                        url: "data:audio/wav;base64,AAA".to_string()
+                    }
+                },
+                UserInput::Audio {
+                    audio: crate::AudioReference::File {
+                        file_id: "file_audio".into(),
+                    }
                 },
                 UserInput::LocalAudio {
                     path: PathBuf::from("local/audio.mp3"),
@@ -3218,6 +3325,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let agent_item = TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: "agent-1".to_string(),
         content: vec![
             AgentMessageContent::Text {
@@ -3233,9 +3341,17 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         questions: None,
     });
 
+    let agent_payload = ThreadItemPayload::from(agent_item);
     assert_eq!(
-        ThreadItemPayload::from(agent_item),
+        serde_json::to_value(&agent_payload)
+            .unwrap()
+            .get("moderation"),
+        Some(&serde_json::Value::Null),
+    );
+    assert_eq!(
+        agent_payload,
         ThreadItemPayload::AgentMessage {
+            moderation: None,
             id: "agent-1".to_string(),
             text: "Hello world".to_string(),
             phase: None,
@@ -3246,6 +3362,10 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let agent_item_with_phase = TurnItem::AgentMessage(AgentMessageItem {
+        moderation: Some(codex_protocol::items::AgentMessageModeration {
+            moderated: true,
+            display: None,
+        }),
         id: "agent-2".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "final".to_string(),
@@ -3267,6 +3387,10 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     assert_eq!(
         ThreadItemPayload::from(agent_item_with_phase),
         ThreadItemPayload::AgentMessage {
+            moderation: Some(AgentMessageModeration {
+                moderated: true,
+                display: None
+            }),
             id: "agent-2".to_string(),
             text: "final".to_string(),
             phase: Some(MessagePhase::FinalAnswer),
@@ -3285,6 +3409,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     );
 
     let async_item = ThreadItemPayload::from(TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: "async-1".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "Which?".to_string(),
@@ -3301,6 +3426,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         serde_json::to_value(&async_item).unwrap(),
         json!({
             "type": "agentMessage", "id": "async-1", "text": "Which?", "phase": "final_answer",
+            "moderation": null,
             "memoryCitation": null, "delivery": "async", "questions": [{"title": "Which?", "options": null}]
         })
     );
@@ -3597,6 +3723,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     let mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
         id: "mcp-1".to_string(),
         server: "server".to_string(),
+        environment_id: Some("remote".to_string()),
         tool: "tool".to_string(),
         arguments: json!({"arg": "value"}),
         connector_id: Some("calendar".to_string()),
@@ -3618,6 +3745,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItemPayload::McpToolCall {
             id: "mcp-1".to_string(),
             server: "server".to_string(),
+            environment_id: Some("remote".to_string()),
             tool: "tool".to_string(),
             status: McpToolCallStatus::InProgress,
             arguments: json!({"arg": "value"}),
@@ -3641,6 +3769,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
     let completed_mcp_tool_call_item = TurnItem::McpToolCall(McpToolCallItem {
         id: "mcp-2".to_string(),
         server: "server".to_string(),
+        environment_id: None,
         tool: "tool".to_string(),
         arguments: JsonValue::Null,
         connector_id: None,
@@ -3667,6 +3796,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         ThreadItemPayload::McpToolCall {
             id: "mcp-2".to_string(),
             server: "server".to_string(),
+            environment_id: None,
             tool: "tool".to_string(),
             status: McpToolCallStatus::Completed,
             arguments: JsonValue::Null,
@@ -3687,10 +3817,24 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
 }
 
 #[test]
+fn unsupported_answer_display_leaves_the_answer_restricted() {
+    for display in [
+        json!({"version": 2, "mode": "show", "trustedContacts": "skip"}),
+        json!({"version": 1, "mode": "unknown"}),
+    ] {
+        let parsed: AgentMessageModeration =
+            serde_json::from_value(json!({"moderated": false, "display": display})).unwrap();
+        assert!(parsed.moderated);
+        assert!(parsed.display.is_none());
+    }
+}
+
+#[test]
 fn mcp_tool_call_app_context_serializes_connector_id() {
     let item = ThreadItemPayload::McpToolCall {
         id: "mcp-1".to_string(),
         server: "codex_apps".to_string(),
+        environment_id: None,
         tool: "calendar.create_event".to_string(),
         status: McpToolCallStatus::InProgress,
         arguments: json!({}),
@@ -3716,6 +3860,7 @@ fn mcp_tool_call_app_context_serializes_connector_id() {
             "type": "mcpToolCall",
             "id": "mcp-1",
             "server": "codex_apps",
+            "environmentId": null,
             "tool": "calendar.create_event",
             "status": "inProgress",
             "arguments": {},
@@ -3854,11 +3999,15 @@ fn user_input_into_core_preserves_media_fields() {
 
     assert_eq!(
         UserInput::Audio {
-            url: "data:audio/wav;base64,AAA".to_string(),
+            audio: crate::AudioReference::Inline {
+                url: "data:audio/wav;base64,AAA".to_string()
+            }
         }
         .into_core(),
         CoreUserInput::Audio {
-            audio_url: "data:audio/wav;base64,AAA".to_string(),
+            audio: AudioReference::Inline {
+                audio_url: "data:audio/wav;base64,AAA".to_string()
+            }
         }
     );
 
@@ -4813,7 +4962,11 @@ fn core_error_info_converts_to_camel_case() {
             json!("policyCapacityUnavailable"),
         ),
         (CoreCodexErrorInfo::CyberPolicy, json!("cyberPolicy")),
-        (CoreCodexErrorInfo::BioPolicy, json!("other")),
+        (
+            CoreCodexErrorInfo::InferenceHookDenied,
+            json!("inferenceHookDenied"),
+        ),
+        (CoreCodexErrorInfo::BioPolicy, json!("bioPolicy")),
         (CoreCodexErrorInfo::InvalidPrompt, json!("other")),
         (
             CoreCodexErrorInfo::FlexUnavailable,
@@ -4824,9 +4977,11 @@ fn core_error_info_converts_to_camel_case() {
             json!("rateLimitExceeded"),
         ),
     ] {
+        let converted = CodexErrorInfo::from(core);
+        assert_eq!(serde_json::to_value(&converted).unwrap(), expected);
         assert_eq!(
-            serde_json::to_value(CodexErrorInfo::from(core)).unwrap(),
-            expected
+            serde_json::from_value::<CodexErrorInfo>(expected).unwrap(),
+            converted
         );
     }
 }
@@ -5504,4 +5659,14 @@ fn feedback_paths_preserve_native_wire_spelling_before_host_validation() {
             path
         );
     }
+}
+
+#[test]
+fn an_undated_live_voice_item_preserves_its_wire_shape() {
+    let wire = serde_json::json!({
+        "id": "speech", "realtimeSessionId": "voice", "type": "transcriptSegment",
+        "role": "assistant", "text": "hello",
+    });
+    let item: ThreadRealtimeItem = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(item).unwrap(), wire);
 }

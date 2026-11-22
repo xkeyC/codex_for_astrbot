@@ -63,18 +63,18 @@ pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig)
 
 /// AstrBot: `model` with the fields of `metadata` (a partial model info
 /// object, e.g. from `model_provider_options`) set over its own, field by
-/// field: one that does not fit is logged and skipped. The model then counts
-/// as known. A `context_window` also raises `max_context_window` to it.
-pub fn with_metadata(model: ModelInfo, metadata: &serde_json::Value) -> ModelInfo {
+/// field: one that does not fit is logged and skipped. Also returns whether
+/// any field was taken (the model then counts as known). A `context_window`
+/// also raises `max_context_window` to it.
+pub fn with_metadata(model: ModelInfo, metadata: &serde_json::Value) -> (ModelInfo, bool) {
     let Some(fields) = metadata.as_object() else {
         warn!(
             model = model.slug,
             "model metadata must be an object; ignored"
         );
-        return model;
+        return (model, false);
     };
     let slug = model.slug.clone();
-    let used_fallback = model.used_fallback_model_metadata;
     let mut merged = model;
     let mut applied = 0;
     for (key, value) in fields {
@@ -99,12 +99,7 @@ pub fn with_metadata(model: ModelInfo, metadata: &serde_json::Value) -> ModelInf
     {
         merged.max_context_window = Some(merged.max_context_window.unwrap_or(0).max(window));
     }
-    ModelInfo {
-        slug,
-        // Known once some metadata was taken.
-        used_fallback_model_metadata: used_fallback && applied == 0,
-        ..merged
-    }
+    (ModelInfo { slug, ..merged }, applied > 0)
 }
 
 fn strip_personality_section(mut instructions: String) -> String {
@@ -172,6 +167,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         default_verbosity: None,
         apply_patch_tool_type: None,
         web_search_tool_type: WebSearchToolType::Text,
+        web_search_provider: None,
         truncation_policy: TruncationPolicyConfig::bytes(/*limit*/ 10_000),
         supports_image_detail_original: false,
         context_window: Some(272_000),
@@ -181,7 +177,6 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         effective_context_window_percent: 95,
         experimental_supported_tools: Vec::new(),
         input_modalities: default_input_modalities(),
-        used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,
         supports_experimental_context: false,
         use_responses_lite: false,
@@ -194,6 +189,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
         tool_mode: None,
         multi_agent_version: None,
         multi_agent_reasoning_effort: None,
+        multi_agent_tools_in_code_mode: None,
     }
 }
 

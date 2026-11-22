@@ -155,7 +155,7 @@ impl RealtimeStartRequest {
                 }
             }),
             version: self.version,
-            voice: self.voice,
+            voice: self.voice.map(Some),
         }
     }
 }

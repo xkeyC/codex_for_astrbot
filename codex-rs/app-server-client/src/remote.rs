@@ -84,6 +84,8 @@ pub enum RemoteAppServerEndpoint {
 
 #[derive(Debug, Clone)]
 pub struct RemoteAppServerConnectArgs {
+    /// This client collects fresh human decisions for managed command checkpoints.
+    pub required_human_approval: bool,
     pub endpoint: RemoteAppServerEndpoint,
     pub client_name: String,
     pub client_version: String,
@@ -95,6 +97,7 @@ pub struct RemoteAppServerConnectArgs {
 impl RemoteAppServerConnectArgs {
     pub(crate) fn initialize_params(&self) -> InitializeParams {
         let capabilities = InitializeCapabilities {
+            required_human_approval: self.required_human_approval,
             explicit_gateway_oauth: false,
             experimental_api: self.experimental_api,
             request_attestation: false,
@@ -1079,6 +1082,7 @@ mod tests {
                 &event_tx,
                 AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
                     codex_app_server_protocol::AccountUpdatedNotification {
+                        reason: None,
                         auth_mode: None,
                         plan_type: None,
                     },

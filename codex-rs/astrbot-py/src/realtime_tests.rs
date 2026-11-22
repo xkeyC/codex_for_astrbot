@@ -117,7 +117,7 @@ fn full_request_maps_every_field() {
         realtime_session_id: Some("rt_1".to_string()),
         transport: Some(ConversationStartTransport::Websocket),
         version: Some(RealtimeConversationVersion::V1),
-        voice: Some(RealtimeVoice::Cove),
+        voice: Some(Some(RealtimeVoice::Cove)),
     };
     assert_eq!(params(request), expected);
 }

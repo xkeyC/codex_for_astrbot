@@ -27,9 +27,11 @@ fn request(mut input: Vec<ResponseItem>, tools: Value) -> ResponsesApiRequest {
         include: Vec::new(),
         service_tier: None,
         prompt_cache_key: Some("thread-1".to_string()),
+        prompt_cache_options: None,
         text: None,
         client_metadata: None,
         access_programs: None,
+        request_country: Default::default(),
     }
 }
 

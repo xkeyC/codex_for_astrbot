@@ -82,7 +82,6 @@ pub(crate) struct SessionStartConfig<'a> {
 pub(crate) async fn complete_session_start(
     app_server: &mut AppServerSession,
     config: SessionStartConfig<'_>,
-    app_server_target: &crate::AppServerTarget,
     target: &SessionTarget,
     action: SessionStartAction,
     initial_result: Result<AppServerStartedThread>,
@@ -104,13 +103,7 @@ pub(crate) async fn complete_session_start(
     }
 
     match confirm().await? {
-        UnarchiveChoice::Cancel => {
-            return Ok(if app_server_target.supports_command_center() {
-                SessionStartOutcome::CommandCenter
-            } else {
-                SessionStartOutcome::Exit
-            });
-        }
+        UnarchiveChoice::Cancel => return Ok(SessionStartOutcome::CommandCenter),
         UnarchiveChoice::Quit => return Ok(SessionStartOutcome::Exit),
         UnarchiveChoice::Unarchive => {}
     }
@@ -135,6 +128,7 @@ pub(crate) async fn cancel_session_start(app_server: AppServerSession) -> AppExi
         token_usage: Default::default(),
         thread_id: None,
         resume_hint: None,
+        archive_warnings: Vec::new(),
         disconnect_info: None,
         update_action: None,
         exit_reason: ExitReason::UserRequested,

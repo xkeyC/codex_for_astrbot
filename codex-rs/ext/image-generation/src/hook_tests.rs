@@ -29,6 +29,7 @@ fn tool(hook: Option<SavedImageHook>) -> ImageGenerationTool {
         /*save_root*/ None,
         "thread-1".to_string(),
         hook,
+        /*gif_enabled*/ false,
     )
 }
 

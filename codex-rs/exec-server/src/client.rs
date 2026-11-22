@@ -845,26 +845,29 @@ impl ExecServerClient {
     }
 
     pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        self.ensure_network_review_capability(&params).await?;
+        self.ensure_network_proxy_capabilities(&params).await?;
         self.call(EXEC_METHOD, &params).await
     }
 
-    async fn ensure_network_review_capability(
+    async fn ensure_network_proxy_capabilities(
         &self,
         params: &ExecParams,
     ) -> Result<(), ExecServerError> {
-        if params
-            .network_proxy
-            .as_ref()
-            .is_some_and(|launch| !launch.proxy.review_domains.is_empty())
-            && !self
-                .environment_info()
-                .await?
-                .capabilities
-                .network_proxy_review_domains
-        {
+        let proxy = params.network_proxy.as_ref().map(|launch| &launch.proxy);
+        let needs_review = proxy.is_some_and(|proxy| !proxy.review_domains.is_empty());
+        let needs_capture = params.requests_transparent_tcp();
+        if !needs_review && !needs_capture {
+            return Ok(());
+        }
+        let info = self.environment_info().await?;
+        if needs_review && !info.capabilities.network_proxy_review_domains {
             return Err(ExecServerError::Protocol(
                 "selected exec-server does not support managed network review domains".to_string(),
+            ));
+        }
+        if needs_capture && !info.capabilities.network_proxy_transparent_tcp {
+            return Err(ExecServerError::Protocol(
+                "selected exec-server does not support transparent TCP".to_string(),
             ));
         }
         Ok(())
@@ -1144,7 +1147,7 @@ impl ExecServerClient {
         params: ExecParams,
         network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     ) -> Result<Session, ExecServerError> {
-        self.ensure_network_review_capability(&params).await?;
+        self.ensure_network_proxy_capabilities(&params).await?;
         let policy_decision_timeout_ms = params
             .network_proxy
             .as_ref()
@@ -2051,7 +2054,6 @@ mod tests {
     use crate::FileSystemSandboxContext;
     use crate::ProcessId;
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_CONNECT_TIMEOUT;
-    #[cfg(not(windows))]
     use crate::client_api::DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT;
     use crate::client_api::ExecServerTransportParams;
     use crate::client_api::RemoteExecServerConnectArgs;
@@ -2393,7 +2395,7 @@ mod tests {
                 cwd: None,
             },
             client_name: "stdio-test-client".to_string(),
-            initialize_timeout: Duration::from_secs(1),
+            initialize_timeout: DEFAULT_REMOTE_EXEC_SERVER_INITIALIZE_TIMEOUT,
             resume_session_id: None,
         })
         .await

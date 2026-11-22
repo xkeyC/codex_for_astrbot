@@ -19,6 +19,7 @@
 //! dump into the output. Model-facing output for direct calls is unchanged.
 
 use codex_code_mode::ATTACH_IMAGES_KEY;
+use codex_protocol::models::AudioReference;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseInputItem;
@@ -73,14 +74,17 @@ pub(crate) fn structured_code_mode_result(
                 image: ImageReference::File { file_id },
                 ..
             } => content.push(json!({"type": "text", "text": format!("[image file {file_id}]")})),
-            FunctionCallOutputContentItem::InputAudio { audio_url } => {
-                match split_data_url(audio_url) {
-                    Some((mime, data)) => {
-                        content.push(json!({"type": "audio", "data": data, "mimeType": mime}));
-                    }
-                    None => content.push(json!({"type": "text", "text": audio_url})),
+            FunctionCallOutputContentItem::InputAudio {
+                audio: AudioReference::Inline { audio_url },
+            } => match split_data_url(audio_url) {
+                Some((mime, data)) => {
+                    content.push(json!({"type": "audio", "data": data, "mimeType": mime}));
                 }
-            }
+                None => content.push(json!({"type": "text", "text": audio_url})),
+            },
+            FunctionCallOutputContentItem::InputAudio {
+                audio: AudioReference::File { file_id },
+            } => content.push(json!({"type": "text", "text": format!("[audio file {file_id}]")})),
             FunctionCallOutputContentItem::EncryptedContent { .. } => {}
         }
     }

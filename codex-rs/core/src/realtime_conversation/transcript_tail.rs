@@ -1,4 +1,4 @@
-//! Saves terminal speech in model and client history before realtime closure, without inference.
+//! Records realtime transcript chunks in model and client history without inference.
 
 use crate::session::new_submission_id;
 use crate::session::session::Session;
@@ -9,9 +9,9 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
-use codex_protocol::user_input::UserInput;
 use codex_rollout::RolloutItem;
 use codex_thread_store::PersistContext;
+use codex_user_input::ResolvedUserInput;
 use std::sync::Arc;
 
 #[expect(
@@ -30,10 +30,7 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
         .map(|task| Arc::clone(&task.turn_context));
     let recording_turn = running_turn.is_none();
     let turn = running_turn.unwrap_or(recording_context);
-    let content = vec![UserInput::Text {
-        text,
-        text_elements: Vec::new(),
-    }];
+    let input = ResolvedUserInput::text(text);
     let now = chrono::Utc::now();
     if recording_turn {
         let started = EventMsg::TurnStarted(TurnStartedEvent {
@@ -52,7 +49,7 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
             .record_started_turn(&turn.sub_id, /*attribution*/ None)
             .await;
     }
-    let item = session.response_item_from_user_input(content.clone());
+    let item = session.response_item_from_user_input(std::slice::from_ref(&input));
     session
         .record_conversation_items(&turn, turn.model_info(), &[item])
         .await;
@@ -60,9 +57,10 @@ pub(super) async fn record(session: &Session, text: String) -> std::io::Result<(
     // ItemCompleted is the existing source for thread/items/list. Keep the legacy
     // equivalent too; the store selects the appropriate format for this thread.
     let completed = EventMsg::ItemCompleted(ItemCompletedEvent {
+        content_token_count: None,
         thread_id: session.thread_id,
         turn_id: turn.sub_id.clone(),
-        item: TurnItem::UserMessage(UserMessageItem::new(&content)),
+        item: TurnItem::UserMessage(UserMessageItem::new(&[input.to_user_input()])),
         started_at_ms: Some(now.timestamp_millis()),
         completed_at_ms: now.timestamp_millis(),
     });
