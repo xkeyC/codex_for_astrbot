@@ -1,3 +1,4 @@
+#![cfg_attr(not(feature = "aws"), allow(unused_imports))]
 //! Unit tests for the provider module.
 
 use std::future::Future;
@@ -383,6 +384,7 @@ fn create_model_provider_does_not_use_openai_auth_manager_for_amazon_bedrock_pro
     assert!(provider.auth_manager().is_none());
 }
 
+#[cfg(feature = "aws")]
 #[tokio::test]
 async fn shared_bedrock_auth_refresh_is_reused_only_for_matching_configuration() {
     const TEST_NAME: &str =

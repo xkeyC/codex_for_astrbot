@@ -13,9 +13,17 @@ doctest = false
 [[bin]]
 name = "codex-execpolicy"
 path = "src/main.rs"
+required-features = ["starlark"]
 
 [lints]
 workspace = true
+
+[features]
+# fork: the Starlark rule-file parser. Off for the AstrBot build: Codex's own
+# command approval is not used there, and `PolicyParser::parse` then rejects
+# any non-empty rule file.
+default = []
+starlark = ["dep:starlark"]
 
 [dependencies]
 caseless = { workspace = true }
@@ -26,7 +34,7 @@ multimap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 shlex = { workspace = true }
-starlark = { workspace = true }
+starlark = { workspace = true, optional = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "rt"] }

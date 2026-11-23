@@ -171,6 +171,11 @@ members = [
     "plugin",
     "model-provider",
 ]
+# fork: the Python bridge is the default. A bare `cargo build`/`cargo test`
+# here builds the AstrBot extension's crate (feature `python`) and the code-mode
+# host it re-execs, and runs the bridge's tests. Every other crate is kept for
+# reference; name it with -p.
+default-members = ["astrbot-py", "code-mode-host"]
 resolver = "2"
 
 [workspace.package]

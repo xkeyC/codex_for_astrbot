@@ -7,12 +7,16 @@ license.workspace = true
 
 [lib]
 name = "codex_astrbot"
-crate-type = ["cdylib", "rlib"]
+# rlib only: cargo build/test never link the ~600 MB debug extension module.
+# maturin passes `--crate-type cdylib` itself when it builds the wheel.
+crate-type = ["rlib"]
 path = "src/lib.rs"
 doctest = false
 
 [features]
-# Off by default so `cargo build --workspace` never needs a Python interpreter.
+# The Python bridge is this fork's default build and test path (pyo3 needs a
+# Python interpreter). `--no-default-features` builds the plain Rust engine.
+default = ["python"]
 python = ["dep:pyo3", "dep:pyo3-async-runtimes"]
 
 [lints]
@@ -42,3 +46,16 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "macros", "time"] }
 toml = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+codex-apply-patch = { workspace = true }
+codex-config = { workspace = true }
+codex-model-provider-info = { workspace = true }
+codex-sandboxing = { workspace = true }
+codex-test-binary-support = { workspace = true }
+core_test_support = { workspace = true }
+ctor = { workspace = true }
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }
+wiremock = { workspace = true }

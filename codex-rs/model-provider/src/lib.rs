@@ -1,3 +1,4 @@
+#[cfg(feature = "aws")]
 mod amazon_bedrock;
 mod auth;
 mod bearer_auth_provider;
@@ -23,8 +24,11 @@ pub use workspace_routing::ResolvedResponsesProvider;
 pub use workspace_routing::ResponsesConnectionKey;
 pub use workspace_routing::WorkspaceRoutingContext;
 
+#[cfg(feature = "aws")]
 pub use amazon_bedrock::is_amazon_bedrock_gov_cloud_region;
+#[cfg(feature = "aws")]
 pub use amazon_bedrock::is_supported_amazon_bedrock_region;
+#[cfg(feature = "aws")]
 pub use amazon_bedrock::resolve_amazon_bedrock_region;
 pub use auth::AgentIdentitySessionFallback;
 pub use auth::ProviderAuthContext;

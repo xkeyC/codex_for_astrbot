@@ -1,3 +1,4 @@
+#[cfg(feature = "starlark")]
 use starlark::Error as StarlarkError;
 use thiserror::Error;
 
@@ -46,8 +47,12 @@ pub enum Error {
         example: String,
         location: Option<ErrorLocation>,
     },
+    #[cfg(feature = "starlark")]
     #[error("starlark error: {0}")]
     Starlark(StarlarkError),
+    #[cfg(not(feature = "starlark"))]
+    #[error("exec policy rule files are not supported in this build: {0}")]
+    Unsupported(String),
 }
 
 impl Error {
@@ -79,6 +84,7 @@ impl Error {
         match self {
             Error::ExampleDidNotMatch { location, .. }
             | Error::ExampleDidMatch { location, .. } => location.clone(),
+            #[cfg(feature = "starlark")]
             Error::Starlark(err) => err.span().map(|span| {
                 let resolved = span.resolve_span();
                 ErrorLocation {

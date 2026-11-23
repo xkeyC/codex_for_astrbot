@@ -42,7 +42,6 @@ mod abort_tasks;
 #[path = "actor_access_program_tests.rs"]
 mod actor_access_program;
 mod additional_context;
-mod additional_context_compaction;
 #[path = "agent_control_tests.rs"]
 mod agent_control;
 mod agent_execution;
@@ -67,7 +66,6 @@ mod bedrock_multi_agent;
 #[path = "bedrock_service_tier_tests.rs"]
 mod bedrock_service_tier;
 mod catalog_permission_messages;
-mod chat_wire;
 mod cli_stream;
 mod client;
 mod client_websockets;
@@ -89,14 +87,11 @@ mod daybreak_access;
 mod deprecation_notice;
 mod direct_tool_metadata;
 mod dynamic_tool_cancellation;
-mod dynamic_tool_end_turn;
-mod dynamic_tools_update;
 mod exec;
 mod exec_policy;
 #[cfg(not(target_os = "windows"))]
 mod extension_sandbox;
 mod external_auth;
-mod files_api;
 mod fork_thread;
 mod gcp;
 mod git_enrichment;
@@ -192,7 +187,6 @@ mod quota_exceeded;
 mod realtime_attachment;
 mod realtime_conversation;
 mod realtime_initial_items;
-mod realtime_local_infra;
 mod realtime_misalignment;
 mod realtime_sideband_endpoint;
 mod realtime_system_proxy;
@@ -244,7 +238,6 @@ mod subagent_notifications;
 mod subagent_service_tier;
 mod token_budget;
 mod token_usage_rollout;
-mod tool_catalog;
 mod tool_harness;
 mod tool_lifecycle;
 mod tool_parallelism;

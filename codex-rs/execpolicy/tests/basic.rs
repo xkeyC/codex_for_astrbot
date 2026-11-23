@@ -1,3 +1,4 @@
+#![cfg(feature = "starlark")]
 #![allow(clippy::expect_used)]
 use std::any::Any;
 use std::fs;

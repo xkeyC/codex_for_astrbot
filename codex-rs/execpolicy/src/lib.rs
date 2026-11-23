@@ -3,6 +3,10 @@ pub(crate) mod decision;
 pub(crate) mod error;
 pub(crate) mod execpolicycheck;
 mod executable_name;
+#[cfg(feature = "starlark")]
+pub(crate) mod parser;
+#[cfg(not(feature = "starlark"))]
+#[path = "parser_stub.rs"]
 pub(crate) mod parser;
 pub(crate) mod policy;
 pub mod rule;

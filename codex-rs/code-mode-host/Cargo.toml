@@ -13,6 +13,15 @@ doctest = false
 name = "codex_code_mode_host"
 path = "src/lib.rs"
 
+[features]
+# fork: upstream UI-plugin isolate tests; the AstrBot bridge only uses code mode.
+ui-plugin-tests = []
+
+[[test]]
+name = "ui_plugin_wire"
+path = "tests/ui_plugin_wire.rs"
+required-features = ["ui-plugin-tests"]
+
 [lints]
 workspace = true
 

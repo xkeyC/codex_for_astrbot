@@ -1,12 +1,15 @@
 use crate::decision::Decision;
 use crate::error::Error;
 use crate::error::Result;
+#[cfg(feature = "starlark")]
 use crate::policy::MatchOptions;
+#[cfg(feature = "starlark")]
 use crate::policy::Policy;
 use caseless::Caseless;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
+#[cfg(feature = "starlark")]
 use shlex::try_join;
 use std::any::Any;
 use std::fmt::Debug;
@@ -256,6 +259,7 @@ impl Rule for PrefixRule {
 }
 
 /// Count how many rules match each provided example and error if any example is unmatched.
+#[cfg(feature = "starlark")]
 pub(crate) fn validate_match_examples(
     policy: &Policy,
     rules: &[RuleRef],
@@ -292,6 +296,7 @@ pub(crate) fn validate_match_examples(
 }
 
 /// Ensure that no rule matches any provided negative example.
+#[cfg(feature = "starlark")]
 pub(crate) fn validate_not_match_examples(
     policy: &Policy,
     _rules: &[RuleRef],
