@@ -53,7 +53,8 @@ const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` return
 - `terminate: true` stops the running cell; false or omitted waits for output.
 - `wait` returns only the new output since the last yield, or the final completion or termination result for that cell.
 - If the cell is still running, `wait` may yield again with the same `cell_id`.
-- If the cell has already finished, `wait` returns the completed result and closes the cell."#;
+- If the cell has already finished, `wait` returns the completed result and closes the cell.
+- `wait` takes only cell IDs from `Script running with cell ID ...`. IDs that other tools report go back to those tools: a shell `session ID` from `exec_command` is polled with `write_stdin`, a task id with the tool that named it."#;
 // Based off of https://modelcontextprotocol.io/specification/draft/schema#calltoolresult
 pub(crate) const MCP_TYPESCRIPT_PREAMBLE: &str = r#"type Role = "user" | "assistant";
 type MetaObject = Record<string, unknown>;

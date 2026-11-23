@@ -78,9 +78,10 @@ const RUN_CODE_WAIT_DESCRIPTION: &str = r#"Waits on a `run_code` program that is
 - `terminate: true` stops the program; false or omitted waits for output.
 - `wait` returns only the new output since the last yield, or the program's final result.
 - If the program is still running, `wait` may yield again with the same `cell_id`: call it again.
-- Once the program has finished, `wait` returns its result and the cell closes."#;
+- Once the program has finished, `wait` returns its result and the cell closes.
+- `wait` takes only cell IDs from `Script running with cell ID ...`. IDs that other tools report go back to those tools: a shell `session ID` from `exec_command` is polled with `write_stdin`, a task id with the tool that named it."#;
 
-const RUN_CODE_COMPACT_WAIT_DESCRIPTION: &str = "Resume a `run_code` program that returned `Script running with cell ID ...` (it kept running): returns its output since the last yield, or its final result. `terminate: true` stops it.";
+const RUN_CODE_COMPACT_WAIT_DESCRIPTION: &str = "Resume a `run_code` program that returned `Script running with cell ID ...` (it kept running): returns its output since the last yield, or its final result. `terminate: true` stops it. Only cell IDs: a shell session ID from `exec_command` is polled with `write_stdin`.";
 
 /// How the runtime is set up for the described programs.
 #[derive(Clone, Copy, Debug)]

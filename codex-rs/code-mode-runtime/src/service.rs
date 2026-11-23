@@ -522,7 +522,12 @@ fn missing_cell_response(
     mode: CodeModeOutputTruncation,
     max_output_tokens: Option<usize>,
 ) -> Result<RuntimeResponse, String> {
-    let error_text = format!("exec cell {cell_id} not found");
+    // AstrBot: models pass other tools' ids here (a shell session ID).
+    let error_text = format!(
+        "exec cell {cell_id} not found. `wait` takes only the cell ID of a \
+         `Script running with cell ID ...` result; an ID another tool reported goes \
+         back to that tool (a shell session ID from `exec_command`: `write_stdin`)."
+    );
     let mut output = OutputCollector::new(mode);
     let event = take_completed_event(&mut output, Some(error_text));
     runtime_response(&cell_id, event, mode, max_output_tokens)

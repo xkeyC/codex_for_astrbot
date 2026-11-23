@@ -2529,7 +2529,13 @@ async fn wait_reports_missing_cell_separately_from_runtime_results() {
             cell_id: cell_id("missing"),
             content_items: Vec::new(),
             result_buffered_for: Duration::ZERO,
-            error_text: Some("exec cell missing not found".to_string()),
+            error_text: Some(
+                "exec cell missing not found. `wait` takes only the cell ID of a \
+                 `Script running with cell ID ...` result; an ID another tool reported \
+                 goes back to that tool (a shell session ID from `exec_command`: \
+                 `write_stdin`)."
+                    .to_string(),
+            ),
         })
     );
 }

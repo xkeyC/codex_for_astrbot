@@ -118,7 +118,7 @@ pub(crate) fn create_compact_wait_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: codex_code_mode::WAIT_TOOL_NAME.to_string(),
         description: format!(
-            "Resume a `{}` cell that returned `Script running with cell ID ...`: returns output since the last yield, or the final result. `terminate: true` stops the cell.",
+            "Resume a `{}` cell that returned `Script running with cell ID ...`: returns output since the last yield, or the final result. `terminate: true` stops the cell. Only cell IDs: a shell session ID from `exec_command` is polled with `write_stdin`.",
             codex_code_mode::PUBLIC_TOOL_NAME
         ),
         strict: false,

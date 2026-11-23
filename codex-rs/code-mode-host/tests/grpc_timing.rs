@@ -294,7 +294,12 @@ async fn observation_timing_excludes_previous_requests_and_background_time() -> 
             missing,
             WaitOutcome::MissingCell(RuntimeResponse::Result {
                 result_buffered_for: Duration::ZERO,
-                error_text: Some(format!("exec cell {cell_id} not found")),
+                error_text: Some(format!(
+                    "exec cell {cell_id} not found. `wait` takes only the cell ID of a \
+                     `Script running with cell ID ...` result; an ID another tool reported \
+                     goes back to that tool (a shell session ID from `exec_command`: \
+                     `write_stdin`)."
+                )),
                 cell_id,
                 content_items: Vec::new(),
                 code_mode_host_duration: Some(duration),
