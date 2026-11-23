@@ -301,9 +301,15 @@ impl ToolSearchHandler {
         for entry in self.search_entries(query) {
             for candidate_name in entry.tool_names() {
                 let candidate_name = candidate_name.with_default_namespace();
-                let name = codex_code_mode::normalize_code_mode_identifier(
-                    &codex_tools::code_mode_name_for_tool_name(&candidate_name),
-                );
+                // Fork addition: its name under a host namespace root.
+                let name = router
+                    .code_mode_name(&candidate_name)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        codex_code_mode::normalize_code_mode_identifier(
+                            &codex_tools::code_mode_name_for_tool_name(&candidate_name),
+                        )
+                    });
                 let Some(tool_name) =
                     router
                         .code_mode_tool_names()
@@ -331,6 +337,7 @@ impl ToolSearchHandler {
                     else {
                         continue;
                     };
+                    definition.name = name.clone();
                     indirect_prefixes.apply_code_mode_description(
                         &definition.tool_name,
                         &mut definition.description,
@@ -354,7 +361,15 @@ impl ToolSearchHandler {
                 }) else {
                     continue;
                 };
-                let mut description = definition.description.clone();
+                let mut description = if router.code_mode_name(&candidate_name).is_some() {
+                    codex_code_mode::rename_tool_declaration(
+                        &definition.description,
+                        &definition.name,
+                        &name,
+                    )
+                } else {
+                    definition.description.clone()
+                };
                 indirect_prefixes
                     .apply_code_mode_description(&definition.tool_name, &mut description);
                 tools.push(CodeModeSearchResult { name, description });

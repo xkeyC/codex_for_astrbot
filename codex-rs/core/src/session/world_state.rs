@@ -474,7 +474,8 @@ impl Session {
                 .with_run_code(crate::tools::code_mode::run_code_enabled(
                     turn_context,
                     &step_context.settings.model_info,
-                )),
+                ))
+                .with_full_names(turn_context.config.code_mode.host_namespace.is_some()),
             );
         }
         let environments = step_context.environments.to_selections();

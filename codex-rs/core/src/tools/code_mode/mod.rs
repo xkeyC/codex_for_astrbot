@@ -417,7 +417,12 @@ fn submit_nested_tool(
     let payload = if is_exec_tool_name(&tool_name) {
         Err(format!("{PUBLIC_TOOL_NAME} cannot invoke itself"))
     } else {
-        build_nested_tool_payload(tool_kind, &tool_name, input)
+        // Fork addition: errors name the tool as the script calls it.
+        let shown_name = step_context
+            .tool_router
+            .code_mode_name(&tool_name)
+            .map_or_else(|| tool_name.clone(), ToolName::plain);
+        build_nested_tool_payload(tool_kind, &shown_name, input)
     };
     let payload = match payload {
         Ok(payload) => payload,

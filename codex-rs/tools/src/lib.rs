@@ -3,6 +3,7 @@
 
 mod catalog_tool_message;
 mod code_mode;
+mod code_mode_names;
 mod dynamic_tool;
 mod function_call_error;
 mod functions_namespace_function_prefixes;
@@ -30,6 +31,8 @@ pub use code_mode::code_mode_name_for_tool_name;
 pub use code_mode::collect_code_mode_exec_prompt_tool_definitions;
 pub use code_mode::collect_code_mode_tool_definitions;
 pub use code_mode::tool_spec_to_code_mode_tool_definition;
+pub use code_mode_names::CodeModeNames;
+pub use code_mode_names::assign_code_mode_names;
 pub use codex_protocol::ToolName;
 pub use dynamic_tool::parse_dynamic_tool;
 pub use function_call_error::FunctionCallError;

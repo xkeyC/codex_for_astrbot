@@ -106,6 +106,11 @@ pub struct ToolRouter {
     can_manage_children: bool,
     /// Fork addition: the model calls `exec` as `run_code` (open models).
     run_code_alias: bool,
+    /// Fork addition: nested tools' names on the `tools` object when a host
+    /// namespace root is configured; empty otherwise (names as upstream).
+    code_mode_names: Arc<codex_tools::CodeModeNames>,
+    /// Fork addition: that root (`features.code_mode.host_namespace`).
+    host_namespace: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,6 +162,8 @@ impl ToolRouter {
             tool_namespaces_info,
             can_manage_children: false,
             run_code_alias: false,
+            code_mode_names: Arc::default(),
+            host_namespace: None,
         };
         router.can_manage_children = !child_management_tools.is_empty()
             && child_management_tools
@@ -169,6 +176,45 @@ impl ToolRouter {
     pub(crate) fn with_run_code_alias(mut self, run_code_alias: bool) -> Self {
         self.run_code_alias = run_code_alias;
         self
+    }
+
+    /// Fork addition: the nested tools' names under a host namespace root.
+    pub(crate) fn with_code_mode_names(
+        mut self,
+        code_mode_names: codex_tools::CodeModeNames,
+        host_namespace: Option<String>,
+    ) -> Self {
+        self.code_mode_names = Arc::new(code_mode_names);
+        self.host_namespace = host_namespace;
+        self
+    }
+
+    /// Fork addition: a nested tool's name on the `tools` object when a host
+    /// namespace root renames tools; `None` without one (the name is then
+    /// the tool's code-mode name, as upstream).
+    pub(crate) fn code_mode_name(&self, tool_name: &ToolName) -> Option<&str> {
+        self.code_mode_names
+            .get(&tool_name.clone().with_default_namespace())
+            .map(String::as_str)
+    }
+
+    /// Fork addition: gives augmented nested definitions their names under a
+    /// host namespace root (unchanged without one).
+    pub(crate) fn rename_code_mode_definitions(
+        &self,
+        definitions: &mut [codex_code_mode::ToolDefinition],
+    ) {
+        if self.code_mode_names.is_empty() {
+            return;
+        }
+        for definition in definitions {
+            if let Some(name) = self.code_mode_name(&definition.tool_name)
+                && name != definition.name
+            {
+                *definition =
+                    codex_code_mode::rename_augmented_tool_definition(definition.clone(), name);
+            }
+        }
     }
 
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
@@ -258,7 +304,12 @@ impl ToolRouter {
         if !matches!(self.tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
             return Vec::new();
         }
-        crate::tools::tool_catalog::deferred_code_mode_tools(&self.registry, excluded_namespaces)
+        crate::tools::tool_catalog::deferred_code_mode_tools(
+            &self.registry,
+            excluded_namespaces,
+            &self.code_mode_names,
+            self.host_namespace.as_deref(),
+        )
     }
 
     pub(crate) fn mcp_namespaces(&self) -> impl Iterator<Item = (&str, &str)> {

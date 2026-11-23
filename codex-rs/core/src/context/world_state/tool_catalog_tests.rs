@@ -9,6 +9,7 @@ use pretty_assertions::assert_eq;
 fn tool(global_name: &str, group: &str, description: &str) -> CatalogTool {
     CatalogTool {
         global_name: global_name.to_string(),
+        listed_name: global_name[group.len()..].to_string(),
         group: group.to_string(),
         description: description.to_string(),
         group_description: match group {

@@ -73,6 +73,13 @@ pub struct CodeModeConfigToml {
     /// message in history, appending changes as tools load and unload.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_catalog: Option<bool>,
+    /// The tool namespace root that belongs to the host (`astrbot`, say). Its
+    /// tools drop the root in code mode: namespace `astrbot` + `exec_command`
+    /// is `tools.exec_command`, `astrbot__live_check` + `lookup` is
+    /// `tools.live_check__lookup`. Where such a name is taken by another
+    /// tool, the host's becomes `<root>_<name>` and the other `codex_<name>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_namespace: Option<String>,
 }
 
 impl FeatureConfig for CodeModeConfigToml {

@@ -25,6 +25,8 @@ pub use description::enabled_tool_metadata;
 pub use description::is_code_mode_nested_tool;
 pub use description::normalize_code_mode_identifier;
 pub use description::parse_exec_source;
+pub use description::rename_augmented_tool_definition;
+pub use description::rename_tool_declaration;
 pub use description::render_code_mode_sample;
 pub use json_schema_types::DEFAULT_INPUT_SCHEMA_MAX_BYTES;
 pub use json_schema_types::render_json_schema_to_typescript;

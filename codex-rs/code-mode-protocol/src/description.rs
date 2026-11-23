@@ -445,6 +445,30 @@ pub fn augment_tool_definition(mut definition: ToolDefinition) -> ToolDefinition
     definition
 }
 
+/// Fork addition: an augmented description (see [`augment_tool_definition`])
+/// whose declaration names the tool `new_name` instead of `old_name`.
+pub fn rename_tool_declaration(description: &str, old_name: &str, new_name: &str) -> String {
+    let declaration = |name: &str| {
+        format!(
+            "declare const tools: {{ {}(",
+            normalize_code_mode_identifier(name)
+        )
+    };
+    description.replacen(&declaration(old_name), &declaration(new_name), 1)
+}
+
+/// Fork addition: an augmented definition under the code-mode name `name`
+/// (the global it is called by, and its declaration).
+pub fn rename_augmented_tool_definition(
+    mut definition: ToolDefinition,
+    name: &str,
+) -> ToolDefinition {
+    definition.description =
+        rename_tool_declaration(&definition.description, &definition.name, name);
+    definition.name = name.to_string();
+    definition
+}
+
 pub fn enabled_tool_metadata(definition: &ToolDefinition) -> EnabledToolMetadata {
     EnabledToolMetadata {
         tool_name: definition.tool_name.clone(),
@@ -657,6 +681,29 @@ mod tests {
             "hidden_dynamic_tool",
             normalize_code_mode_identifier("hidden-dynamic-tool")
         );
+    }
+
+    #[test]
+    fn renamed_definitions_declare_their_new_name() {
+        let definition = augment_tool_definition(ToolDefinition {
+            name: "astrbot__exec_command".to_string(),
+            tool_name: ToolName::namespaced("astrbot", "exec_command"),
+            description: "Runs a command.".to_string(),
+            kind: CodeModeToolKind::Freeform,
+            input_schema: None,
+            input_schema_max_bytes: None,
+            output_schema: None,
+        });
+        let renamed = super::rename_augmented_tool_definition(definition, "exec_command");
+        assert_eq!(renamed.name, "exec_command");
+        assert!(
+            renamed.description.contains(
+                "declare const tools: { exec_command(input: string): Promise<unknown>; };"
+            ),
+            "{}",
+            renamed.description
+        );
+        assert!(!renamed.description.contains("astrbot__"));
     }
 
     #[test]

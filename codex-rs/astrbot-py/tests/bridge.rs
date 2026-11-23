@@ -56,6 +56,8 @@ mod bridge {
     mod encrypted_history;
     #[path = "files_api.rs"]
     mod files_api;
+    #[path = "host_namespace.rs"]
+    mod host_namespace;
     #[path = "open_model_run_code.rs"]
     mod open_model_run_code;
     #[path = "realtime_local_infra.rs"]

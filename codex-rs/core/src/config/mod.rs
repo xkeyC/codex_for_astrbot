@@ -1315,6 +1315,9 @@ pub struct CodeModeConfig {
     pub compact_exec_description: bool,
     /// List deferred nested tools in history as they load and unload.
     pub tool_catalog: bool,
+    /// Fork addition: the host's tool namespace root, dropped from its
+    /// tools' code-mode names (`features.code_mode.host_namespace`).
+    pub host_namespace: Option<String>,
     pub heartbeat_interval_s: u32,
 }
 
@@ -1331,6 +1334,7 @@ impl Default for CodeModeConfig {
             exec_as_function_tool: false,
             compact_exec_description: false,
             tool_catalog: false,
+            host_namespace: None,
             heartbeat_interval_s: 0,
         }
     }
@@ -2989,6 +2993,11 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
         tool_catalog: base
             .and_then(|config| config.tool_catalog)
             .unwrap_or_default(),
+        host_namespace: base
+            .and_then(|config| config.host_namespace.as_deref())
+            .map(str::trim)
+            .filter(|namespace| !namespace.is_empty())
+            .map(str::to_string),
         heartbeat_interval_s: config_toml
             .code_mode
             .as_ref()

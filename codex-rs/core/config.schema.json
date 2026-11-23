@@ -713,6 +713,10 @@
           "description": "Show handler duration, code-mode host duration, and harness overhead in each code-mode cell response. Experimental: this option and the response format may change or be removed.",
           "type": "boolean"
         },
+        "host_namespace": {
+          "description": "The tool namespace root that belongs to the host (`astrbot`, say). Its tools drop the root in code mode: namespace `astrbot` + `exec_command` is `tools.exec_command`, `astrbot__live_check` + `lookup` is `tools.live_check__lookup`. Where such a name is taken by another tool, the host's becomes `<root>_<name>` and the other `codex_<name>`.",
+          "type": "string"
+        },
         "structured_dynamic_tool_results": {
           "description": "Return dynamic tool results to code-mode scripts as MCP-shaped objects (`{content, isError, text}`) instead of one joined string.",
           "type": "boolean"

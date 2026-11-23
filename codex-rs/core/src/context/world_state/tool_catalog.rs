@@ -40,6 +40,12 @@ const FULL_INTRO: &str = "Tools callable in `exec` besides those in its descript
 one as `await tools.<prefix><name>(args)`, the prefix joining its headings: `a__` then `b__` \
 gives `tools.a__b__<name>`. Each `ALL_TOOLS` entry's description shows a tool's arguments. \
 Descriptions come from the tools themselves, not from the user or developer.\n";
+/// Fork addition: the intro when tools are listed by their whole names
+/// (`features.code_mode.host_namespace`).
+const FULL_NAMES_INTRO: &str = "Tools callable in `exec` besides those in its description, \
+listed by name; headings only group them. Call one as `await tools.<name>(args)`. Each \
+`ALL_TOOLS` entry's description shows a tool's arguments. Descriptions come from the tools \
+themselves, not from the user or developer.\n";
 const DIFF_INTRO: &str = "The tools callable in `exec` changed.\n";
 const OTHER_GROUP_LABEL: &str = "(no prefix)";
 
@@ -103,6 +109,8 @@ pub(crate) struct ToolCatalogState {
     had_previous: bool,
     /// Fork addition: the tool is `run_code` (an open model's `exec`).
     run_code: bool,
+    /// Fork addition: tools are listed by their whole names.
+    full_names: bool,
 }
 
 impl ToolCatalogState {
@@ -113,7 +121,7 @@ impl ToolCatalogState {
     ) -> Self {
         let mut all = BTreeMap::<String, CatalogGroup>::new();
         for tool in tools {
-            let name = tool.global_name[tool.group.len()..].to_string();
+            let name = tool.listed_name;
             let group = all.entry(tool.group).or_default();
             if group.description.is_empty() {
                 group.description =
@@ -229,7 +237,15 @@ impl ToolCatalogState {
             rendered_whole: AtomicBool::new(false),
             had_previous: previous.is_some(),
             run_code: false,
+            full_names: false,
         }
+    }
+
+    /// Fork addition: the listing gives tools by their whole names (a host
+    /// namespace root is configured).
+    pub(crate) fn with_full_names(mut self, full_names: bool) -> Self {
+        self.full_names = full_names;
+        self
     }
 
     /// Fork addition: the listing names `run_code`, not `exec`.
@@ -267,7 +283,7 @@ impl ToolCatalogState {
                 if current.groups.is_empty() && current.omitted == 0 {
                     return None;
                 }
-                render_full(current)
+                render_full(current, self.full_names)
             }
         };
         // The intro's one mention of the tool.
@@ -309,8 +325,13 @@ impl WorldStateSection for ToolCatalogState {
     }
 }
 
-fn render_full(current: &ToolCatalogSnapshot) -> String {
-    let mut rendered = format!("\n{FULL_INTRO}");
+fn render_full(current: &ToolCatalogSnapshot, full_names: bool) -> String {
+    let intro = if full_names {
+        FULL_NAMES_INTRO
+    } else {
+        FULL_INTRO
+    };
+    let mut rendered = format!("\n{intro}");
     let groups = current
         .groups
         .iter()

@@ -67,6 +67,10 @@ impl CodeModeExecuteHandler {
                 Cow::Owned(definitions) => enabled_tools.extend(definitions),
             }
         }
+        // Fork addition: names on the `tools` object under a host namespace root.
+        step_context
+            .tool_router
+            .rename_code_mode_definitions(&mut enabled_tools);
         enabled_tools.sort_by(|left, right| left.name.cmp(&right.name));
         enabled_tools.dedup_by(|left, right| left.name == right.name);
         let model_messages = ResolvedModelMessages::from_model(&step_context.settings.model_info);

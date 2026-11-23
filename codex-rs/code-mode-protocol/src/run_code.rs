@@ -104,16 +104,21 @@ pub fn build_run_code_tool_description(
     tools.sort_by(|(left, _), (right, _)| left.cmp(right));
     tools.dedup_by(|(left, _), (right, _)| left == right);
 
-    let has_tool_search = tools.iter().any(|(name, _)| name == TOOL_SEARCH_NAME);
+    // Code mode's own search tool, by the name it has here (`codex_tool_search`
+    // where a host tool took `tool_search`).
+    let search_name = tools
+        .iter()
+        .find(|(_, tool)| is_search_tool(tool))
+        .map(|(name, _)| name.clone());
+    let deferred_tools = match &search_name {
+        Some(name) => DEFERRED_TOOLS_SEARCH.replace(
+            &format!("tools.{TOOL_SEARCH_NAME}("),
+            &format!("tools.{name}("),
+        ),
+        None => DEFERRED_TOOLS_CATALOG.to_string(),
+    };
     let guide = RUN_CODE_GUIDE
-        .replace(
-            "{{ deferred_tools }}",
-            if has_tool_search {
-                DEFERRED_TOOLS_SEARCH
-            } else {
-                DEFERRED_TOOLS_CATALOG
-            },
-        )
+        .replace("{{ deferred_tools }}", &deferred_tools)
         .replace(
             "{{ yield_time_ms }}",
             &options.default_exec_yield_time_ms.to_string(),
@@ -138,7 +143,7 @@ pub fn build_run_code_tool_description(
             }
         }
         current_namespace = namespace_name;
-        let description = if name == TOOL_SEARCH_NAME {
+        let description = if is_search_tool(tool) {
             RUN_CODE_TOOL_SEARCH_DESCRIPTION
         } else {
             tool.description.as_str()
@@ -168,6 +173,10 @@ declare const tools: {{ [K in ToolName]: (args: ToolArgsMap[K]) => Promise<ToolO
     );
 
     format!("{RUN_CODE_INTRO}\n\n{guide}\n\nProgram-only SDK bindings:\n```ts\n{declarations}\n```")
+}
+
+fn is_search_tool(tool: &ToolDefinition) -> bool {
+    tool.tool_name.is_default_namespace() && tool.tool_name.name == TOOL_SEARCH_NAME
 }
 
 /// One tool's declaration in the form of the `run_code` SDK block (its

@@ -89,10 +89,15 @@ async fn lists_deferred_tools_by_their_code_mode_names() {
         &dynamic_tools,
     );
 
-    let mut tools = deferred_code_mode_tools(&registry, &["hidden".to_string()])
-        .into_iter()
-        .filter(|tool| tool.group == "astrbot__" || tool.global_name == "lookup")
-        .collect::<Vec<_>>();
+    let mut tools = deferred_code_mode_tools(
+        &registry,
+        &["hidden".to_string()],
+        &codex_tools::CodeModeNames::new(),
+        /*host_namespace*/ None,
+    )
+    .into_iter()
+    .filter(|tool| tool.group == "astrbot__" || tool.global_name == "lookup")
+    .collect::<Vec<_>>();
     tools.sort_by(|left, right| left.global_name.cmp(&right.global_name));
 
     assert_eq!(
@@ -100,18 +105,21 @@ async fn lists_deferred_tools_by_their_code_mode_names() {
         vec![
             CatalogTool {
                 global_name: "astrbot__send_file".to_string(),
+                listed_name: "send_file".to_string(),
                 group: "astrbot__".to_string(),
                 description: "Send a file.".to_string(),
                 group_description: "AstrBot plugin tools.".to_string(),
             },
             CatalogTool {
                 global_name: "astrbot__web_search".to_string(),
+                listed_name: "web_search".to_string(),
                 group: "astrbot__".to_string(),
                 description: "Search the web.".to_string(),
                 group_description: "AstrBot plugin tools.".to_string(),
             },
             CatalogTool {
                 global_name: "lookup".to_string(),
+                listed_name: "lookup".to_string(),
                 group: String::new(),
                 description: "Look it up.".to_string(),
                 group_description: String::new(),
@@ -119,8 +127,13 @@ async fn lists_deferred_tools_by_their_code_mode_names() {
         ]
     );
     assert!(
-        deferred_code_mode_tools(&registry, &["hidden".to_string()])
-            .iter()
-            .all(|tool| !tool.global_name.starts_with("hidden"))
+        deferred_code_mode_tools(
+            &registry,
+            &["hidden".to_string()],
+            &codex_tools::CodeModeNames::new(),
+            /*host_namespace*/ None,
+        )
+        .iter()
+        .all(|tool| !tool.global_name.starts_with("hidden"))
     );
 }

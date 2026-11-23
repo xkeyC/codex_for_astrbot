@@ -8,6 +8,7 @@
 
 use std::collections::HashSet;
 
+use codex_tools::CodeModeNames;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ToolExposure;
 use codex_tools::ToolName;
@@ -20,8 +21,12 @@ use crate::tools::registry::ToolRegistry;
 pub(crate) struct CatalogTool {
     /// Name on the global `tools` object, e.g. `astrbot__web_search`.
     pub(crate) global_name: String,
-    /// The `namespace__` part of `global_name`; empty for plain tools.
+    /// The `namespace__` part of `global_name`, empty for plain tools; under
+    /// a host namespace root, a plain label of the tool's namespace.
     pub(crate) group: String,
+    /// The name the catalog lists: `global_name` after `group`, or under a
+    /// host namespace root the whole `global_name`.
+    pub(crate) listed_name: String,
     pub(crate) description: String,
     pub(crate) group_description: String,
 }
@@ -32,6 +37,8 @@ pub(crate) struct CatalogTool {
 pub(crate) fn deferred_code_mode_tools(
     registry: &ToolRegistry,
     excluded_namespaces: &[String],
+    code_mode_names: &CodeModeNames,
+    host_namespace: Option<&str>,
 ) -> Vec<CatalogTool> {
     let mut taken = HashSet::new();
     let mut tools = Vec::new();
@@ -78,6 +85,26 @@ pub(crate) fn deferred_code_mode_tools(
                 continue;
             }
         };
+        // Fork addition: under a host namespace root, tools go by their names
+        // on the `tools` object, listed whole.
+        if let Some(root) = host_namespace {
+            let Some(global_name) =
+                code_mode_names.get(&tool_name.clone().with_default_namespace())
+            else {
+                continue;
+            };
+            if tool.exposure != ToolExposure::Deferred {
+                continue;
+            }
+            tools.push(CatalogTool {
+                group: group_label(&tool_name, root),
+                listed_name: global_name.clone(),
+                global_name: global_name.clone(),
+                description: description.to_string(),
+                group_description: group_description.to_string(),
+            });
+            continue;
+        }
         let code_mode_name = codex_tools::code_mode_name_for_tool_name(&tool_name);
         if !codex_code_mode::is_code_mode_nested_tool(&code_mode_name) {
             continue;
@@ -87,14 +114,35 @@ pub(crate) fn deferred_code_mode_tools(
         if !taken.insert(global_name.clone()) || tool.exposure != ToolExposure::Deferred {
             continue;
         }
+        let group = group_of(&tool_name, &global_name);
         tools.push(CatalogTool {
-            group: group_of(&tool_name, &global_name),
+            listed_name: global_name[group.len()..].to_string(),
+            group,
             global_name,
             description: description.to_string(),
             group_description: group_description.to_string(),
         });
     }
     tools
+}
+
+/// A plain label for a tool's namespace under a host namespace root: the
+/// root itself, a plugin namespace without the root, `/` between parts.
+fn group_label(tool_name: &ToolName, root: &str) -> String {
+    let Some(namespace) = tool_name
+        .namespace
+        .as_deref()
+        .filter(|_| !tool_name.is_default_namespace())
+    else {
+        return String::new();
+    };
+    let label = namespace
+        .strip_prefix(root)
+        .and_then(|rest| rest.strip_prefix("__"))
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(namespace)
+        .trim_end_matches('_');
+    label.replace("__", "/")
 }
 
 fn group_of(tool_name: &ToolName, global_name: &str) -> String {

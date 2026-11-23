@@ -511,7 +511,7 @@ pub(crate) fn finalize_tool_router(
         registry.mcp_namespaces(),
     )
     .map_err(|error| CodexErrorDetails::InvalidRequest(error.to_string()))?;
-    let (code_mode_tool_names, exec_definitions) =
+    let (code_mode_tool_names, exec_definitions, code_mode_names) =
         register_code_mode_executors(turn_context, model_info, &mut registry, &indirect_prefixes);
     let include_tool_namespaces_info = turn_context
         .config
@@ -580,6 +580,7 @@ pub(crate) fn finalize_tool_router(
         model_info,
         &registry,
         &code_mode_tool_names,
+        &code_mode_names,
         hosted_specs,
     );
     let tool_namespaces_info = include_tool_namespaces_info
@@ -598,7 +599,11 @@ pub(crate) fn finalize_tool_router(
         tool_namespaces_info,
         &child_management_tools,
     )
-    .with_run_code_alias(run_code))
+    .with_run_code_alias(run_code)
+    .with_code_mode_names(
+        code_mode_names,
+        turn_context.config.code_mode.host_namespace.clone(),
+    ))
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -678,6 +683,7 @@ fn build_model_visible_specs(
     model_info: &ModelInfo,
     registry: &ToolRegistry,
     code_mode_tool_names: &BTreeMap<String, ToolName>,
+    code_mode_names: &codex_tools::CodeModeNames,
     hosted_specs: Vec<ToolSpec>,
 ) -> Vec<ToolSpec> {
     let mut specs = Vec::new();
@@ -695,6 +701,7 @@ fn build_model_visible_specs(
             exposure,
             &tool_name,
             code_mode_tool_names,
+            code_mode_names,
             spec,
         ));
     }
@@ -713,6 +720,7 @@ fn spec_for_model_request(
     exposure: ToolExposure,
     tool_name: &ToolName,
     code_mode_tool_names: &BTreeMap<String, ToolName>,
+    code_mode_names: &codex_tools::CodeModeNames,
     spec: ToolSpec,
 ) -> ToolSpec {
     // Fork addition: compact `wait` alongside the compact `exec` description
@@ -735,18 +743,70 @@ fn spec_for_model_request(
         && !is_excluded_from_code_mode(turn_context, tool_name)
         && codex_code_mode::is_code_mode_nested_tool(spec.name())
         && code_mode_tool_names
-            .get(&codex_code_mode::normalize_code_mode_identifier(
-                &codex_tools::code_mode_name_for_tool_name(tool_name),
-            ))
+            .get(
+                &code_mode_names
+                    .get(&tool_name.clone().with_default_namespace())
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        codex_code_mode::normalize_code_mode_identifier(
+                            &codex_tools::code_mode_name_for_tool_name(tool_name),
+                        )
+                    }),
+            )
             .is_some_and(|winner| winner == tool_name)
     {
-        codex_tools::augment_tool_spec_for_code_mode(
+        let spec = codex_tools::augment_tool_spec_for_code_mode(
             spec,
             turn_context.config.code_mode.tool_input_schema_max_bytes,
-        )
+        );
+        rename_code_mode_declarations(spec, code_mode_names)
     } else {
         spec
     }
+}
+
+/// Fork addition: the code-mode declarations in an augmented direct spec,
+/// under the names a host namespace root gives its tools.
+fn rename_code_mode_declarations(
+    mut spec: ToolSpec,
+    code_mode_names: &codex_tools::CodeModeNames,
+) -> ToolSpec {
+    if code_mode_names.is_empty() {
+        return spec;
+    }
+    let rename = |tool_name: ToolName, description: &mut String| {
+        if let Some(name) = code_mode_names.get(&tool_name.clone().with_default_namespace()) {
+            *description = codex_code_mode::rename_tool_declaration(
+                description,
+                &codex_tools::code_mode_name_for_tool_name(&tool_name),
+                name,
+            );
+        }
+    };
+    match &mut spec {
+        ToolSpec::Function(tool) => {
+            rename(ToolName::plain(tool.name.clone()), &mut tool.description)
+        }
+        ToolSpec::Freeform(tool) => {
+            rename(ToolName::plain(tool.name.clone()), &mut tool.description)
+        }
+        ToolSpec::Namespace(namespace) => {
+            for tool in &mut namespace.tools {
+                match tool {
+                    ResponsesApiNamespaceTool::Function(tool) => rename(
+                        ToolName::namespaced(namespace.name.clone(), tool.name.clone()),
+                        &mut tool.description,
+                    ),
+                    ResponsesApiNamespaceTool::Custom(tool) => rename(
+                        ToolName::namespaced(namespace.name.clone(), tool.name.clone()),
+                        &mut tool.description,
+                    ),
+                }
+            }
+        }
+        ToolSpec::ToolSearch { .. } | ToolSpec::WebSearch { .. } => {}
+    }
+    spec
 }
 
 #[instrument(level = "trace", skip_all)]
@@ -1086,10 +1146,11 @@ fn register_code_mode_executors(
 ) -> (
     BTreeMap<String, ToolName>,
     Option<Arc<Vec<codex_code_mode::ExecDefinition>>>,
+    codex_tools::CodeModeNames,
 ) {
     let tool_mode = effective_tool_mode(turn_context, model_info);
     if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
-        return (BTreeMap::new(), None);
+        return (BTreeMap::new(), None, codex_tools::CodeModeNames::new());
     }
 
     let mut code_mode_tool_names = BTreeMap::new();
@@ -1098,8 +1159,25 @@ fn register_code_mode_executors(
     let mut deferred_exec_prompt_tool_specs = Vec::new();
     let mut included_deferred_mcp_output_schema = false;
     let deferred_tools_guidance_enabled = model_info.supports_search_tool;
-    for (name, spec, tool) in code_mode_tools(turn_context, model_info, registry) {
-        code_mode_tool_names.insert(name, tool.runtime.tool_name());
+    let nested_tools = code_mode_tools(turn_context, model_info, registry).collect::<Vec<_>>();
+    // Fork addition: a host namespace root gives its tools short names.
+    let code_mode_names = match turn_context.config.code_mode.host_namespace.as_deref() {
+        Some(root) => {
+            let tool_names = nested_tools
+                .iter()
+                .map(|(_, _, tool)| tool.runtime.tool_name())
+                .collect::<Vec<_>>();
+            codex_tools::assign_code_mode_names(&tool_names, Some(root))
+        }
+        None => codex_tools::CodeModeNames::new(),
+    };
+    for (name, spec, tool) in nested_tools {
+        let tool_name = tool.runtime.tool_name();
+        let name = code_mode_names
+            .get(&tool_name.clone().with_default_namespace())
+            .cloned()
+            .unwrap_or(name);
+        code_mode_tool_names.insert(name, tool_name);
         let exposure = tool.exposure;
         let cached_runtime = tool.cached_runtime().cloned();
 
@@ -1133,10 +1211,24 @@ fn register_code_mode_executors(
         exec_prompt_tool_specs.iter(),
         code_mode_input_schema_max_bytes,
     );
-    let deferred_tools = collect_code_mode_exec_prompt_tool_definitions(
+    let mut deferred_tools = collect_code_mode_exec_prompt_tool_definitions(
         deferred_exec_prompt_tool_specs.iter().map(Arc::as_ref),
         code_mode_input_schema_max_bytes,
     );
+    // Fork addition: declared under their names on the `tools` object.
+    for definition in enabled_tools.iter_mut().chain(deferred_tools.iter_mut()) {
+        if let Some(name) =
+            code_mode_names.get(&definition.tool_name.clone().with_default_namespace())
+            && *name != definition.name
+        {
+            // A description that names the tool (code mode's search) follows.
+            let old = codex_code_mode::normalize_code_mode_identifier(&definition.name);
+            definition.description = definition
+                .description
+                .replace(&format!("tools.{old}("), &format!("tools.{name}("));
+            definition.name = name.clone();
+        }
+    }
     let model_messages = ResolvedModelMessages::from_model(model_info);
     if tool_mode == ToolMode::CodeModeOnly {
         indirect_prefixes.apply_exec_prompt(&mut enabled_tools, &mut namespace_descriptions);
@@ -1179,7 +1271,7 @@ fn register_code_mode_executors(
             exec_spec,
             code_mode_nested_tool_specs,
         )));
-        return (code_mode_tool_names, None);
+        return (code_mode_tool_names, None, code_mode_names);
     }
     let (mut exec_description, exec_definitions) =
         codex_code_mode::build_exec_tool_description_and_definitions(
@@ -1216,7 +1308,7 @@ fn register_code_mode_executors(
     )));
     registry.prepend_trusted(Arc::new(execute_handler));
 
-    (code_mode_tool_names, exec_definitions)
+    (code_mode_tool_names, exec_definitions, code_mode_names)
 }
 
 #[instrument(level = "trace", skip_all, fields(tool_spec_count = specs.len()))]
