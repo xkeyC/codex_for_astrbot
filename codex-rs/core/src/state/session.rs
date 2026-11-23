@@ -6,6 +6,7 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort;
 use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -122,10 +123,15 @@ pub(crate) struct SessionState {
     initial_settings_pending: bool,
     /// AstrBot: whose encrypted history requests may carry.
     pub(crate) encryption: crate::encryption_provenance::EncryptionProvenance,
-    /// AstrBot: the provider the latest regular turn ran on (on resume, the
-    /// latest applied thread settings', else the `SessionMeta` provider).
-    /// The previous model is compacted with only on that provider.
+    /// AstrBot: the provider the latest regular turn of this runtime ran on.
+    /// The previous model is compacted with only on its own provider.
     pub(crate) previous_turn_provider: Option<String>,
+    /// AstrBot: for resumed history, the provider each model last had in the
+    /// applied thread settings (a turn that failed early applies settings but
+    /// is not the previous turn, so this goes by the model), and the
+    /// `SessionMeta` provider for a model without any.
+    pub(crate) resumed_model_providers: HashMap<String, String>,
+    pub(crate) resumed_session_provider: Option<String>,
 }
 
 impl SessionState {
@@ -180,6 +186,8 @@ impl SessionState {
             initial_settings_pending: true,
             encryption: Default::default(),
             previous_turn_provider: None,
+            resumed_model_providers: HashMap::new(),
+            resumed_session_provider: None,
         }
     }
 

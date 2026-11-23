@@ -1666,7 +1666,16 @@ async fn maybe_run_previous_model_inline_compact(
     // AstrBot: the previous model belongs to the provider it ran on; another
     // provider may not serve it (commandcode: 403 MODEL_NOT_IN_PLAN). After a
     // provider switch the regular compaction below uses the current model.
-    let previous_provider = sess.state.lock().await.previous_turn_provider.clone();
+    let previous_provider = {
+        let state = sess.state.lock().await;
+        state.previous_turn_provider.clone().or_else(|| {
+            state
+                .resumed_model_providers
+                .get(&previous_model)
+                .cloned()
+                .or_else(|| state.resumed_session_provider.clone())
+        })
+    };
     if previous_provider.is_some_and(|provider| provider != turn_context.config.model_provider_id) {
         return Ok(());
     }
