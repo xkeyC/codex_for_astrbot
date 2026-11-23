@@ -324,6 +324,9 @@ pub struct ModelClient {
     /// AstrBot: requests leave out `x-codex-turn-metadata`
     /// (`model_provider_options.<id>.omit_turn_metadata`).
     omit_turn_metadata: bool,
+    /// AstrBot: the provider serves an open-weight model; requests leave out
+    /// OpenAI's encrypted history (`model_provider_options.<id>.open_model`).
+    open_model: bool,
     /// AstrBot: requests refer to their images by the file ids of uploads to
     /// the provider's Files API, which keeps them this many seconds
     /// (`model_provider_options.<id>.files_api`).
@@ -679,6 +682,7 @@ impl ModelClient {
             executed_tool_calls: None,
             chat_wire: None,
             omit_turn_metadata: false,
+            open_model: false,
             files_api_expires_seconds: None,
             api_key_cyber_access_programs:
                 cyber_access_program::ApiKeyCyberAccessPrograms::UnsupportedProvider,
@@ -707,6 +711,13 @@ impl ModelClient {
     /// AstrBot: leaves `x-codex-turn-metadata` out of the requests.
     pub fn with_omit_turn_metadata(mut self, omit: bool) -> Self {
         self.omit_turn_metadata = omit;
+        self
+    }
+
+    /// AstrBot: the provider serves an open-weight model, so requests leave
+    /// out the history's OpenAI-encrypted content.
+    pub fn with_open_model(mut self, open_model: bool) -> Self {
+        self.open_model = open_model;
         self
     }
 
@@ -1322,6 +1333,10 @@ impl ModelClient {
                     *encrypted_function_args = None;
                 }
             }
+        }
+        if self.open_model {
+            // AstrBot: an open model cannot read what OpenAI encrypted.
+            crate::open_model::strip_openai_encrypted_content(&mut input);
         }
         let reasoning = self.build_reasoning(model_info, effort, summary);
         let stream_options = (self.state.concurrent_reasoning_summaries_enabled

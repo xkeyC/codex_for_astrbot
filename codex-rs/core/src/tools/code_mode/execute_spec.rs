@@ -82,6 +82,42 @@ pub(crate) fn create_code_mode_function_tool(description: String) -> ToolSpec {
     })
 }
 
+/// Fork addition: `exec` as the `run_code({code, description})` function
+/// tool offered to open-weight models (`model_provider_options.<id>.open_model`).
+/// The call is routed to `exec`; `description` is the program's label.
+pub(crate) fn create_run_code_function_tool(description: String) -> ToolSpec {
+    use codex_tools::JsonSchema;
+    use codex_tools::ResponsesApiTool;
+
+    let properties = BTreeMap::from([
+        (
+            "code".to_string(),
+            JsonSchema::string(Some(
+                "The JavaScript program. It may start with an optional `// @exec: {...}` line."
+                    .to_string(),
+            )),
+        ),
+        (
+            "description".to_string(),
+            JsonSchema::string(Some(
+                "A short active-voice summary of what the program does.".to_string(),
+            )),
+        ),
+    ]);
+    ToolSpec::Function(ResponsesApiTool {
+        name: codex_code_mode::RUN_CODE_TOOL_NAME.to_string(),
+        description,
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::object(
+            properties,
+            Some(vec!["code".to_string(), "description".to_string()]),
+            Some(false.into()),
+        ),
+        output_schema: None,
+    })
+}
+
 pub(crate) fn create_code_mode_tool(description: String) -> ToolSpec {
     const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
 start: pragma_source | plain_source

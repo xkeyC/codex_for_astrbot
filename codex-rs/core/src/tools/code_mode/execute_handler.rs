@@ -283,19 +283,27 @@ impl CoreToolRuntime for CodeModeExecuteHandler {
     }
 }
 
-/// Extracts the script from function-tool arguments (`{"code": "..."}`).
+/// Extracts the script from function-tool arguments: `{"code": "..."}` for
+/// `exec` as a function tool, `{"code": "...", "description": "..."}` for
+/// `run_code` (other keys, the description among them, are ignored).
 fn exec_function_arguments_to_source(arguments: &str) -> Result<String, FunctionCallError> {
-    #[derive(serde::Deserialize)]
-    struct ExecFunctionArgs {
-        code: String,
+    let arguments: serde_json::Value = serde_json::from_str(arguments).map_err(|err| {
+        FunctionCallError::RespondToModel(format!(
+            "{PUBLIC_TOOL_NAME} expects JSON arguments with a `code` string: {err}"
+        ))
+    })?;
+    match arguments.get("code") {
+        Some(serde_json::Value::String(code)) if !code.trim().is_empty() => Ok(code.clone()),
+        Some(serde_json::Value::String(_)) => Err(FunctionCallError::RespondToModel(
+            "`code` is empty: pass the JavaScript source of the program.".to_string(),
+        )),
+        Some(_) => Err(FunctionCallError::RespondToModel(
+            "`code` must be a string holding the JavaScript source of the program.".to_string(),
+        )),
+        None => Err(FunctionCallError::RespondToModel(
+            "missing `code`: pass the JavaScript source of the program.".to_string(),
+        )),
     }
-    serde_json::from_str::<ExecFunctionArgs>(arguments)
-        .map(|args| args.code)
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "{PUBLIC_TOOL_NAME} expects {{\"code\": string}} arguments: {err}"
-            ))
-        })
 }
 
 #[cfg(test)]
@@ -309,5 +317,20 @@ mod exec_function_tool_tests {
             Some("text(1)".to_string())
         );
         assert!(exec_function_arguments_to_source("text(1)").is_err());
+        // `run_code` also carries a description, which is the program's label.
+        assert_eq!(
+            exec_function_arguments_to_source(r#"{"code":"text(1)","description":"Show 1"}"#).ok(),
+            Some("text(1)".to_string())
+        );
+        for arguments in [
+            r#"{"code":"  "}"#,
+            r#"{"code":1}"#,
+            r#"{"description":"x"}"#,
+        ] {
+            assert!(
+                exec_function_arguments_to_source(arguments).is_err(),
+                "{arguments}"
+            );
+        }
     }
 }

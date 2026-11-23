@@ -3571,6 +3571,16 @@
           "description": "Leave the `x-codex-turn-metadata` header (and its copy in the body's `client_metadata`) out of the provider's requests. Some providers take a request carrying it as Codex's and change course: DeepSeek then thinks whatever the reasoning effort.",
           "type": "boolean"
         },
+        "open_model": {
+          "default": false,
+          "description": "The provider serves an open-weight model (on the Responses or the chat wire). Its requests leave out what an OpenAI model left encrypted in the history (reasoning, compaction summaries, encrypted parts of messages and tool outputs; a part becomes a short placeholder), the first turn after such a switch tells the model so, and code mode's `exec` is offered as a `run_code({code, description})` function tool with a TypeScript SDK declaration.",
+          "type": "boolean"
+        },
+        "open_model_switch_notice": {
+          "default": null,
+          "description": "The text of that one-time notice, in place of the default.",
+          "type": "string"
+        },
         "wire": {
           "allOf": [
             {

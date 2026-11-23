@@ -351,6 +351,7 @@ impl MemoryStartupContext {
         )
         .with_chat_wire(codex_core::chat_wire_options(config))
         .with_omit_turn_metadata(codex_core::omit_turn_metadata(config))
+        .with_open_model(codex_core::open_model(config))
         .with_files_api(codex_core::files_api_expires_seconds(config));
 
         let mut client_session = model_client.new_session();

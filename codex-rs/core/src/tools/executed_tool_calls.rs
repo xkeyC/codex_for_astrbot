@@ -737,7 +737,8 @@ fn is_code_mode_wrapper(call: &ToolCall, source: &ToolCallSource, tool_mode: Too
             (call.tool_name.name.as_str(), &call.payload),
             (
                 crate::tools::code_mode::PUBLIC_TOOL_NAME,
-                ToolPayload::Custom { .. }
+                // Fork addition: `exec` as a function tool, or `run_code`.
+                ToolPayload::Custom { .. } | ToolPayload::Function { .. }
             ) | (
                 crate::tools::code_mode::WAIT_TOOL_NAME,
                 ToolPayload::Function { .. }

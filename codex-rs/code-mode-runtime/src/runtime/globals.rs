@@ -55,7 +55,13 @@ pub(super) fn install_globals(scope: &mut v8::PinScope<'_, '_>) -> Result<(), St
     set_global(scope, global, "yield_control", yield_control.into())?;
     set_global(scope, global, "exit", exit.into())?;
 
-    let helpers = concat!(include_str!("settled.js"), "\n", include_str!("content.js"));
+    let helpers = concat!(
+        include_str!("settled.js"),
+        "\n",
+        include_str!("content.js"),
+        "\n",
+        include_str!("inspect.js")
+    );
     let source = v8::String::new(scope, helpers)
         .ok_or_else(|| "failed to allocate JavaScript helpers".to_string())?;
     v8::Script::compile(scope, source, /*origin*/ None)

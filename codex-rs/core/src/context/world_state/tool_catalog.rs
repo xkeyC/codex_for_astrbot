@@ -101,6 +101,8 @@ pub(crate) struct ToolCatalogState {
     /// History already holds a catalog: an empty one is kept as well, so the
     /// next sender with tools gets changes rather than a whole new listing.
     had_previous: bool,
+    /// Fork addition: the tool is `run_code` (an open model's `exec`).
+    run_code: bool,
 }
 
 impl ToolCatalogState {
@@ -226,7 +228,14 @@ impl ToolCatalogState {
             present,
             rendered_whole: AtomicBool::new(false),
             had_previous: previous.is_some(),
+            run_code: false,
         }
+    }
+
+    /// Fork addition: the listing names `run_code`, not `exec`.
+    pub(crate) fn with_run_code(mut self, run_code: bool) -> Self {
+        self.run_code = run_code;
+        self
     }
 }
 
@@ -260,6 +269,12 @@ impl ToolCatalogState {
                 }
                 render_full(current)
             }
+        };
+        // The intro's one mention of the tool.
+        let body = if self.run_code {
+            body.replacen("`exec`", "`run_code`", 1)
+        } else {
+            body
         };
         Some(Box::new(WorldStateContextFragment {
             fragment: RenderedWorldStateFragment::new(

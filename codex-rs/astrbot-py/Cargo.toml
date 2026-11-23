@@ -57,6 +57,7 @@ toml = { workspace = true }
 anyhow = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-config = { workspace = true }
+codex-history = { workspace = true }
 codex-model-provider-info = { workspace = true }
 codex-sandboxing = { workspace = true }
 codex-test-binary-support = { workspace = true }

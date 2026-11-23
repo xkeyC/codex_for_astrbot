@@ -13,6 +13,7 @@
 //! extra_body_remove = ["reasoning_effort"]
 //! omit_turn_metadata = true
 //! files_api = { expires_seconds = 86400 }
+//! open_model = true
 //!
 //! [model_provider_options.deepseek.models."deepseek-v4.1-flash"]
 //! context_window = 128000
@@ -62,6 +63,18 @@ pub struct ModelProviderOptions {
     /// (the provider's prefix cache still matches).
     #[serde(default)]
     pub files_api: Option<FilesApiOptions>,
+    /// The provider serves an open-weight model (on the Responses or the chat
+    /// wire). Its requests leave out what an OpenAI model left encrypted in
+    /// the history (reasoning, compaction summaries, encrypted parts of
+    /// messages and tool outputs; a part becomes a short placeholder), the
+    /// first turn after such a switch tells the model so, and code mode's
+    /// `exec` is offered as a `run_code({code, description})` function tool
+    /// with a TypeScript SDK declaration.
+    #[serde(default)]
+    pub open_model: bool,
+    /// The text of that one-time notice, in place of the default.
+    #[serde(default)]
+    pub open_model_switch_notice: Option<String>,
     /// Model metadata by model slug: any fields of Codex's model info (for
     /// example `context_window`, `auto_compact_token_limit`,
     /// `supported_reasoning_levels` as `[{effort, description}]`,

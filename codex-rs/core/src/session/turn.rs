@@ -454,6 +454,8 @@ pub(crate) async fn run_turn(
         )
         .await?;
     }
+    // AstrBot: an open model is told once that it cannot read some history.
+    super::open_model_notice::maybe_record_open_model_switch_notice(&sess, &turn_context).await;
     let mut can_drain_pending_input = input.is_empty();
     if run_hooks_and_record_inputs(
         &sess,

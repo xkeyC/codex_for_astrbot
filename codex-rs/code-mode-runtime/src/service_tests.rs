@@ -1608,6 +1608,8 @@ async fn global_scope_contains_only_allowed_items() {
         "generatedImage",
         "globalThis",
         "image",
+        // Fork addition: `inspect(...values)`.
+        "inspect",
         "isFinite",
         "isNaN",
         "load",

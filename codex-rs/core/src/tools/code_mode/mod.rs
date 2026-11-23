@@ -63,6 +63,28 @@ pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
 pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
 
+/// Fork addition: whether `exec` is offered as `run_code` (and Code Mode
+/// presented for an open-weight model) this turn: the provider's
+/// `open_model` with Code Mode on.
+pub(crate) fn run_code_enabled(
+    turn_context: &TurnContext,
+    model_info: &codex_protocol::openai_models::ModelInfo,
+) -> bool {
+    crate::provider_compaction::open_model(&turn_context.config)
+        && matches!(
+            crate::tools::effective_tool_mode(turn_context, model_info),
+            ToolMode::CodeMode | ToolMode::CodeModeOnly
+        )
+}
+
+/// Fork addition: whether a model's call of this name is to `exec`, as a
+/// custom or function tool (`exec`, or `run_code` for an open model).
+pub(crate) fn is_exec_call_name(tool_name: &ToolName) -> bool {
+    tool_name.is_default_namespace()
+        && (tool_name.name == PUBLIC_TOOL_NAME
+            || tool_name.name == codex_code_mode::RUN_CODE_TOOL_NAME)
+}
+
 /// Returns true for the code-mode `exec` tool in the default namespace.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
     tool_name.is_default_namespace() && tool_name.name == PUBLIC_TOOL_NAME

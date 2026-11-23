@@ -68,6 +68,11 @@ impl ToolExecutor<ToolInvocation> for CodeModeWaitHandler {
 }
 
 impl CodeModeWaitHandler {
+    /// Fork addition: a handler presented with `spec` (the `run_code` wait).
+    pub(crate) fn with_spec(spec: ToolSpec) -> Self {
+        Self { spec }
+    }
+
     pub(crate) fn new(
         description_override: Option<&str>,
         parameters_override: Option<&str>,

@@ -506,15 +506,36 @@ impl CoreTurnHost {
         if text.trim().is_empty() {
             return Ok(());
         }
+        let output = FunctionCallOutputPayload::from_text(text);
+        // Fork fix: `exec` called as a function tool (`exec_as_function_tool`,
+        // or an open model's `run_code`) gets a function call output.
+        let exec_is_function = self
+            .tool_runtime
+            .step_context
+            .tool_router
+            .registered_tool(&codex_tools::ToolName::plain(PUBLIC_TOOL_NAME))
+            .is_some_and(|tool| matches!(tool.spec().as_ref(), codex_tools::ToolSpec::Function(_)));
+        let item = if exec_is_function {
+            ResponseItem::FunctionCallOutput {
+                id: None,
+                call_id: Some(call_id),
+                name: None,
+                namespace: None,
+                output,
+                internal_chat_message_metadata_passthrough: None,
+            }
+        } else {
+            ResponseItem::CustomToolCallOutput {
+                id: None,
+                call_id,
+                name: Some(PUBLIC_TOOL_NAME.to_string()),
+                output,
+                internal_chat_message_metadata_passthrough: None,
+            }
+        };
         self.session
             .inject_if_running(vec![ResponseItemEnvelope {
-                item: ResponseItem::CustomToolCallOutput {
-                    id: None,
-                    call_id,
-                    name: Some(PUBLIC_TOOL_NAME.to_string()),
-                    output: FunctionCallOutputPayload::from_text(text),
-                    internal_chat_message_metadata_passthrough: None,
-                },
+                item,
                 metadata: Some(CodexHarnessMetadata {
                     history_truncation_token_limit: Some(output_token_limit),
                     ..Default::default()

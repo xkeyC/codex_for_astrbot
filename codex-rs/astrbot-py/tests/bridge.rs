@@ -54,6 +54,10 @@ mod bridge {
     mod dynamic_tools_update;
     #[path = "files_api.rs"]
     mod files_api;
+    #[path = "open_model.rs"]
+    mod open_model;
+    #[path = "open_model_run_code.rs"]
+    mod open_model_run_code;
     #[path = "realtime_local_infra.rs"]
     mod realtime_local_infra;
     #[path = "tool_catalog.rs"]

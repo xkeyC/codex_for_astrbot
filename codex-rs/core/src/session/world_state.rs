@@ -464,12 +464,18 @@ impl Session {
                 .and_then(|baseline| {
                     baseline.section_as::<ToolCatalogSnapshot>(ToolCatalogState::ID)
                 });
-            world_state.add_section(ToolCatalogState::new(
-                step_context.tool_router.deferred_code_mode_tools(
-                    &turn_context.config.code_mode.excluded_tool_namespaces,
-                ),
-                previous.as_ref(),
-            ));
+            world_state.add_section(
+                ToolCatalogState::new(
+                    step_context.tool_router.deferred_code_mode_tools(
+                        &turn_context.config.code_mode.excluded_tool_namespaces,
+                    ),
+                    previous.as_ref(),
+                )
+                .with_run_code(crate::tools::code_mode::run_code_enabled(
+                    turn_context,
+                    &step_context.settings.model_info,
+                )),
+            );
         }
         let environments = step_context.environments.to_selections();
         let previous_world_state = self.state.lock().await.history.world_state_checkpoint();

@@ -7,10 +7,36 @@ pub(crate) fn create_wait_tool(
     description_override: Option<&str>,
     parameters_override: Option<&str>,
 ) -> ToolSpec {
+    create_wait_tool_for(description_override, parameters_override, "exec cell")
+}
+
+/// Fork addition: `wait` for the `run_code` programs of open-weight models.
+pub(crate) fn create_run_code_wait_tool(compact: bool) -> ToolSpec {
+    let description = codex_code_mode::build_run_code_wait_tool_description(compact);
+    if compact {
+        let mut spec = create_compact_wait_tool();
+        if let ToolSpec::Function(tool) = &mut spec {
+            tool.description = description.to_string();
+        }
+        spec
+    } else {
+        create_wait_tool_for(
+            Some(description),
+            /*parameters_override*/ None,
+            "run_code program",
+        )
+    }
+}
+
+fn create_wait_tool_for(
+    description_override: Option<&str>,
+    parameters_override: Option<&str>,
+    cell: &str,
+) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "cell_id".to_string(),
-            JsonSchema::string(Some("Identifier of the running exec cell.".to_string())),
+            JsonSchema::string(Some(format!("Identifier of the running {cell}."))),
         ),
         (
             "yield_time_ms".to_string(),
@@ -26,9 +52,9 @@ pub(crate) fn create_wait_tool(
         ),
         (
             "terminate".to_string(),
-            JsonSchema::boolean(Some(
-                "True stops the running exec cell; false or omitted waits for output.".to_string(),
-            )),
+            JsonSchema::boolean(Some(format!(
+                "True stops the running {cell}; false or omitted waits for output."
+            ))),
         ),
     ]);
 

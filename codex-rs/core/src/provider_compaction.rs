@@ -59,3 +59,23 @@ pub fn chat_wire_options(config: &Config) -> Option<ChatOptions> {
         remove: options.extra_body_remove.clone(),
     })
 }
+
+/// Whether the configured provider serves an open-weight model
+/// (`open_model`): OpenAI-encrypted history is left out of its requests,
+/// the model is told once, and code mode's `exec` is offered as `run_code`.
+pub fn open_model(config: &Config) -> bool {
+    config
+        .model_provider_options
+        .get(&config.model_provider_id)
+        .is_some_and(|options| options.open_model)
+}
+
+/// The configured provider's text for the one-time switch notice
+/// (`open_model_switch_notice`), when it has one.
+pub(crate) fn open_model_switch_notice(config: &Config) -> Option<&str> {
+    config
+        .model_provider_options
+        .get(&config.model_provider_id)?
+        .open_model_switch_notice
+        .as_deref()
+}

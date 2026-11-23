@@ -250,9 +250,15 @@ impl ToolSearchHandler {
         .map_err(|error| FunctionCallError::Fatal(error.to_string()))?;
 
         if nested {
+            // Fork addition: `run_code` (open models) gets SDK declarations.
+            let run_code = crate::tools::code_mode::run_code_enabled(
+                &step_context.turn,
+                &step_context.settings.model_info,
+            );
             let tools = self.search_code_mode(
                 query,
                 limit,
+                run_code,
                 &step_context.tool_router,
                 step_context
                     .turn
@@ -280,10 +286,12 @@ impl ToolSearchHandler {
 impl CoreToolRuntime for ToolSearchHandler {}
 
 impl ToolSearchHandler {
+    #[allow(clippy::too_many_arguments)]
     fn search_code_mode(
         &self,
         query: &str,
         limit: usize,
+        run_code: bool,
         router: &ToolRouter,
         code_mode_input_schema_max_bytes: Option<usize>,
         indirect_prefixes: &IndirectNamespacePrefixes<'_>,
@@ -309,6 +317,33 @@ impl ToolSearchHandler {
                 let Some(tool) = router.registered_tool(tool_name) else {
                     continue;
                 };
+                if run_code {
+                    // The tool's entries of the `run_code` SDK declarations.
+                    let Some(mut definition) =
+                        codex_tools::collect_code_mode_exec_prompt_tool_definitions(
+                            std::iter::once(tool.spec().as_ref()),
+                            code_mode_input_schema_max_bytes,
+                        )
+                        .into_iter()
+                        .find(|definition| {
+                            definition.tool_name.clone().with_default_namespace() == candidate_name
+                        })
+                    else {
+                        continue;
+                    };
+                    indirect_prefixes.apply_code_mode_description(
+                        &definition.tool_name,
+                        &mut definition.description,
+                    );
+                    tools.push(CodeModeSearchResult {
+                        name,
+                        description: codex_code_mode::render_run_code_tool_declaration(&definition),
+                    });
+                    if tools.len() == limit {
+                        return tools;
+                    }
+                    continue;
+                }
                 let definitions = prepare_code_mode_tool_definitions(
                     tool.cached_runtime().map(Arc::as_ref),
                     || Cow::Owned(Arc::unwrap_or_clone(tool.spec())),

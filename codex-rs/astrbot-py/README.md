@@ -113,6 +113,8 @@ behavior is unchanged unless a key below is set. AstrBot sets them through
 | `model_provider_options.<id>.compaction` | `auto` (default), `local` or `remote` compaction for that provider. |
 | `model_provider_options.<id>.models.<slug>` | Model metadata (context window, reasoning levels, modalities, ...) for models Codex does not know. |
 | `model_provider_options.<id>.files_api`, `.omit_turn_metadata` | Send images once through the provider's Files API; leave out the turn-metadata header. |
+| `model_provider_options.<id>.open_model` | The provider serves an open-weight model (Responses or chat wire): OpenAI-encrypted history (reasoning, compaction summaries, encrypted parts of agent messages and tool outputs, as placeholders) is left out of its requests, the first turn after such a switch gets a one-time user-role notice, and code mode's `exec` is offered as a `run_code({code, description})` function tool with a TypeScript SDK description, `inspect(...)` and a nested `tool_search` for deferred tools. |
+| `model_provider_options.<id>.open_model_switch_notice` | Text of that one-time notice, in place of the default. |
 | `model_tool_mode` | Force `direct`, `code_mode` or `code_mode_only` regardless of the model catalog. |
 | `features.code_mode.compact_exec_description` | Shorter generic part of the `exec` description. |
 | `features.code_mode.exec_as_function_tool` | `exec` as a plain function tool for providers without custom (grammar) tools. |

@@ -412,17 +412,26 @@ pub(crate) fn finalize_tool_router(
     let tool_mode = effective_tool_mode(turn_context, model_info);
     let code_mode_enabled = matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly);
     if code_mode_enabled {
+        // Fork addition: an open model's `exec` takes the name `run_code`.
+        let run_code_name = crate::tools::code_mode::run_code_enabled(turn_context, model_info)
+            .then(|| ToolName::plain(codex_code_mode::RUN_CODE_TOOL_NAME));
         for tool_name in [
             ToolName::plain(codex_code_mode::PUBLIC_TOOL_NAME),
             ToolName::plain(codex_code_mode::WAIT_TOOL_NAME),
-        ] {
+        ]
+        .into_iter()
+        .chain(run_code_name)
+        {
             if registry.remove(&tool_name).is_some() {
                 registry.record_collision(tool_name);
             }
         }
     }
     let tool_search_name = ToolName::plain(TOOL_SEARCH_TOOL_NAME);
-    let search_exposure = if model_info.supports_search_tool
+    // Fork addition: an open model finds deferred tools with the nested
+    // `tool_search` of `run_code`, never the hosted search tool.
+    let run_code = crate::tools::code_mode::run_code_enabled(turn_context, model_info);
+    let search_exposure = if (model_info.supports_search_tool || run_code)
         && registry.tool_policy.allows(&tool_search_name)
         && registry.entries().any(|tool| {
             tool.runtime.tool_name() != tool_search_name
@@ -446,6 +455,11 @@ pub(crate) fn finalize_tool_router(
         )
     } else {
         None
+    };
+    let search_exposure = if run_code {
+        search_exposure.map(|_| ToolExposure::CodeModeOnly)
+    } else {
+        search_exposure
     };
     if search_exposure.is_some() {
         if registry.remove(&tool_search_name).is_some() {
@@ -583,7 +597,8 @@ pub(crate) fn finalize_tool_router(
         exec_definitions,
         tool_namespaces_info,
         &child_management_tools,
-    ))
+    )
+    .with_run_code_alias(run_code))
 }
 
 fn apply_direct_model_only_namespace_overrides(
@@ -700,8 +715,11 @@ fn spec_for_model_request(
     code_mode_tool_names: &BTreeMap<String, ToolName>,
     spec: ToolSpec,
 ) -> ToolSpec {
-    // Fork addition: compact `wait` alongside the compact `exec` description.
+    // Fork addition: compact `wait` alongside the compact `exec` description
+    // (`run_code` has its own).
+    let run_code = crate::tools::code_mode::run_code_enabled(turn_context, model_info);
     let spec = if turn_context.config.code_mode.compact_exec_description
+        && !run_code
         && tool_name.is_default_namespace()
         && tool_name.name == codex_code_mode::WAIT_TOOL_NAME
     {
@@ -710,7 +728,9 @@ fn spec_for_model_request(
         spec
     };
     let tool_mode = effective_tool_mode(turn_context, model_info);
+    // Fork addition: `run_code` declares its tools itself.
     if matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly)
+        && !run_code
         && exposure.is_available_in_code_mode()
         && !is_excluded_from_code_mode(turn_context, tool_name)
         && codex_code_mode::is_code_mode_nested_tool(spec.name())
@@ -1033,7 +1053,8 @@ fn code_mode_tools<'a>(
                 if turn_context
                     .config
                     .features
-                    .enabled(Feature::CodeModeToolSearch) =>
+                    .enabled(Feature::CodeModeToolSearch)
+                    || crate::tools::code_mode::run_code_enabled(turn_context, model_info) =>
             {
                 codex_tools::code_mode_name_for_tool_name(&tool_name)
             }
@@ -1133,6 +1154,33 @@ fn register_code_mode_executors(
         && features.enabled(Feature::IncrementalTools)
         && features.enabled(Feature::IncrementalExecTools)
         && tool_mode == ToolMode::CodeModeOnly;
+    // Fork addition: `exec` as `run_code` for an open-weight model, with its
+    // own description and `wait`.
+    if crate::tools::code_mode::run_code_enabled(turn_context, model_info) {
+        let description = codex_code_mode::build_run_code_tool_description(
+            &enabled_tools,
+            &namespace_descriptions,
+            codex_code_mode::RunCodeDescriptionOptions {
+                default_exec_yield_time_ms: turn_context
+                    .config
+                    .code_mode
+                    .default_exec_yield_time_ms,
+                image_detail_visibility,
+            },
+        );
+        let exec_spec =
+            crate::tools::code_mode::execute_spec::create_run_code_function_tool(description);
+        registry.prepend_trusted(Arc::new(CodeModeWaitHandler::with_spec(
+            crate::tools::code_mode::wait_spec::create_run_code_wait_tool(
+                turn_context.config.code_mode.compact_exec_description,
+            ),
+        )));
+        registry.prepend_trusted(Arc::new(CodeModeExecuteHandler::new(
+            exec_spec,
+            code_mode_nested_tool_specs,
+        )));
+        return (code_mode_tool_names, None);
+    }
     let (mut exec_description, exec_definitions) =
         codex_code_mode::build_exec_tool_description_and_definitions(
             &enabled_tools,

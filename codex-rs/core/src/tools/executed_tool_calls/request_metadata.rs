@@ -445,6 +445,18 @@ fn code_mode_input_matches_output(
                     name,
                 ))
         }
+        // Fork addition: `exec` called as a function tool (or as `run_code`).
+        (
+            ResponseItem::FunctionCall {
+                name,
+                namespace,
+                call_id,
+                ..
+            },
+            ResponseItem::FunctionCallOutput { .. },
+        ) if call_id == origin => crate::tools::code_mode::is_exec_call_name(
+            &codex_tools::ToolName::new(namespace.clone(), name),
+        ),
         (
             ResponseItem::FunctionCall {
                 name,

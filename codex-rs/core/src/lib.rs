@@ -46,9 +46,12 @@ mod compact_token_budget;
 // AstrBot: per-provider compaction mode.
 mod provider_compaction;
 mod provider_files;
+// AstrBot: open-weight models (`model_provider_options.<id>.open_model`).
+mod open_model;
 pub use provider_compaction::chat_wire_options;
 pub use provider_compaction::files_api_expires_seconds;
 pub use provider_compaction::omit_turn_metadata;
+pub use provider_compaction::open_model;
 mod thread_startup_metadata;
 /// Catalog handle installed in each thread's extension data before startup callbacks.
 pub use codex_models_manager::manager::SharedModelsManager;

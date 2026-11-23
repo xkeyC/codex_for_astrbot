@@ -286,6 +286,7 @@ mod rollout_budget;
 mod rollout_reconstruction;
 mod sampling_interrupt;
 pub(crate) use sampling_interrupt::SamplingInterrupt;
+mod open_model_notice;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod startup_prewarm;

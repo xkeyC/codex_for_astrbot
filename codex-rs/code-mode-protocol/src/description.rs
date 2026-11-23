@@ -55,7 +55,7 @@ const WAIT_DESCRIPTION_TEMPLATE: &str = r#"- Use `wait` only after `exec` return
 - If the cell is still running, `wait` may yield again with the same `cell_id`.
 - If the cell has already finished, `wait` returns the completed result and closes the cell."#;
 // Based off of https://modelcontextprotocol.io/specification/draft/schema#calltoolresult
-const MCP_TYPESCRIPT_PREAMBLE: &str = r#"type Role = "user" | "assistant";
+pub(crate) const MCP_TYPESCRIPT_PREAMBLE: &str = r#"type Role = "user" | "assistant";
 type MetaObject = Record<string, unknown>;
 type Annotations = {
   audience?: Role[];
@@ -481,7 +481,17 @@ fn render_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
         CodeModeToolKind::Function => "args",
         CodeModeToolKind::Freeform => "input",
     };
-    let input_type = match definition.kind {
+    render_code_mode_sample(
+        &definition.description,
+        &definition.name,
+        input_name,
+        definition_input_type(definition),
+        definition_output_type(definition),
+    )
+}
+
+pub(crate) fn definition_input_type(definition: &ToolDefinition) -> String {
+    match definition.kind {
         CodeModeToolKind::Function => definition
             .input_schema
             .as_ref()
@@ -491,8 +501,11 @@ fn render_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
             })
             .unwrap_or_else(|| "unknown".to_string()),
         CodeModeToolKind::Freeform => "string".to_string(),
-    };
-    let output_type = if let Some(structured_content_schema) =
+    }
+}
+
+pub(crate) fn definition_output_type(definition: &ToolDefinition) -> String {
+    if let Some(structured_content_schema) =
         mcp_structured_content_schema(definition.output_schema.as_ref())
     {
         let structured_content_type = render_json_schema_to_typescript(structured_content_schema);
@@ -507,14 +520,7 @@ fn render_code_mode_sample_for_definition(definition: &ToolDefinition) -> String
             .as_ref()
             .map(render_json_schema_to_typescript)
             .unwrap_or_else(|| "unknown".to_string())
-    };
-    render_code_mode_sample(
-        &definition.description,
-        &definition.name,
-        input_name,
-        input_type,
-        output_type,
-    )
+    }
 }
 
 fn render_code_mode_tool_declaration(

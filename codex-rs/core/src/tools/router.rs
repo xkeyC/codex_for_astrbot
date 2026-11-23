@@ -104,6 +104,8 @@ pub struct ToolRouter {
     exec_definitions: Option<Arc<Vec<codex_code_mode::ExecDefinition>>>,
     tool_namespaces_info: Option<TurnToolNamespacesInfo>,
     can_manage_children: bool,
+    /// Fork addition: the model calls `exec` as `run_code` (open models).
+    run_code_alias: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,12 +156,19 @@ impl ToolRouter {
             exec_definitions,
             tool_namespaces_info,
             can_manage_children: false,
+            run_code_alias: false,
         };
         router.can_manage_children = !child_management_tools.is_empty()
             && child_management_tools
                 .iter()
                 .all(|name| router.exposes_tool(name));
         router
+    }
+
+    /// Fork addition: routes the model's `run_code` calls to `exec`.
+    pub(crate) fn with_run_code_alias(mut self, run_code_alias: bool) -> Self {
+        self.run_code_alias = run_code_alias;
+        self
     }
 
     pub(crate) fn model_visible_specs(&self) -> Arc<[ToolSpec]> {
@@ -300,8 +309,16 @@ impl ToolRouter {
                 ref mut encrypted_function_args,
                 ..
             } => {
-                let tool_name =
+                let mut tool_name =
                     ToolName::new(namespace.clone(), name.clone()).with_default_namespace();
+                // Fork addition: an open model's `run_code` is `exec`.
+                if self.run_code_alias
+                    && tool_name.is_default_namespace()
+                    && tool_name.name == codex_code_mode::RUN_CODE_TOOL_NAME
+                {
+                    tool_name = ToolName::plain(crate::tools::code_mode::PUBLIC_TOOL_NAME)
+                        .with_default_namespace();
+                }
                 let retain_native_call = self
                     .registry
                     .registered_tool(&tool_name)
