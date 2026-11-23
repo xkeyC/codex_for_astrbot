@@ -39,7 +39,6 @@ set `RUSTY_V8_ARCHIVE` and `RUSTY_V8_SRC_BINDING_PATH`.
 | Environment variable | Effect |
 | --- | --- |
 | `CODEX_ASTRBOT_SKIP_HOST=1` | Skip the code-mode host; no V8 download. Code mode then needs AstrBot's `code_mode_host` to point at a host built from this same fork. |
-| `CODEX_ASTRBOT_WITH_CODEX=1` | Also build the `codex` executable, which the binding takes as `codex_self_exe` for Codex's own local execution. AstrBot does not use it (see below). Large. |
 | `CODEX_ASTRBOT_DEBUG=1` | Build the helper binaries with the dev profile. |
 | `CARGO_PROFILE_RELEASE_OPT_LEVEL=3` | Build the wheel optimised for speed instead of size (default `s`: about a third smaller and faster to compile). |
 | `RUSTY_V8_ARCHIVE=<path>`, `RUSTY_V8_SRC_BINDING_PATH=<path>` | Use a V8 archive and binding already on disk. |
@@ -54,8 +53,8 @@ returns their installed path, which is where AstrBot looks for
 ## How AstrBot uses it
 
 `Runtime.create(options_json)` takes `codex_home`, `config` (dotted overrides
-applied to every thread, like `-c key=value`), `code_mode_host`,
-`codex_self_exe`, `approve_every_command` and `originator`. Threads are
+applied to every thread, like `-c key=value`), `code_mode_host` and
+`originator`. Threads are
 started or resumed with `cwd`, `model`, `model_provider`, `base_instructions`,
 `developer_instructions`, per-thread `config`, `dynamic_tools`, `ephemeral`,
 `no_environment` and (resume) `rollout_path`. Turns go through `submit_turn`
@@ -67,8 +66,8 @@ and `list_models` cover the rest.
 Codex's own execution is off in AstrBot: threads start with
 `no_environment` and `features.shell_tool = false`, and AstrBot supplies
 `exec_command`, `write_stdin` and `apply_patch` as dynamic tools running in
-its own sandbox. AstrBot passes no `codex_self_exe`, so the `codex`
-executable is not needed; memory consolidation then edits the memory files
+its own sandbox. The binding has no exec environment at all (no `codex`
+executable, no command approvals); memory consolidation then edits the memory files
 through file tools of the memories extension instead of a shell. Code mode
 (`code_mode_only` by default) does need `codex-code-mode-host`.
 

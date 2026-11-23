@@ -100,8 +100,8 @@ impl Runtime {
         Ok(())
     }
 
-    /// Create a runtime. `options_json`: `{"codex_home", "config", "codex_self_exe",
-    /// "code_mode_host", "approve_every_command", "originator"}`.
+    /// Create a runtime. `options_json`: `{"codex_home", "config",
+    /// "code_mode_host", "originator"}`.
     #[staticmethod]
     fn create<'py>(py: Python<'py>, options_json: String) -> PyResult<Bound<'py, PyAny>> {
         let options: EngineOptions = parse(&options_json)?;

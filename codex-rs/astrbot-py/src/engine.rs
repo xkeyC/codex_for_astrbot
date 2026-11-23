@@ -27,7 +27,6 @@ use codex_core::local_agent_graph_store_from_state_db;
 use codex_core::passthrough_image_store;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
-use codex_exec_server::ExecServerRuntimeOptions;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_home::CodexHomeUserInstructionsProvider;
 use codex_image_generation_extension::SavedImage;
@@ -39,7 +38,6 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AdditionalContextEntry;
 use codex_protocol::protocol::AdditionalContextKind;
-use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
@@ -72,19 +70,10 @@ pub struct EngineOptions {
     /// Dotted config overrides applied to every thread (`-c key=value`).
     #[serde(default)]
     pub config: serde_json::Map<String, JsonValue>,
-    /// `codex` executable used for sandbox / fs helper re-exec. Optional:
-    /// without it, the local exec environment is unavailable.
-    #[serde(default)]
-    pub codex_self_exe: Option<PathBuf>,
     /// `codex-code-mode-host` executable. Required for code mode, because
     /// the default lookup next to `current_exe()` finds python.exe.
     #[serde(default)]
     pub code_mode_host: Option<PathBuf>,
-    /// Ask for approval before every native command (and patch), so the host
-    /// can decide per sender. Applied as a harness override because config
-    /// files no longer accept `approval_policy = "untrusted"`.
-    #[serde(default)]
-    pub approve_every_command: bool,
     /// `originator` header, User-Agent prefix and suffix for every request of
     /// this process, as an app-server client with this `clientInfo.name` gets
     /// them; defaults to `codex_exec` with no suffix, as `codex exec` sends.
@@ -244,21 +233,11 @@ impl Engine {
             AuthManager::shared_from_config(&config, /*enable_codex_api_key_env*/ false)
                 .await
                 .map_err(|err| anyhow!("auth manager: {err:?}"))?;
-        // Without a codex executable there is no local exec environment; AstrBot
-        // then provides execution through its own tools (the default).
-        let environment_manager = Arc::new(match options.codex_self_exe.clone() {
-            Some(exe) => EnvironmentManager::from_codex_home(
-                config.codex_home.clone(),
-                Some(ExecServerRuntimeOptions::from_optional_paths(
-                    Some(exe),
-                    None,
-                )?),
-                config.http_client_factory(),
-            )
-            .await
-            .map_err(|err| anyhow!("environment manager: {err}"))?,
-            None => EnvironmentManager::without_environments(config.http_client_factory()),
-        });
+        // Codex's own execution is not used: AstrBot runs commands in its
+        // sandbox through dynamic tools, so threads get no exec environment.
+        let environment_manager = Arc::new(EnvironmentManager::without_environments(
+            config.http_client_factory(),
+        ));
         let thread_store = ThreadStoreBuilder::from_config(&config, state_db.clone()).build();
         let installation_id = resolve_installation_id(&config.codex_home).await?;
         let user_instructions_provider = Arc::new(CodexHomeUserInstructionsProvider::new(
@@ -692,10 +671,6 @@ async fn build_config(
         base_instructions: params.base_instructions.clone(),
         developer_instructions: params.developer_instructions.clone(),
         ephemeral: Some(params.ephemeral),
-        codex_self_exe: options.codex_self_exe.clone(),
-        approval_policy: options
-            .approve_every_command
-            .then_some(AskForApproval::UnlessTrusted),
         ..Default::default()
     };
     let mut config = ConfigBuilder::default()

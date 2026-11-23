@@ -9,8 +9,6 @@ Environment switches (build time):
 
 - ``CODEX_ASTRBOT_SKIP_HOST=1``  skip the code-mode host. Code mode then needs
   ``code_mode_host`` to point at a host built from this same fork.
-- ``CODEX_ASTRBOT_WITH_CODEX=1`` also build the ``codex`` executable, needed
-  only for Codex's own (native) command execution; AstrBot does not use it.
 - ``CODEX_ASTRBOT_DEBUG=1``      build the helpers with the dev profile.
 - ``CARGO_PROFILE_RELEASE_OPT_LEVEL`` defaults to ``s`` (size); set ``3`` for
   the workspace's speed-optimised release.
@@ -43,14 +41,11 @@ HERE = Path(__file__).resolve().parent
 WORKSPACE = HERE.parent
 BIN_DIR = HERE / "python" / "codex_astrbot" / "bin"
 # binary -> cargo package
-HELPERS = {"codex-code-mode-host": "codex-code-mode-host", "codex": "codex-cli"}
+HELPERS = {"codex-code-mode-host": "codex-code-mode-host"}
 
 
 def _helpers() -> list[str]:
-    wanted = [] if os.environ.get("CODEX_ASTRBOT_SKIP_HOST") else ["codex-code-mode-host"]
-    if os.environ.get("CODEX_ASTRBOT_WITH_CODEX"):
-        wanted.append("codex")
-    return wanted
+    return [] if os.environ.get("CODEX_ASTRBOT_SKIP_HOST") else ["codex-code-mode-host"]
 
 
 def _v8_version() -> str:
