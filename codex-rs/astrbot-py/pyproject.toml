@@ -10,7 +10,7 @@ description = "In-process codex-core binding for AstrBot"
 requires-python = ">=3.10"
 
 [tool.maturin]
-features = ["python", "pyo3/extension-module"]
+features = ["extension-module"]
 python-source = "python"
 module-name = "codex_astrbot.codex_astrbot"
 # bin/ is gitignored (build_backend.py compiles it), so include it explicitly.

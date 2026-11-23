@@ -12,6 +12,8 @@ Environment switches (build time):
 - ``CODEX_ASTRBOT_WITH_CODEX=1`` also build the ``codex`` executable, needed
   only for Codex's own (native) command execution; AstrBot does not use it.
 - ``CODEX_ASTRBOT_DEBUG=1``      build the helpers with the dev profile.
+- ``CARGO_PROFILE_RELEASE_OPT_LEVEL`` defaults to ``s`` (size); set ``3`` for
+  the workspace's speed-optimised release.
 - ``CODEX_ASTRBOT_TARGET_DIR``   where compiled crates are kept between
   installs (default ``~/.cache/codex-astrbot/target``); ``CARGO_TARGET_DIR``
   wins when set.
@@ -187,6 +189,10 @@ def _shared_build_env() -> None:
         # The workspace release profile keeps debuginfo; drop it from the wheel.
         os.environ.setdefault("CARGO_PROFILE_RELEASE_DEBUG", "0")
         os.environ.setdefault("CARGO_PROFILE_RELEASE_STRIP", "symbols")
+        # Optimise for size: the wheel's module and host are about a third
+        # smaller and compile about a third faster than at -O3; the bot waits
+        # on the network, not on this code. V8 is prebuilt and unaffected.
+        os.environ.setdefault("CARGO_PROFILE_RELEASE_OPT_LEVEL", "s")
 
 
 def _build_helpers() -> None:
@@ -201,7 +207,20 @@ def _build_helpers() -> None:
     if "codex-code-mode-host" in wanted:
         _ensure_v8_archive(env)
     for binary in wanted:
-        command = ["cargo", "build", "-p", HELPERS[binary], "--bin", binary]
+        # Same package and features as maturin's build of the extension, so
+        # both resolve identical dependency features and nothing compiles twice.
+        command = [
+            "cargo",
+            "build",
+            "-p",
+            "codex-astrbot-py",
+            "-p",
+            HELPERS[binary],
+            "--features",
+            "codex-astrbot-py/extension-module",
+            "--bin",
+            binary,
+        ]
         if not debug:
             command.append("--release")
         subprocess.run(command, cwd=WORKSPACE, check=True, env=env)

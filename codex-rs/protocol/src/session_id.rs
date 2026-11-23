@@ -1,11 +1,11 @@
 use std::fmt::Display;
 
+use crate::TS;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::Schema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::ThreadId;

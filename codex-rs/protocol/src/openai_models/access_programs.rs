@@ -2,11 +2,11 @@
 //!
 //! Discovery metadata does not grant access; inference still enforces authorization.
 
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
-use ts_rs::TS;
 
 use crate::turn_input::CyberAccessProgram;
 

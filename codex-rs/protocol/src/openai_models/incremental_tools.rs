@@ -1,9 +1,9 @@
 //! Optional model-catalog overrides for harness-owned incremental tool notices.
 
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 /// Incremental tool notice overrides; missing/null or >512-byte values use bundled defaults.
 /// Empty strings omit static text but retain runtime names and instructions.

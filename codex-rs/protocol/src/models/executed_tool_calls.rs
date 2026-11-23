@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 use super::InternalChatMessageMetadataPassthrough;
 use super::ResponseItem;

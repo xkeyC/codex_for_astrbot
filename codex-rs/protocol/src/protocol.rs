@@ -19,6 +19,7 @@ use crate::AgentPath;
 use crate::ResponseItemId;
 use crate::SanitizedGitUrl;
 use crate::SessionId;
+use crate::TS;
 use crate::ThreadId;
 use crate::approvals::ElicitationAbandonedEvent;
 use crate::approvals::ElicitationRequestEvent;
@@ -84,7 +85,6 @@ use strum_macros::Display;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tracing::error;
-use ts_rs::TS;
 
 pub use crate::approvals::ApplyPatchApprovalRequestEvent;
 pub use crate::approvals::ElicitationAction;

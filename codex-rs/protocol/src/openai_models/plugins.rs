@@ -1,9 +1,9 @@
 //! Sparse model-catalog wording for generic, selected, and recommended plugins.
 
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 /// Sparse plugin wording families, independent of runtime availability and authorization.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]

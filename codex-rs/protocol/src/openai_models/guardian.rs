@@ -1,10 +1,10 @@
 //! Model-owned Guardian coverage. Missing policy preserves legacy behavior;
 //! unknown modes retain synchronous review and never enable the fast path.
 
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 use super::ModelInfo;
 use crate::ToolName;

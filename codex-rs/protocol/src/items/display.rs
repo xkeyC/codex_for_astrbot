@@ -1,12 +1,12 @@
 //! The presentation instruction attached to one moderated Chat answer.
 use super::AgentMessageModeration;
+use crate::TS;
 use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::Schema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use ts_rs::TS;
 
 /// The only supported version of the answer display contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

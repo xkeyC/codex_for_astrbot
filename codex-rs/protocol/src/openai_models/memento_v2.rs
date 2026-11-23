@@ -1,10 +1,10 @@
 //! Sparse Memento V2 tool definitions. Runtime data remains with consumers.
 
 use super::ToolMessage;
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 /// Model-owned history namespace and public tool definitions.
 #[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq, TS, JsonSchema)]

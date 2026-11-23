@@ -8,6 +8,11 @@ readme = "README.md"
 [lints]
 workspace = true
 
+[features]
+# fork: real ts-rs derives (see codex-protocol's `ts`).
+default = []
+ts = ["dep:ts-rs", "codex-protocol/ts"]
+
 [dependencies]
 codex-utils-process = { workspace = true }
 anyhow = { workspace = true }
@@ -27,7 +32,8 @@ similar = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "process", "rt", "sync", "time"] }
-ts-rs = { workspace = true, features = [
+codex-app-server-protocol-noop-macros = { workspace = true }
+ts-rs = { workspace = true, optional = true, features = [
     "uuid-impl",
     "serde-json-impl",
     "no-serde-warnings",

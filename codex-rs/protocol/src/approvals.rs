@@ -1,3 +1,4 @@
+use crate::TS;
 use crate::mcp::RequestId;
 use crate::models::AdditionalPermissionProfile;
 use crate::models::PermissionProfile;
@@ -14,7 +15,6 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use ts_rs::TS;
 
 /// Fully resolved permissions for rerunning an intercepted child process.
 #[derive(Debug, Clone, PartialEq, Eq)]

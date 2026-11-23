@@ -7,6 +7,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use crate::TS;
 use chrono::DateTime;
 use chrono::Utc;
 use schemars::JsonSchema;
@@ -25,7 +26,6 @@ use serde::de::Error;
 use strum_macros::Display;
 use strum_macros::EnumIter;
 use tracing::warn;
-use ts_rs::TS;
 
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;

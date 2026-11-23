@@ -3,12 +3,12 @@
 //!
 //! We intentionally keep these types TS/JSON-schema friendly (via `ts-rs` and
 //! `schemars`) so they can be embedded in Codex's own protocol structures.
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
 use std::collections::HashMap;
-use ts_rs::TS;
 
 /// Observed state of an MCP connection in a published thread runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

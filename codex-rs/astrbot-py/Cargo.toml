@@ -18,6 +18,8 @@ doctest = false
 # Python interpreter). `--no-default-features` builds the plain Rust engine.
 default = ["python"]
 python = ["dep:pyo3", "dep:pyo3-async-runtimes"]
+# What the wheel is built with (pyproject.toml and build_backend.py).
+extension-module = ["python", "pyo3/extension-module"]
 
 [lints]
 workspace = true
@@ -26,6 +28,10 @@ workspace = true
 anyhow = { workspace = true }
 codex-features = { workspace = true }
 codex-code-mode = { workspace = true }
+# Unused by the code: it puts the code-mode host's dependencies into this
+# crate's graph, so the wheel's two builds (the host binary and the extension)
+# resolve the same features and share every compiled crate.
+codex-code-mode-host = { path = "../code-mode-host" }
 codex-core = { workspace = true }
 codex-exec-server = { workspace = true }
 codex-extension-api = { workspace = true }

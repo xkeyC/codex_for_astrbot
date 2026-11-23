@@ -1,12 +1,12 @@
 use std::fmt;
 use std::ops::Deref;
 
+use crate::TS;
 use gix_url::Scheme;
 use gix_url::Url;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 /// A git remote URL with authentication credentials removed.
 #[derive(

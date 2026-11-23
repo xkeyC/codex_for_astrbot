@@ -12,6 +12,12 @@ doctest = false
 [lints]
 workspace = true
 
+[features]
+# fork: real ts-rs derives, only needed to export the TypeScript bindings
+# (app-server-protocol's tests turn it on). Off, `TS` is a no-op derive.
+default = []
+ts = ["dep:ts-rs"]
+
 [dependencies]
 chardetng = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
@@ -45,11 +51,12 @@ sys-locale = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-ts-rs = { workspace = true, features = [
+ts-rs = { workspace = true, optional = true, features = [
     "uuid-impl",
     "serde-json-impl",
     "no-serde-warnings",
 ] }
+codex-app-server-protocol-noop-macros = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v7", "v4"] }
 wildmatch = { workspace = true }
 
@@ -61,6 +68,11 @@ seccompiler = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]
+ts-rs = { workspace = true, features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
 anyhow = { workspace = true }
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }

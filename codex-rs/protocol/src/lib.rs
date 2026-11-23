@@ -1,3 +1,9 @@
+// fork: `TS` is a no-op derive unless the TypeScript bindings are wanted.
+#[cfg(not(any(test, feature = "ts")))]
+pub(crate) use codex_app_server_protocol_noop_macros::TS;
+#[cfg(any(test, feature = "ts"))]
+pub(crate) use ts_rs::TS;
+
 pub mod account;
 mod agent_path;
 pub mod auth;

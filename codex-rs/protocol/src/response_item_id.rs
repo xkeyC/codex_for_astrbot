@@ -4,11 +4,11 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::ops::Deref;
 
+use crate::TS;
 use codex_utils_model_facing_id::ModelFacingId;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 /// A Responses API item ID. New IDs require an explicit prefix; deserialization
 /// remains permissive so legacy rollouts can still be read.

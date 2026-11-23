@@ -1,6 +1,7 @@
 //! Turn-input request and result types shared by Core's submission APIs.
 
 use crate::AgentPath;
+use crate::TS;
 use crate::models::ResponseItem;
 use crate::protocol::AdditionalContextEntry;
 use crate::protocol::InterAgentCommunication;
@@ -15,7 +16,6 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use ts_rs::TS;
 
 /// Result of stopping an unfinished root turn so another worker can recover it.
 #[derive(Clone, Debug, PartialEq, Eq)]

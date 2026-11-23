@@ -1,3 +1,4 @@
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -5,7 +6,6 @@ use serde::Serialize;
 use serde::de::Error as _;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
-use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]

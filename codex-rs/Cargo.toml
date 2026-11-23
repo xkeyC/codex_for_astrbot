@@ -674,6 +674,14 @@ strip = false
 # Balance parallel release code generation against binary size.
 codegen-units = 4
 
+# fork: the bundled C libraries compile in the wheel build's critical path
+# (sqlite ~45 s at -O3); -O1 is plenty for a bot's state DB and rollouts.
+[profile.release.package.libsqlite3-sys]
+opt-level = 1
+
+[profile.release.package.zstd-sys]
+opt-level = 1
+
 [profile.profiling]
 inherits = "release"
 debug = "full"

@@ -9,6 +9,8 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::path::PathBuf;
 
+#[cfg(not(feature = "ts"))]
+use codex_app_server_protocol_noop_macros::TS;
 use futures::StreamExt;
 use futures::stream;
 use schemars::JsonSchema;
@@ -16,6 +18,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
+#[cfg(feature = "ts")]
 use ts_rs::TS;
 
 use crate::GitSha;

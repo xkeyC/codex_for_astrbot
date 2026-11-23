@@ -1,7 +1,7 @@
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
-use ts_rs::TS;
 
 use crate::models::AudioReference;
 use crate::models::ImageDetail;

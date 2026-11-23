@@ -1,10 +1,10 @@
 //! Per-response usage metadata reported by the upstream service, without aggregation.
 
+use crate::TS;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
-use ts_rs::TS;
 
 /// Usage metadata reported for one upstream response.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq, TS, JsonSchema)]

@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::TS;
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
@@ -11,7 +12,6 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 use serde_with::serde_as;
-use ts_rs::TS;
 
 use crate::permissions::FileSystemAccessMode;
 use crate::permissions::FileSystemPath;
