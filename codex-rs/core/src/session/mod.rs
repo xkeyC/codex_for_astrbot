@@ -286,13 +286,13 @@ mod rollout_budget;
 mod rollout_reconstruction;
 mod sampling_interrupt;
 pub(crate) use sampling_interrupt::SamplingInterrupt;
-mod open_model_notice;
 #[allow(clippy::module_inception)]
 pub(crate) mod session;
 pub(crate) mod startup_prewarm;
 mod step_activation;
 pub(crate) mod step_context;
 pub(crate) mod step_settings;
+mod switch_notice;
 mod thread_settings;
 pub(crate) mod time_reminder;
 mod token_budget;
@@ -4144,6 +4144,8 @@ impl Session {
             .collect::<Vec<_>>();
         {
             let mut state = self.state.lock().await;
+            // AstrBot: encrypted content belongs to the identity it came from.
+            state.encryption.mark_produced(items.iter_mut());
             state
                 .current_time_reminder
                 .note_recorded_items(&response_items);
@@ -4930,6 +4932,13 @@ impl Session {
                 .metadata
                 .get_or_insert_default()
                 .compaction_model_hash = compaction_model_hash.clone();
+            // AstrBot: the new summary is the current identity's; retained
+            // items keep their owners.
+            self.state
+                .lock()
+                .await
+                .encryption
+                .mark_produced(std::iter::once(checkpoint));
         }
         // Wait for accepted updates to finish persisting, then keep later updates from
         // overtaking the current settings snapshot while its checkpoint is written.
@@ -5473,6 +5482,18 @@ impl Session {
             return false;
         }
         true
+    }
+
+    /// AstrBot: the identity requests go to from now on.
+    pub(crate) async fn set_encryption_owner(&self, owner: codex_history::EncryptionOwner) {
+        self.state.lock().await.encryption.current = Some(owner);
+    }
+
+    /// AstrBot: whose encrypted history requests may carry.
+    pub(crate) async fn encryption_provenance(
+        &self,
+    ) -> crate::encryption_provenance::EncryptionProvenance {
+        self.state.lock().await.encryption.clone()
     }
 
     pub(crate) async fn clone_history(&self) -> ContextManager {

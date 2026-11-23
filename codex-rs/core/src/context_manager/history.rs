@@ -765,6 +765,18 @@ impl ContextManager {
         );
     }
 
+    /// AstrBot: leaves out of this snapshot the encrypted content other
+    /// providers or accounts produced; the current identity's stays.
+    pub(crate) fn strip_foreign_encrypted_content(
+        &mut self,
+        provenance: &crate::encryption_provenance::EncryptionProvenance,
+    ) {
+        if provenance.current.is_some() && self.items.iter().any(|item| provenance.is_foreign(item))
+        {
+            provenance.strip_foreign(Arc::make_mut(&mut self.items));
+        }
+    }
+
     /// Iterates over raw response items without exposing their history envelopes.
     pub(crate) fn raw_items(
         &self,

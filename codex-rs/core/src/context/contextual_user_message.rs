@@ -6,12 +6,12 @@ use codex_protocol::models::ResponseItem;
 use super::AdditionalContextUserFragment;
 use super::AgentMessageBoardNotification;
 use super::ContextualUserFragment;
+use super::EncryptedHistoryNotice;
 use super::GuardianRetainedInstructions;
 use super::InternalModelContextFragment;
 use super::LegacyApplyPatchExecCommandWarning;
 use super::LegacyModelMismatchWarning;
 use super::LegacyUnifiedExecProcessLimitWarning;
-use super::OpenModelSwitchNotice;
 use super::RecommendedPluginsInstructions;
 use super::SubagentNotification;
 use super::TurnAborted;
@@ -32,8 +32,8 @@ const CONTEXTUAL_USER_FRAGMENT_MATCHERS: &[fn(&str) -> bool] = &[
     TurnAborted::matches_text,
     SubagentNotification::matches_text,
     InternalModelContextFragment::matches_text,
-    // AstrBot: the one-time notice to an open-weight model.
-    OpenModelSwitchNotice::matches_text,
+    // AstrBot: the one-time notice that encrypted history was left out.
+    EncryptedHistoryNotice::matches_text,
     // compatibility for user-role recommendation messages in existing rollouts
     RecommendedPluginsInstructions::matches_text,
     LegacyUnifiedExecProcessLimitWarning::matches_text,

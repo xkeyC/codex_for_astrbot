@@ -52,10 +52,10 @@ mod bridge {
     mod dynamic_tool_end_turn;
     #[path = "dynamic_tools_update.rs"]
     mod dynamic_tools_update;
+    #[path = "encrypted_history.rs"]
+    mod encrypted_history;
     #[path = "files_api.rs"]
     mod files_api;
-    #[path = "open_model.rs"]
-    mod open_model;
     #[path = "open_model_run_code.rs"]
     mod open_model_run_code;
     #[path = "realtime_local_infra.rs"]

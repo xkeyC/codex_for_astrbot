@@ -454,8 +454,9 @@ pub(crate) async fn run_turn(
         )
         .await?;
     }
-    // AstrBot: an open model is told once that it cannot read some history.
-    super::open_model_notice::maybe_record_open_model_switch_notice(&sess, &turn_context).await;
+    // AstrBot: the model is told once when another identity's encrypted
+    // history is left out.
+    super::switch_notice::maybe_record_switch_notice(&sess, &turn_context).await;
     let mut can_drain_pending_input = input.is_empty();
     if run_hooks_and_record_inputs(
         &sess,
@@ -1997,12 +1998,15 @@ async fn run_sampling_request(
         // Running code-mode cells can request review while this response is in flight.
         // Keep the latest received ID until response.created replaces it.
         let first_attempt = initial_input.is_some();
-        let history = if let Some(input) = initial_input.take() {
+        let mut history = if let Some(input) = initial_input.take() {
             input
         } else {
             sess.clone_history().await
         };
         let input_item_count = history.raw_items().len();
+        // AstrBot: what other providers or accounts encrypted is left out;
+        // this identity's own encrypted output goes back unchanged.
+        history.strip_foreign_encrypted_content(&sess.encryption_provenance().await);
         let sampling_step_context = Arc::new(StepContext {
             sampled_through_sequence: Some(history.input_sequence()),
             ..step_context.as_ref().clone()

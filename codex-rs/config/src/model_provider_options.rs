@@ -64,15 +64,15 @@ pub struct ModelProviderOptions {
     #[serde(default)]
     pub files_api: Option<FilesApiOptions>,
     /// The provider serves an open-weight model (on the Responses or the chat
-    /// wire). Its requests leave out what an OpenAI model left encrypted in
-    /// the history (reasoning, compaction summaries, encrypted parts of
-    /// messages and tool outputs; a part becomes a short placeholder), the
-    /// first turn after such a switch tells the model so, and code mode's
-    /// `exec` is offered as a `run_code({code, description})` function tool
-    /// with a TypeScript SDK declaration.
+    /// wire): code mode's `exec` is offered to it as a
+    /// `run_code({code, description})` function tool with a TypeScript SDK
+    /// declaration.
     #[serde(default)]
     pub open_model: bool,
-    /// The text of that one-time notice, in place of the default.
+    /// The text of the one-time notice given when a switch to this provider
+    /// (or to another account of it) left another identity's encrypted
+    /// history out of the requests, in place of the default. Applies whether
+    /// or not `open_model` is set.
     #[serde(default)]
     pub open_model_switch_notice: Option<String>,
     /// Model metadata by model slug: any fields of Codex's model info (for

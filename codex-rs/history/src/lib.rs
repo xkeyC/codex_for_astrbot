@@ -76,6 +76,18 @@ pub enum ModelSearchState {
     Standalone,
 }
 
+/// AstrBot: the identity encrypted content in history belongs to: a model
+/// provider id and the account it was used with.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+pub struct EncryptionOwner {
+    /// The thread's `model_provider` id.
+    pub provider: String,
+    /// `chatgpt:<account id>` for ChatGPT sign-in, `key:<hash>` for an API key
+    /// or bearer token (a short hash, never the secret), absent without auth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+}
+
 /// Metadata owned by the Codex harness and persisted with a response item.
 ///
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -197,6 +209,13 @@ pub struct CodexHarnessMetadata {
     /// Sender context captured by the host when this task message was accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_user_messages: Option<Box<SenderUserMessages>>,
+
+    /// AstrBot: who produced this item's encrypted content (the provider and
+    /// account it was sent to). Only that identity can read it: requests to
+    /// any other leave it out. Absent on items without encrypted content and
+    /// on history written before provenance was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption_owner: Option<Box<EncryptionOwner>>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, JsonSchema)]
@@ -308,6 +327,10 @@ impl Borrow<ResponseItem> for ResponseItemEnvelope {
 
 /// Persisted rollout item used by core history and rollout storage.
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "AstrBot's encryption owner (one boxed field) tips the envelope over the lint's threshold"
+)]
 pub enum RolloutItem {
     SessionMeta(Box<SessionMetaLine>),
     /// Complete dynamic-tool catalog for subsequent model steps, including an empty catalog.

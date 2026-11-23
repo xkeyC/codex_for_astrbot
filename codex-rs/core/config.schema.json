@@ -3573,12 +3573,12 @@
         },
         "open_model": {
           "default": false,
-          "description": "The provider serves an open-weight model (on the Responses or the chat wire). Its requests leave out what an OpenAI model left encrypted in the history (reasoning, compaction summaries, encrypted parts of messages and tool outputs; a part becomes a short placeholder), the first turn after such a switch tells the model so, and code mode's `exec` is offered as a `run_code({code, description})` function tool with a TypeScript SDK declaration.",
+          "description": "The provider serves an open-weight model (on the Responses or the chat wire): code mode's `exec` is offered to it as a `run_code({code, description})` function tool with a TypeScript SDK declaration.",
           "type": "boolean"
         },
         "open_model_switch_notice": {
           "default": null,
-          "description": "The text of that one-time notice, in place of the default.",
+          "description": "The text of the one-time notice given when a switch to this provider (or to another account of it) left another identity's encrypted history out of the requests, in place of the default. Applies whether or not `open_model` is set.",
           "type": "string"
         },
         "wire": {

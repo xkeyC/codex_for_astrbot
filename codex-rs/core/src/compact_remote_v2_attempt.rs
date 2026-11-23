@@ -133,6 +133,8 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let trace_input_history = compaction_trace
                 .is_enabled()
                 .then(|| history.raw_items().cloned().collect());
+            // AstrBot: no other identity's encrypted history.
+            history.strip_foreign_encrypted_content(&sess.encryption_provenance().await);
             let (mut input, metadata): (Vec<_>, Vec<_>) = history
                 .for_prompt_annotated(
                     &model_info.input_modalities,

@@ -309,8 +309,10 @@ async fn run_compact_task_inner_impl(
     let mut client_session = sess.services.model_client.new_session();
     let compaction_response = loop {
         // Clone is required because of the loop
-        let mut turn_input = history
-            .clone()
+        let mut prompt_history = history.clone();
+        // AstrBot: as for sampling, no other identity's encrypted history.
+        prompt_history.strip_foreign_encrypted_content(&sess.encryption_provenance().await);
+        let mut turn_input = prompt_history
             .for_prompt(
                 &turn_context.model_info().input_modalities,
                 sess.services.image_store.as_ref(),

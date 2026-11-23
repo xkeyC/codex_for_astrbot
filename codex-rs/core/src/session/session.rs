@@ -1600,6 +1600,16 @@ impl Session {
                     Arc::clone(&item_id_generator),
                 ),
             );
+            // AstrBot: history without encryption owners is its SessionMeta
+            // provider's.
+            state.encryption.legacy_provider =
+                initial_history
+                    .get_rollout_items()
+                    .iter()
+                    .find_map(|item| match item {
+                        RolloutItem::SessionMeta(meta) => meta.meta.model_provider.clone(),
+                        _ => None,
+                    });
             if matches!(initial_history, InitialHistory::Resumed(_)) {
                 state.persisted_dynamic_tools = initial_history
                     .get_dynamic_tools()
@@ -1879,7 +1889,6 @@ impl Session {
             .with_executed_tool_calls(executed_tool_calls.clone())
             .with_chat_wire(crate::provider_compaction::chat_wire_options(&config))
             .with_omit_turn_metadata(crate::provider_compaction::omit_turn_metadata(&config))
-            .with_open_model(crate::provider_compaction::open_model(&config))
             .with_files_api(crate::provider_compaction::files_api_expires_seconds(
                 &config,
             ))

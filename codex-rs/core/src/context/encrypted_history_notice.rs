@@ -1,5 +1,6 @@
-//! AstrBot: tells an open-weight model, once, that the history it continues
-//! holds content of an earlier (OpenAI) model it cannot read.
+//! AstrBot: tells the model, once per provider or account switch, that the
+//! history it continues held content another identity encrypted, which its
+//! requests leave out.
 
 use super::ContextualUserFragment;
 use codex_protocol::models::ContentItem;
@@ -7,12 +8,12 @@ use codex_protocol::models::ContentItemKind;
 use codex_protocol::models::input_text;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct OpenModelSwitchNotice {
+pub(crate) struct EncryptedHistoryNotice {
     text: String,
 }
 
-impl OpenModelSwitchNotice {
-    pub(crate) const DEFAULT_TEXT: &'static str = "Note: the model of this conversation was switched. Part of the earlier history was produced by the previous model in an encrypted form this model cannot read, so some earlier context and summaries may be missing. If you need earlier context, look it up in the message history.";
+impl EncryptedHistoryNotice {
+    pub(crate) const DEFAULT_TEXT: &'static str = "Note: the model provider or account of this conversation changed. Part of the earlier history was produced under the previous one in an encrypted form that cannot be read now, so some earlier context and summaries may be missing. If you need earlier context, look it up in the message history.";
 
     /// The notice with `text`, or the default text.
     pub(crate) fn new(text: Option<&str>) -> Self {
@@ -22,9 +23,9 @@ impl OpenModelSwitchNotice {
     }
 }
 
-impl ContextualUserFragment for OpenModelSwitchNotice {
+impl ContextualUserFragment for EncryptedHistoryNotice {
     fn content_kind(&self) -> ContentItemKind {
-        ContentItemKind("open_model.switch_notice".to_string())
+        ContentItemKind("encrypted_history.switch_notice".to_string())
     }
 
     fn role(&self) -> &'static str {

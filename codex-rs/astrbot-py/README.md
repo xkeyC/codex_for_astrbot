@@ -113,8 +113,8 @@ behavior is unchanged unless a key below is set. AstrBot sets them through
 | `model_provider_options.<id>.compaction` | `auto` (default), `local` or `remote` compaction for that provider. |
 | `model_provider_options.<id>.models.<slug>` | Model metadata (context window, reasoning levels, modalities, ...) for models Codex does not know. |
 | `model_provider_options.<id>.files_api`, `.omit_turn_metadata` | Send images once through the provider's Files API; leave out the turn-metadata header. |
-| `model_provider_options.<id>.open_model` | The provider serves an open-weight model (Responses or chat wire): OpenAI-encrypted history (reasoning, compaction summaries, encrypted parts of agent messages and tool outputs, as placeholders) is left out of its requests, the first turn after such a switch gets a one-time user-role notice, and code mode's `exec` is offered as a `run_code({code, description})` function tool with a TypeScript SDK description, `inspect(...)` and a nested `tool_search` for deferred tools. |
-| `model_provider_options.<id>.open_model_switch_notice` | Text of that one-time notice, in place of the default. |
+| `model_provider_options.<id>.open_model` | The provider serves an open-weight model (Responses or chat wire): code mode's `exec` is offered as a `run_code({code, description})` function tool with a TypeScript SDK description, `inspect(...)` and a nested `tool_search` for deferred tools. |
+| `model_provider_options.<id>.open_model_switch_notice` | Text of the one-time notice below, in place of the default (any provider, `open_model` or not). |
 | `model_tool_mode` | Force `direct`, `code_mode` or `code_mode_only` regardless of the model catalog. |
 | `features.code_mode.compact_exec_description` | Shorter generic part of the `exec` description. |
 | `features.code_mode.exec_as_function_tool` | `exec` as a plain function tool for providers without custom (grammar) tools. |
@@ -124,6 +124,18 @@ behavior is unchanged unless a key below is set. AstrBot sets them through
 | `memories.scope_key`, `.may_write_global`, `.may_delete`, `.turn_scopes`, `.auto_consolidate` | Per-chat memory scopes next to the global store, write and delete permissions (optionally from turn `scopes`), automatic consolidation switch. |
 | `memories.extra_session_sources` | Custom session sources (AstrBot's `astrbot`) whose threads feed memory extraction. |
 | `outbound_proxy` | Proxy for all of Codex's HTTP and WebSocket traffic. |
+
+Always on, for every provider: encrypted history belongs to the provider and account that produced it
+(provider id plus ChatGPT account id, or a short hash of the API key or
+bearer token; the secret is never stored). Each item with encrypted content
+records its owner in its history metadata (kept in the rollout and through
+compaction). Requests send the current identity's items back unchanged and
+leave out other identities' (encrypted reasoning and compaction dropped,
+encrypted parts of agent messages and tool outputs replaced by a
+placeholder), and the first turn after such a switch gets a user-role
+notice, once per switch. Threads from before this have no owners: their
+items count as their `SessionMeta` provider's with an unknown account, so
+only a different provider id makes them foreign.
 
 Protocol additions: a dynamic tool response may set `end_turn` (and `speak`)
 to end the turn without another model request; `set_dynamic_tools` /

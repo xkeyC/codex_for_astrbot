@@ -332,6 +332,11 @@ impl Session {
             self.request_mcp_runtime_reprojection(McpRefreshReason::TaskStartedExecutorDiscovery);
         }
         self.activate_plugin_selection(&turn_context).await;
+        // AstrBot: the identity this task's requests go to owns what it
+        // encrypts; other identities' encrypted history is left out.
+        let encryption_owner =
+            crate::encryption_provenance::current_owner(turn_context.as_ref()).await;
+        self.set_encryption_owner(encryption_owner).await;
         // Inherited or recovered roots are applied before task start. Otherwise this
         // task owns its turn, including background work. Later mail cannot change it.
         turn_context

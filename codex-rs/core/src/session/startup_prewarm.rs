@@ -469,6 +469,8 @@ async fn schedule_startup_prewarm_inner(
     };
     let prompt_input = if let Some(snapshot) = history {
         // Use the same history projection and tool metadata as a sampling request.
+        let mut snapshot = snapshot;
+        snapshot.strip_foreign_encrypted_content(&session.encryption_provenance().await);
         let mut history = snapshot
             .for_prompt(
                 &step_context.settings.model_info.input_modalities,

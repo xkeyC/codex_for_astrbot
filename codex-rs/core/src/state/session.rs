@@ -120,6 +120,8 @@ pub(crate) struct SessionState {
     pub(crate) pending_session_start_sources: VecDeque<codex_hooks::SessionStartSource>,
     next_turn_is_first: bool,
     initial_settings_pending: bool,
+    /// AstrBot: whose encrypted history requests may carry.
+    pub(crate) encryption: crate::encryption_provenance::EncryptionProvenance,
 }
 
 impl SessionState {
@@ -172,6 +174,7 @@ impl SessionState {
             pending_session_start_sources: VecDeque::new(),
             next_turn_is_first: true,
             initial_settings_pending: true,
+            encryption: Default::default(),
         }
     }
 
