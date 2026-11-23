@@ -7,8 +7,9 @@ Nothing pre-compiled is shipped; everything comes from this source tree.
 
 Environment switches (build time):
 
-- ``CODEX_ASTRBOT_SKIP_HOST=1``  skip the code-mode host. Code mode then needs
-  ``code_mode_host`` to point at a host built from this same fork.
+- ``CODEX_ASTRBOT_SKIP_HOST=1``  skip the code-mode host binary. Code mode then
+  needs ``code_mode_host`` to point at a host built from this same fork. The
+  V8 archive is still needed: the extension's build compiles the host's crates.
 - ``CODEX_ASTRBOT_DEBUG=1``      build the helpers with the dev profile.
 - ``CARGO_PROFILE_RELEASE_OPT_LEVEL`` defaults to ``s`` (size); set ``3`` for
   the workspace's speed-optimised release.
@@ -24,6 +25,7 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
+from collections.abc import MutableMapping
 from pathlib import Path
 
 from maturin import (  # noqa: F401 - re-exported as the backend's hooks
@@ -64,7 +66,7 @@ def _v8_version() -> str:
     return match.group(1)
 
 
-def _ensure_v8_archive(env: dict) -> None:
+def _ensure_v8_archive(env: MutableMapping[str, str]) -> None:
     """Point the v8 crate at the prebuilt archive Codex publishes.
 
     The code-mode host links V8. The `v8` crate downloads its prebuilt archive
@@ -151,9 +153,7 @@ def _ensure_v8_archive(env: dict) -> None:
             raise RuntimeError(
                 f"Failed to download the prebuilt V8 files for {target} from "
                 f"{base}. Download {archive} and {binding} yourself and set "
-                "RUSTY_V8_ARCHIVE and RUSTY_V8_SRC_BINDING_PATH to them, or set "
-                "CODEX_ASTRBOT_SKIP_HOST=1 to build without code mode's host: "
-                f"{err}"
+                f"RUSTY_V8_ARCHIVE and RUSTY_V8_SRC_BINDING_PATH to them: {err}"
             ) from err
 
     env["RUSTY_V8_ARCHIVE"] = str(path)
@@ -192,6 +192,10 @@ def _shared_build_env() -> None:
 
 def _build_helpers() -> None:
     _shared_build_env()
+    # Both builds compile the v8 crate: codex-astrbot-py depends on the host's
+    # lib (so the two builds share features), which brings it into maturin's
+    # build of the extension too. Set the archive for both, not only the host.
+    _ensure_v8_archive(os.environ)
     wanted = _helpers()
     if BIN_DIR.exists():
         shutil.rmtree(BIN_DIR)
@@ -199,8 +203,6 @@ def _build_helpers() -> None:
         return
     debug = bool(os.environ.get("CODEX_ASTRBOT_DEBUG"))
     env = dict(os.environ)
-    if "codex-code-mode-host" in wanted:
-        _ensure_v8_archive(env)
     for binary in wanted:
         # Same package and features as maturin's build of the extension, so
         # both resolve identical dependency features and nothing compiles twice.

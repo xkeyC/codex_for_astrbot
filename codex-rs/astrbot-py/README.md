@@ -38,7 +38,7 @@ set `RUSTY_V8_ARCHIVE` and `RUSTY_V8_SRC_BINDING_PATH`.
 
 | Environment variable | Effect |
 | --- | --- |
-| `CODEX_ASTRBOT_SKIP_HOST=1` | Skip the code-mode host; no V8 download. Code mode then needs AstrBot's `code_mode_host` to point at a host built from this same fork. |
+| `CODEX_ASTRBOT_SKIP_HOST=1` | Skip the code-mode host binary. Code mode then needs AstrBot's `code_mode_host` to point at a host built from this same fork. The V8 archive is still fetched: the extension's build compiles the host's crates. |
 | `CODEX_ASTRBOT_DEBUG=1` | Build the helper binaries with the dev profile. |
 | `CARGO_PROFILE_RELEASE_OPT_LEVEL=3` | Build the wheel optimised for speed instead of size (default `s`: about a third smaller and faster to compile). |
 | `RUSTY_V8_ARCHIVE=<path>`, `RUSTY_V8_SRC_BINDING_PATH=<path>` | Use a V8 archive and binding already on disk. |
