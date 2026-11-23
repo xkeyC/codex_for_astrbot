@@ -122,6 +122,10 @@ pub(crate) struct SessionState {
     initial_settings_pending: bool,
     /// AstrBot: whose encrypted history requests may carry.
     pub(crate) encryption: crate::encryption_provenance::EncryptionProvenance,
+    /// AstrBot: the provider the latest regular turn ran on (on resume, the
+    /// latest applied thread settings', else the `SessionMeta` provider).
+    /// The previous model is compacted with only on that provider.
+    pub(crate) previous_turn_provider: Option<String>,
 }
 
 impl SessionState {
@@ -175,6 +179,7 @@ impl SessionState {
             next_turn_is_first: true,
             initial_settings_pending: true,
             encryption: Default::default(),
+            previous_turn_provider: None,
         }
     }
 

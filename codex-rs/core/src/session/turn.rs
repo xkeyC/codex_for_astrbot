@@ -492,6 +492,8 @@ pub(crate) async fn run_turn(
 
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
+    sess.state.lock().await.previous_turn_provider =
+        Some(turn_context.config.model_provider_id.clone());
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
         model: turn_context.model_info().slug.clone(),
         cyber_access_program: turn_context.cyber_access_program,
@@ -1659,6 +1661,13 @@ async fn maybe_run_previous_model_inline_compact(
     );
     let previous_model = previous_turn_settings.model;
     if !should_compact_for_comp_hash_change && previous_model == turn_context.model_info().slug {
+        return Ok(());
+    }
+    // AstrBot: the previous model belongs to the provider it ran on; another
+    // provider may not serve it (commandcode: 403 MODEL_NOT_IN_PLAN). After a
+    // provider switch the regular compaction below uses the current model.
+    let previous_provider = sess.state.lock().await.previous_turn_provider.clone();
+    if previous_provider.is_some_and(|provider| provider != turn_context.config.model_provider_id) {
         return Ok(());
     }
     let mut previous_model_turn_context = turn_context

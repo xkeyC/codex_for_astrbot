@@ -60,6 +60,8 @@ mod bridge {
     mod host_namespace;
     #[path = "open_model_run_code.rs"]
     mod open_model_run_code;
+    #[path = "provider_switch_compaction.rs"]
+    mod provider_switch_compaction;
     #[path = "realtime_local_infra.rs"]
     mod realtime_local_infra;
     #[path = "tool_catalog.rs"]

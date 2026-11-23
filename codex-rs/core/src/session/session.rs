@@ -1600,6 +1600,28 @@ impl Session {
                     Arc::clone(&item_id_generator),
                 ),
             );
+            // AstrBot: the provider resumed history last ran on.
+            state.previous_turn_provider = initial_history
+                .get_rollout_items()
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RolloutItem::EventMsg(codex_protocol::protocol::EventMsg::ThreadSettingsApplied(
+                        event,
+                    )) => {
+                        Some(event.thread_settings.model_provider_id.clone())
+                    }
+                    _ => None,
+                })
+                .or_else(|| {
+                    initial_history
+                        .get_rollout_items()
+                        .iter()
+                        .find_map(|item| match item {
+                            RolloutItem::SessionMeta(meta) => meta.meta.model_provider.clone(),
+                            _ => None,
+                        })
+                });
             // AstrBot: history without encryption owners is its SessionMeta
             // provider's.
             state.encryption.legacy_provider =
