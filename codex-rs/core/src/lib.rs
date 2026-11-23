@@ -48,6 +48,8 @@ mod provider_compaction;
 mod provider_files;
 // AstrBot: encrypted history belongs to the provider and account that made it.
 mod encryption_provenance;
+// AstrBot: one output per call in a request.
+mod tool_output_merge;
 pub use provider_compaction::chat_wire_options;
 pub use provider_compaction::files_api_expires_seconds;
 pub use provider_compaction::omit_turn_metadata;

@@ -246,16 +246,14 @@ async fn run_code_runs_the_program_and_answers_as_a_function() -> Result<()> {
         outputs(&input, "call-1", "custom_tool_call_output"),
         Vec::<String>::new()
     );
+    // `notify` gives a function call output, merged into the call's one
+    // output in the request, before the program's result.
     let outputs = outputs(&input, "call-1", "function_call_output");
+    assert_eq!(outputs.len(), 1, "{outputs:?}");
     assert!(
-        outputs.iter().any(|output| output == "looked up"),
-        "notify is a function call output: {outputs:?}"
-    );
-    assert!(
-        outputs
-            .iter()
-            .any(|output| output.contains("{\n  \"value\": \"value-A\"\n}")),
-        "the program's output: {outputs:?}"
+        outputs[0].starts_with("looked up\nScript completed")
+            && outputs[0].contains("{\n  \"value\": \"value-A\"\n}"),
+        "{outputs:?}"
     );
     Ok(())
 }

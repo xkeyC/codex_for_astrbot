@@ -64,4 +64,6 @@ mod bridge {
     mod realtime_local_infra;
     #[path = "tool_catalog.rs"]
     mod tool_catalog;
+    #[path = "tool_output_merge.rs"]
+    mod tool_output_merge;
 }

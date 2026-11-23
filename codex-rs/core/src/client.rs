@@ -1323,6 +1323,11 @@ impl ModelClient {
                 }
             }
         }
+        // AstrBot: code mode's `notify()` gives a call more outputs; providers
+        // but OpenAI refuse that. Function outputs (only the fork's function
+        // form of `exec` has several) merge for OpenAI too; its custom outputs
+        // stay as upstream sends them.
+        crate::tool_output_merge::merge_duplicate_tool_outputs(&mut input, !is_openai);
         let reasoning = self.build_reasoning(model_info, effort, summary);
         let stream_options = (self.state.concurrent_reasoning_summaries_enabled
             && is_openai
