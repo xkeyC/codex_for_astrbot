@@ -10,6 +10,13 @@
 //!   may be moved to the front, breaking the prefix cache).
 //! - An assistant step (its reasoning, text and tool calls) is one `assistant`
 //!   message; its reasoning goes back as `reasoning_content`.
+//! - Gateways in front of Anthropic (LiteLLM, OpenRouter) also return the
+//!   step's `thinking_blocks`: thinking with its signature, redacted thinking
+//!   with its data. They are kept whole on the reasoning item (as its
+//!   `encrypted_content`, owned like any encrypted content by the provider and
+//!   account) and go back on the step's message unchanged, so the provider
+//!   gets its own output back: signed thinking stays valid across tool calls,
+//!   thinking need not be switched off, and the prompt cache holds.
 //! - Function tools go as they are; a namespace's tools flattened
 //!   (`<namespace>__<name>`); a freeform tool as a function taking
 //!   `{"input": string}`. Hosted tools (web search, tool search) have no chat
@@ -408,6 +415,26 @@ struct AssistantStep {
     content: String,
     reasoning: String,
     tool_calls: Vec<Value>,
+    /// The provider's own thinking blocks, as it returned them.
+    thinking_blocks: Vec<Value>,
+}
+
+/// Marks a reasoning item's `encrypted_content` holding a chat step's
+/// thinking blocks (a JSON array), not a Responses provider's token.
+pub const CHAT_THINKING_BLOCKS_PREFIX: &str = "chat-thinking-blocks:v1:";
+
+/// Whether `encrypted_content` holds chat thinking blocks, which only the chat
+/// wire may send (a Responses provider would reject them).
+pub fn is_chat_thinking_blocks(encrypted_content: &str) -> bool {
+    encrypted_content.starts_with(CHAT_THINKING_BLOCKS_PREFIX)
+}
+
+/// The thinking blocks a reasoning item keeps, if any.
+fn thinking_blocks_of(encrypted_content: Option<&str>) -> Vec<Value> {
+    encrypted_content
+        .and_then(|content| content.strip_prefix(CHAT_THINKING_BLOCKS_PREFIX))
+        .and_then(|blocks| serde_json::from_str::<Vec<Value>>(blocks).ok())
+        .unwrap_or_default()
 }
 
 /// The chat messages of `request`'s instructions and input.
@@ -440,7 +467,10 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
                 messages.push(json!({"role": "user", "content": content}));
             }
             ResponseItem::Reasoning {
-                summary, content, ..
+                summary,
+                content,
+                encrypted_content,
+                ..
             } => {
                 // Reasoning after text or calls starts another step.
                 if !step.content.is_empty() || !step.tool_calls.is_empty() {
@@ -450,6 +480,8 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
                     &mut step.reasoning,
                     &reasoning_text(summary, content.as_deref()),
                 );
+                step.thinking_blocks
+                    .extend(thinking_blocks_of(encrypted_content.as_deref()));
             }
             ResponseItem::FunctionCall {
                 name,
@@ -549,6 +581,9 @@ fn flush_step(messages: &mut Vec<Value>, step: &mut AssistantStep, open: &mut Ve
     });
     if !step.reasoning.is_empty() {
         message["reasoning_content"] = Value::String(step.reasoning);
+    }
+    if !step.thinking_blocks.is_empty() {
+        message["thinking_blocks"] = Value::Array(step.thinking_blocks);
     }
     if !step.tool_calls.is_empty() {
         open.extend(
@@ -804,6 +839,9 @@ struct ChatStream {
     response_id: Option<String>,
     /// The reasoning so far, while it is the open item.
     reasoning: Option<String>,
+    /// Thinking blocks the provider returned (by their index), not yet on an
+    /// item: merged from their streamed pieces.
+    thinking: BTreeMap<usize, serde_json::Map<String, Value>>,
     /// The text so far, once it started.
     message: Option<String>,
     calls: BTreeMap<usize, ToolCallState>,
@@ -821,6 +859,7 @@ impl ChatStream {
             tools,
             response_id: None,
             reasoning: None,
+            thinking: BTreeMap::new(),
             message: None,
             calls: BTreeMap::new(),
             index_by_id: HashMap::new(),
@@ -863,6 +902,7 @@ impl ChatStream {
         {
             let delta = choice.get("delta").or_else(|| choice.get("message"));
             if let Some(delta) = delta {
+                self.add_thinking_blocks(delta, tx_event).await;
                 if let Some(text) = reasoning_delta(delta) {
                     self.add_reasoning(text, tx_event).await;
                 }
@@ -940,13 +980,100 @@ impl ChatStream {
             .await;
     }
 
-    /// Ends the reasoning item (text or calls follow it).
-    async fn close_reasoning(&mut self, tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>) {
-        if let Some(reasoning) = self.reasoning.take() {
+    /// Merges the pieces of thinking blocks in `delta` (`thinking_blocks`, or
+    /// the same under `provider_specific_fields`): their text by block index,
+    /// the signature or redacted data as it comes. Blocks before any text
+    /// open the reasoning item, so even redacted thinking has an item.
+    async fn add_thinking_blocks(
+        &mut self,
+        delta: &Value,
+        tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    ) {
+        let Some(blocks) = delta
+            .get("thinking_blocks")
+            .or_else(|| delta.pointer("/provider_specific_fields/thinking_blocks"))
+            .and_then(Value::as_array)
+        else {
+            return;
+        };
+        for (position, block) in blocks.iter().enumerate() {
+            let Some(block) = block.as_object() else {
+                continue;
+            };
+            let index = block
+                .get("index")
+                .and_then(Value::as_u64)
+                .map_or(position, |index| index as usize);
+            let merged = self.thinking.entry(index).or_default();
+            for (key, value) in block {
+                match (key.as_str(), value) {
+                    ("index", _) => {}
+                    ("thinking", Value::String(piece)) => {
+                        let text = merged
+                            .entry("thinking")
+                            .or_insert_with(|| Value::String(String::new()));
+                        if let Value::String(text) = text {
+                            text.push_str(piece);
+                        }
+                    }
+                    (_, Value::String(text)) if text.is_empty() => {}
+                    (_, Value::Null) => {}
+                    _ => {
+                        merged.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+        if self.reasoning.is_none() && self.message.is_none() && !self.thinking.is_empty() {
+            self.reasoning = Some(String::new());
             let _ = tx_event
-                .send(Ok(ResponseEvent::OutputItemDone(reasoning_item(reasoning))))
+                .send(Ok(ResponseEvent::OutputItemAdded(reasoning_item(
+                    String::new(),
+                ))))
                 .await;
         }
+    }
+
+    /// The thinking blocks that are complete (signed, or redacted with their
+    /// data), taken off the stream state; unfinished ones wait for the rest.
+    fn take_finished_thinking(&mut self) -> Vec<Value> {
+        let (finished, pending): (BTreeMap<_, _>, BTreeMap<_, _>) =
+            std::mem::take(&mut self.thinking)
+                .into_iter()
+                .partition(|(_, block)| block_is_finished(block));
+        self.thinking = pending;
+        finished.into_values().map(Value::Object).collect()
+    }
+
+    /// Ends the reasoning item (text or calls follow it), with the thinking
+    /// blocks finished by now.
+    async fn close_reasoning(&mut self, tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>) {
+        if let Some(reasoning) = self.reasoning.take() {
+            let blocks = self.take_finished_thinking();
+            let _ = tx_event
+                .send(Ok(ResponseEvent::OutputItemDone(with_thinking_blocks(
+                    reasoning_item(reasoning),
+                    blocks,
+                ))))
+                .await;
+        }
+    }
+
+    /// Thinking blocks finished after the reasoning item closed (the text had
+    /// begun): an item of their own, before the message.
+    async fn flush_late_thinking(
+        &mut self,
+        tx_event: &mpsc::Sender<Result<ResponseEvent, ApiError>>,
+    ) {
+        let blocks = self.take_finished_thinking();
+        if blocks.is_empty() {
+            return;
+        }
+        let item = with_thinking_blocks(reasoning_item(String::new()), blocks);
+        let _ = tx_event
+            .send(Ok(ResponseEvent::OutputItemAdded(item.clone())))
+            .await;
+        let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
     }
 
     /// Gathers a piece of a tool call: by its index, else its id, else it
@@ -1018,6 +1145,7 @@ impl ChatStream {
             return;
         }
         self.close_reasoning(tx_event).await;
+        self.flush_late_thinking(tx_event).await;
         if let Some(message) = self.message.take() {
             let _ = tx_event
                 .send(Ok(ResponseEvent::OutputItemDone(message_item(message))))
@@ -1133,6 +1261,34 @@ fn message_item(text: String) -> ResponseItem {
         phase: None,
         internal_chat_message_metadata_passthrough: None,
     }
+}
+
+/// A thinking block the provider can verify again: signed thinking, or
+/// redacted thinking with its data.
+fn block_is_finished(block: &serde_json::Map<String, Value>) -> bool {
+    ["signature", "data"].iter().any(|key| {
+        block
+            .get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    })
+}
+
+/// `item` (a reasoning item) keeping the step's thinking `blocks`.
+fn with_thinking_blocks(mut item: ResponseItem, blocks: Vec<Value>) -> ResponseItem {
+    if blocks.is_empty() {
+        return item;
+    }
+    if let ResponseItem::Reasoning {
+        encrypted_content, ..
+    } = &mut item
+    {
+        *encrypted_content = Some(format!(
+            "{CHAT_THINKING_BLOCKS_PREFIX}{}",
+            Value::Array(blocks)
+        ));
+    }
+    item
 }
 
 fn reasoning_item(text: String) -> ResponseItem {

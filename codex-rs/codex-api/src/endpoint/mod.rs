@@ -13,6 +13,7 @@ mod session;
 
 pub use chat::ChatClient;
 pub use chat::ChatOptions;
+pub use chat::is_chat_thinking_blocks;
 pub use files::FilesClient;
 pub use files::decode_image_data_url;
 pub use images::ImageRequestError;

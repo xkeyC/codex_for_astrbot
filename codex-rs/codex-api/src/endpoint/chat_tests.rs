@@ -607,3 +607,141 @@ async fn reasoning_cut_off_before_any_answer_fails() {
         "error stream error: the response was cut off at the output token limit"
     );
 }
+
+/// The items of a stream that completed.
+fn done_items(events: &[Result<ResponseEvent, ApiError>]) -> Vec<ResponseItem> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Ok(ResponseEvent::OutputItemDone(item)) => Some(item.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn kept_blocks(item: &ResponseItem) -> Vec<Value> {
+    match item {
+        ResponseItem::Reasoning {
+            encrypted_content, ..
+        } => thinking_blocks_of(encrypted_content.as_deref()),
+        _ => Vec::new(),
+    }
+}
+
+#[tokio::test]
+async fn thinking_blocks_are_kept_whole_and_go_back_unchanged() {
+    // LiteLLM in front of Anthropic: the thinking streams in pieces at its
+    // block index, the signature comes last, then the tool call.
+    let piece = |text: &str| {
+        json!({"id": "c1", "choices": [{"index": 0, "delta": {"reasoning_content": text,
+            "thinking_blocks": [{"type": "thinking", "thinking": text, "index": 0}],
+            "provider_specific_fields": {"thinking_blocks": [{"type": "thinking", "thinking": text, "index": 0}]}}}]})
+    };
+    let body = sse(
+        &[
+            piece("221 = "),
+            piece("13 × 17."),
+            json!({"id": "c1", "choices": [{"index": 0, "delta": {"reasoning_content": "",
+                "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": "SIG-1", "index": 0}]}}]}),
+            json!({"id": "c1", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_1",
+                "type": "function", "function": {"name": "backend_task", "arguments": "{\"task\":\"x\"}"}}]}}]}),
+            json!({"id": "c1", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}),
+            json!({"id": "c1", "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}),
+        ],
+        /*done*/ true,
+    );
+    let events = events(body, ToolNames::default()).await;
+    let items = done_items(&events);
+    assert_eq!(
+        items.iter().map(kind).collect::<Vec<_>>(),
+        [
+            "reasoning \"221 = 13 × 17.\"",
+            "call call_1 None backend_task {\"task\":\"x\"}",
+        ]
+    );
+    let block = json!({"type": "thinking", "thinking": "221 = 13 × 17.", "signature": "SIG-1"});
+    assert_eq!(kept_blocks(&items[0]), vec![block.clone()]);
+
+    // Back on the step's message, as the provider returned it.
+    let mut input = vec![message("user", "Is 221 prime?")];
+    input.extend(items);
+    input.push(output("call_1", "ok"));
+    let messages = chat_messages(&request(input, json!([])), &ToolNames::default());
+    let assistant = messages
+        .iter()
+        .find(|message| message["role"] == "assistant")
+        .unwrap();
+    assert_eq!(assistant["thinking_blocks"], json!([block]));
+    assert_eq!(assistant["reasoning_content"], "221 = 13 × 17.");
+    assert_eq!(assistant["tool_calls"][0]["id"], "call_1");
+}
+
+#[tokio::test]
+async fn redacted_thinking_alone_has_an_item_and_unsigned_pieces_are_not_kept() {
+    let body = sse(
+        &[
+            json!({"id": "c2", "choices": [{"index": 0, "delta": {"thinking_blocks": [
+                {"type": "redacted_thinking", "data": "ENC-DATA", "index": 0},
+                {"type": "thinking", "thinking": "never signed", "index": 1}]}}]}),
+            json!({"id": "c2", "choices": [{"index": 0, "delta": {"content": "Done."}, "finish_reason": "stop"}]}),
+            json!({"id": "c2", "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}),
+        ],
+        /*done*/ true,
+    );
+    let items = done_items(&events(body, ToolNames::default()).await);
+    assert_eq!(
+        items.iter().map(kind).collect::<Vec<_>>(),
+        ["reasoning \"\"", "message \"Done.\""]
+    );
+    assert_eq!(
+        kept_blocks(&items[0]),
+        vec![json!({"type": "redacted_thinking", "data": "ENC-DATA"})]
+    );
+}
+
+#[tokio::test]
+async fn thinking_finished_after_the_text_began_goes_before_the_message() {
+    let body = sse(
+        &[
+            json!({"id": "c3", "choices": [{"index": 0, "delta": {"content": "Hi."}}]}),
+            json!({"id": "c3", "choices": [{"index": 0, "delta": {"thinking_blocks": [
+                {"type": "thinking", "thinking": "late", "signature": "SIG-L", "index": 1}]},
+                "finish_reason": "stop"}]}),
+            json!({"id": "c3", "choices": [], "usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4}}),
+        ],
+        /*done*/ true,
+    );
+    let items = done_items(&events(body, ToolNames::default()).await);
+    assert_eq!(
+        items.iter().map(kind).collect::<Vec<_>>(),
+        ["reasoning \"\"", "message \"Hi.\""]
+    );
+    assert_eq!(
+        kept_blocks(&items[0]),
+        vec![json!({"type": "thinking", "thinking": "late", "signature": "SIG-L"})]
+    );
+    // Both on one assistant message.
+    let mut input = vec![message("user", "Hello")];
+    input.extend(items);
+    let messages = chat_messages(&request(input, json!([])), &ToolNames::default());
+    let assistant = messages.iter().find(|m| m["role"] == "assistant").unwrap();
+    assert_eq!(assistant["content"], "Hi.");
+    assert_eq!(assistant["thinking_blocks"][0]["signature"], "SIG-L");
+}
+
+#[test]
+fn reasoning_without_thinking_blocks_goes_back_as_before() {
+    let input = vec![
+        message("user", "Hi"),
+        reasoning("Plain reasoning."),
+        message("assistant", "Hello."),
+    ];
+    let messages = chat_messages(&request(input, json!([])), &ToolNames::default());
+    let assistant = messages.iter().find(|m| m["role"] == "assistant").unwrap();
+    assert_eq!(assistant["reasoning_content"], "Plain reasoning.");
+    assert!(assistant.get("thinking_blocks").is_none());
+    assert!(!is_chat_thinking_blocks("gAAAA-openai-token"));
+    assert!(is_chat_thinking_blocks(&format!(
+        "{CHAT_THINKING_BLOCKS_PREFIX}[]"
+    )));
+}

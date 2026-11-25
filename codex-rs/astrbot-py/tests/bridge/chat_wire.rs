@@ -306,3 +306,112 @@ async fn live_chat_provider_calls_a_tool_and_remembers() -> Result<()> {
     );
     Ok(())
 }
+
+/// A chat completion with signed thinking, as LiteLLM gives Anthropic's.
+fn thinking_stream(id: &str, thinking: &str, signature: &str, text: &str) -> String {
+    let chunks = [
+        json!({"id": id, "choices": [{"index": 0, "delta": {"role": "assistant", "reasoning_content": thinking,
+            "thinking_blocks": [{"type": "thinking", "thinking": thinking, "index": 0}]}}]}),
+        json!({"id": id, "choices": [{"index": 0, "delta": {"reasoning_content": "",
+            "thinking_blocks": [{"type": "thinking", "thinking": "", "signature": signature, "index": 0}]}}]}),
+        json!({"id": id, "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": "stop"}]}),
+        json!({"id": id, "choices": [], "usage": {"prompt_tokens": 50, "completion_tokens": 5, "total_tokens": 55}}),
+    ];
+    let mut body: String = chunks
+        .iter()
+        .map(|chunk| format!("data: {chunk}\n\n"))
+        .collect();
+    body.push_str("data: [DONE]\n\n");
+    body
+}
+
+fn chat_on(provider: &str) -> core_test_support::test_codex::TestCodexBuilder {
+    let provider = provider.to_string();
+    test_codex()
+        .with_auth(codex_login::CodexAuth::from_api_key("key"))
+        .with_config(move |config| {
+            config.model_provider_id = provider.clone();
+            config
+                .model_providers
+                .insert(provider.clone(), config.model_provider.clone());
+            config.model_provider_options.insert(
+                provider,
+                ModelProviderOptions {
+                    wire: ProviderWire::Chat,
+                    ..Default::default()
+                },
+            );
+        })
+}
+
+fn assistant_messages(request: &Value) -> Vec<Value> {
+    request["messages"]
+        .as_array()
+        .expect("chat messages")
+        .iter()
+        .filter(|message| message["role"] == "assistant")
+        .cloned()
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn signed_thinking_goes_back_whole_to_its_provider_only() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/chat/completions$"))
+        .respond_with(ChatStreams {
+            bodies: vec![
+                thinking_stream("chatcmpl-1", "Plan the greeting.", "SIG-ONE", "Hello!"),
+                thinking_stream("chatcmpl-2", "Again.", "SIG-TWO", "Hi again!"),
+                thinking_stream("chatcmpl-3", "Other.", "SIG-THREE", "Hey."),
+            ],
+            served: Arc::new(AtomicUsize::new(0)),
+        })
+        .mount(&server)
+        .await;
+
+    let test = chat_on("gateway").build(&server).await?;
+    test.submit_text_turn("hi").await?;
+    test.submit_text_turn("and again").await?;
+    test.codex.shutdown_and_wait().await?;
+    let path = test.codex.rollout_path().expect("rollout path");
+    // The same history on another provider (or key): its thinking is foreign.
+    let test = chat_on("elsewhere")
+        .resume(&server, test.home.clone(), path)
+        .await?;
+    test.submit_text_turn("third").await?;
+
+    let requests: Vec<Value> = server
+        .received_requests()
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/chat/completions"))
+        .map(|request| request.body_json().unwrap())
+        .collect();
+    assert_eq!(requests.len(), 3);
+    // The prompt cache needs the history unchanged: what the first request
+    // sent is where the second begins, byte for byte, and so are the tools.
+    let first = requests[0]["messages"].as_array().unwrap();
+    let second = requests[1]["messages"].as_array().unwrap();
+    assert_eq!(&second[..first.len()], &first[..], "{second:?}");
+    assert_eq!(requests[0]["tools"], requests[1]["tools"]);
+    let back = assistant_messages(&requests[1]);
+    assert_eq!(back.len(), 1, "{back:?}");
+    assert_eq!(
+        back[0]["thinking_blocks"],
+        json!([{"type": "thinking", "thinking": "Plan the greeting.", "signature": "SIG-ONE"}])
+    );
+    assert_eq!(back[0]["reasoning_content"], json!("Plan the greeting."));
+    assert_eq!(back[0]["content"], json!("Hello!"));
+    // Another provider gets the answers, not the thinking it cannot verify.
+    let third = assistant_messages(&requests[2]);
+    assert_eq!(third.len(), 2, "{third:?}");
+    assert!(
+        third.iter().all(|message| message.get("thinking_blocks").is_none()),
+        "{third:?}"
+    );
+    Ok(())
+}

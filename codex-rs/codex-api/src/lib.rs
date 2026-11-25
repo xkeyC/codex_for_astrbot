@@ -88,6 +88,7 @@ pub use crate::endpoint::ResponsesWebsocketProbeError;
 pub use crate::endpoint::ResponsesWebsocketProbeFailureStage;
 pub use crate::endpoint::SearchClient;
 pub use crate::endpoint::decode_image_data_url;
+pub use crate::endpoint::is_chat_thinking_blocks;
 pub use crate::endpoint::session_update_session_json;
 pub use crate::error::ApiError;
 pub use crate::files::HostedFileUploadContext;

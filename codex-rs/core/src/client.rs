@@ -1323,6 +1323,22 @@ impl ModelClient {
                 }
             }
         }
+        // AstrBot: thinking blocks a chat step kept are the chat wire's to send
+        // back; a Responses provider (the same provider switched to it) would
+        // take them for its own encrypted reasoning and reject the request.
+        if self.chat_wire.is_none() {
+            for item in &mut input {
+                if let ResponseItem::Reasoning {
+                    encrypted_content, ..
+                } = item
+                    && encrypted_content
+                        .as_deref()
+                        .is_some_and(codex_api::is_chat_thinking_blocks)
+                {
+                    *encrypted_content = None;
+                }
+            }
+        }
         // AstrBot: code mode's `notify()` gives a call more outputs; providers
         // but OpenAI refuse that. Function outputs (only the fork's function
         // form of `exec` has several) merge for OpenAI too; its custom outputs
