@@ -108,6 +108,7 @@ clearTimeout(earlyTimer); setTimeout(() => {}, 60000);
         let tool_name = ToolName::plain("echo");
         globals::install_globals(scope).expect("install globals");
         scope.set_slot(RuntimeState {
+            typescript: None,
             event_tx: event_tx.into(),
             pending_tool_calls: HashMap::new(),
             pending_timeouts: HashMap::new(),

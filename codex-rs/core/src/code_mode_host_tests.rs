@@ -39,6 +39,7 @@ async fn execute(
                     source: source.to_string(),
                     yield_time_ms: Some(/*value*/ 5_000),
                     max_output_tokens: Some(/*value*/ 1_000),
+                    language: Default::default(),
                 },
                 Arc::new(NoopCodeModeSessionDelegate),
                 /*preempt*/ None,

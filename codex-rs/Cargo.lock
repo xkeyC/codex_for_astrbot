@@ -2937,11 +2937,13 @@ dependencies = [
  "futures",
  "opentelemetry",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-util",
  "tracing",
  "v8",
+ "zstd 0.13.3",
 ]
 
 [[package]]

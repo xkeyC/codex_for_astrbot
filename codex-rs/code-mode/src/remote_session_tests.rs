@@ -78,6 +78,7 @@ async fn shutdown_before_open_does_not_spawn_the_host() {
     let error = session
         .execute(
             codex_code_mode_protocol::ExecuteRequest {
+                language: Default::default(),
                 tool_call_id: "call-1".to_string(),
                 enabled_tools: Vec::new(),
                 source: "text('unreachable')".to_string(),

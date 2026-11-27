@@ -21,6 +21,7 @@ use super::wait_outcome;
 #[test]
 fn execute_request_preserves_tool_schemas_namespaces_and_limits() {
     let request = ExecuteRequest {
+        language: Default::default(),
         tool_call_id: "outer".to_string(),
         enabled_tools: vec![ToolDefinition {
             name: "search".to_string(),
@@ -39,12 +40,14 @@ fn execute_request_preserves_tool_schemas_namespaces_and_limits() {
     assert_eq!(
         execute_request("session", "execution".to_string(), request),
         Ok(grpc::ExecuteRequest {
+            language: Default::default(),
             catalog_revision: None,
             session_id: "session".to_string(),
             execution_id: "execution".to_string(),
             tool_call_id: "outer".to_string(),
             source: "text('hello')".to_string(),
             enabled_tools: vec![grpc::ToolDefinition {
+                input_schema_max_bytes: None,
                 name: "search".to_string(),
                 tool_name: Some(grpc::ToolName {
                     name: "search".to_string(),
@@ -264,4 +267,54 @@ fn completed_wait_reads_optional_buffered_duration_from_response_metadata() {
             Some(Duration::from_nanos(expected_ns))
         );
     }
+}
+
+#[test]
+fn execute_request_sends_typescript_only() {
+    use codex_code_mode_protocol::CodeLanguage;
+
+    let request = |language| ExecuteRequest {
+        language,
+        tool_call_id: "call".to_string(),
+        enabled_tools: Vec::new(),
+        source: String::new(),
+        yield_time_ms: None,
+        max_output_tokens: None,
+    };
+    let language = |language| {
+        execute_request("session", "execution".to_string(), request(language))
+            .map(|request| request.language)
+    };
+    assert_eq!(language(CodeLanguage::JavaScript), Ok(None));
+    assert_eq!(
+        language(CodeLanguage::TypeScript),
+        Ok(Some(grpc::CodeLanguage::Typescript as i32))
+    );
+}
+
+#[test]
+fn execute_request_sends_the_schema_budget_with_a_schema() {
+    let definition = |input_schema| ToolDefinition {
+        name: "search".to_string(),
+        tool_name: ToolName::plain("search"),
+        description: String::new(),
+        kind: CodeModeToolKind::Function,
+        input_schema,
+        input_schema_max_bytes: Some(100),
+        output_schema: None,
+    };
+    let budget = |input_schema| {
+        let request = ExecuteRequest {
+            language: Default::default(),
+            tool_call_id: "call".to_string(),
+            enabled_tools: vec![definition(input_schema)],
+            source: String::new(),
+            yield_time_ms: None,
+            max_output_tokens: None,
+        };
+        execute_request("session", "execution".to_string(), request)
+            .map(|request| request.enabled_tools[0].input_schema_max_bytes)
+    };
+    assert_eq!(budget(Some(json!({ "type": "object" }))), Ok(Some(100)));
+    assert_eq!(budget(None), Ok(None));
 }

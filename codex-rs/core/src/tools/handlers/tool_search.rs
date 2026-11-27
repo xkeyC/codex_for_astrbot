@@ -355,6 +355,7 @@ impl ToolSearchHandler {
                     tool.cached_runtime().map(Arc::as_ref),
                     || Cow::Owned(Arc::unwrap_or_clone(tool.spec())),
                     code_mode_input_schema_max_bytes,
+                    /*keep_schemas*/ false,
                 );
                 let Some(definition) = definitions.iter().find(|definition| {
                     definition.tool_name.clone().with_default_namespace() == candidate_name

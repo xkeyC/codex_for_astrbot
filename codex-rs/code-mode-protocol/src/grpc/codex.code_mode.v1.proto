@@ -206,6 +206,15 @@ message ExecuteRequest {
   optional uint64 max_output_tokens = 7;
   // Nonempty enabled_tools installs a session-local revision. Empty references it.
   optional uint64 catalog_revision = 8;
+  // Fork addition: the source's language. Absent means JavaScript.
+  optional CodeLanguage language = 9;
+}
+
+enum CodeLanguage {
+  CODE_LANGUAGE_UNSPECIFIED = 0;
+  CODE_LANGUAGE_JAVASCRIPT = 1;
+  // Type-checked against the cell's tool declarations, then run stripped.
+  CODE_LANGUAGE_TYPESCRIPT = 2;
 }
 
 message ExecuteEvent {
@@ -292,6 +301,9 @@ message ToolDefinition {
   ToolKind kind = 4;
   optional bytes input_schema_json = 5;
   optional bytes output_schema_json = 6;
+  // Fork addition: the budget the input declaration was rendered with, so a
+  // TypeScript cell is checked against the declaration the model was shown.
+  optional uint64 input_schema_max_bytes = 7;
 }
 
 message ToolName {

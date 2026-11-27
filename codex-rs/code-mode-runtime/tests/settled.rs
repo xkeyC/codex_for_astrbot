@@ -20,6 +20,7 @@ async fn assert_output(source: &str, expected: Value) {
     let started = session
         .execute(
             ExecuteRequest {
+                language: Default::default(),
                 tool_call_id: "settled".to_string(),
                 enabled_tools: Vec::new(),
                 source: source.to_string(),
@@ -226,6 +227,7 @@ async fn terminates_helpers_waiting_for_unsettled_inputs() {
         let response = session
             .execute_to_pending(
                 ExecuteRequest {
+                    language: Default::default(),
                     tool_call_id: "settled".to_string(),
                     enabled_tools: Vec::new(),
                     source: source.to_string(),

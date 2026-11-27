@@ -4,6 +4,7 @@ use crate::tools::context::ToolPayload;
 use crate::tools::context::boxed_tool_output;
 use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
+use codex_code_mode::CodeLanguage;
 use codex_prompts::ResolvedModelMessages;
 use codex_tools::IndirectNamespacePrefixes;
 use codex_tools::ToolName;
@@ -25,6 +26,8 @@ type CodeModeNestedTool = (Arc<ToolSpec>, Option<Arc<dyn CoreToolRuntime>>);
 pub struct CodeModeExecuteHandler {
     spec: ToolSpec,
     nested_tool_specs: Vec<CodeModeNestedTool>,
+    /// Fork addition: TypeScript for `run_code`, JavaScript for `exec`.
+    language: CodeLanguage,
 }
 
 impl CodeModeExecuteHandler {
@@ -32,7 +35,14 @@ impl CodeModeExecuteHandler {
         Self {
             spec,
             nested_tool_specs,
+            language: CodeLanguage::JavaScript,
         }
+    }
+
+    /// Fork addition: programs in `language` (`run_code` takes TypeScript).
+    pub(crate) fn with_language(mut self, language: CodeLanguage) -> Self {
+        self.language = language;
+        self
     }
 
     async fn execute(
@@ -44,8 +54,16 @@ impl CodeModeExecuteHandler {
         code: String,
         telemetry: &mut CodeModeToolCallGuard,
     ) -> Result<CodeModeToolOutput, FunctionCallError> {
-        let args =
-            codex_code_mode::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
+        let args = codex_code_mode::parse_exec_source_in(&code, self.language)
+            .map_err(FunctionCallError::RespondToModel)?;
+        // Fork addition: a TypeScript program keeps a stripped pragma line as
+        // an empty line, so the checker's and the runtime's line numbers are
+        // those of the code the model wrote.
+        let source = if self.language == CodeLanguage::TypeScript && args.code.len() != code.len() {
+            format!("\n{}", args.code)
+        } else {
+            args.code.clone()
+        };
         let exec = ExecContext {
             session,
             turn: Arc::clone(&step_context.turn),
@@ -61,6 +79,7 @@ impl CodeModeExecuteHandler {
                 cached_runtime.as_deref(),
                 || Cow::Borrowed(spec.as_ref()),
                 code_mode_input_schema_max_bytes,
+                /*keep_schemas*/ self.language == CodeLanguage::TypeScript,
             );
             match definitions {
                 Cow::Borrowed(definitions) => enabled_tools.extend_from_slice(definitions),
@@ -89,9 +108,10 @@ impl CodeModeExecuteHandler {
                 codex_code_mode::ExecuteRequest {
                     tool_call_id: call_id.clone(),
                     enabled_tools,
-                    source: args.code.clone(),
+                    source,
                     yield_time_ms: args.yield_time_ms,
                     max_output_tokens: args.max_output_tokens,
+                    language: self.language,
                 },
                 Arc::clone(&step_context),
             )
@@ -250,7 +270,7 @@ impl CodeModeExecuteHandler {
                 .map(boxed_tool_output),
             // Fork addition: `exec` exposed as a function tool carries `{"code": ...}`.
             ToolPayload::Function { arguments } if is_exec_tool_name(&tool_name) => {
-                match exec_function_arguments_to_source(&arguments) {
+                match exec_function_arguments_to_source(&arguments, self.language) {
                     Ok(input) => self
                         .execute(
                             session,
@@ -290,40 +310,55 @@ impl CoreToolRuntime for CodeModeExecuteHandler {
 /// Extracts the script from function-tool arguments: `{"code": "..."}` for
 /// `exec` as a function tool, `{"code": "...", "description": "..."}` for
 /// `run_code` (other keys, the description among them, are ignored).
-fn exec_function_arguments_to_source(arguments: &str) -> Result<String, FunctionCallError> {
+fn exec_function_arguments_to_source(
+    arguments: &str,
+    language: CodeLanguage,
+) -> Result<String, FunctionCallError> {
+    let tool_name = match language {
+        CodeLanguage::JavaScript => PUBLIC_TOOL_NAME,
+        CodeLanguage::TypeScript => codex_code_mode::RUN_CODE_TOOL_NAME,
+    };
+    let language = language.name();
     let arguments: serde_json::Value = serde_json::from_str(arguments).map_err(|err| {
         FunctionCallError::RespondToModel(format!(
-            "{PUBLIC_TOOL_NAME} expects JSON arguments with a `code` string: {err}"
+            "{tool_name} expects JSON arguments with a `code` string: {err}"
         ))
     })?;
     match arguments.get("code") {
         Some(serde_json::Value::String(code)) if !code.trim().is_empty() => Ok(code.clone()),
-        Some(serde_json::Value::String(_)) => Err(FunctionCallError::RespondToModel(
-            "`code` is empty: pass the JavaScript source of the program.".to_string(),
-        )),
-        Some(_) => Err(FunctionCallError::RespondToModel(
-            "`code` must be a string holding the JavaScript source of the program.".to_string(),
-        )),
-        None => Err(FunctionCallError::RespondToModel(
-            "missing `code`: pass the JavaScript source of the program.".to_string(),
-        )),
+        Some(serde_json::Value::String(_)) => Err(FunctionCallError::RespondToModel(format!(
+            "`code` is empty: pass the {language} source of the program."
+        ))),
+        Some(_) => Err(FunctionCallError::RespondToModel(format!(
+            "`code` must be a string holding the {language} source of the program."
+        ))),
+        None => Err(FunctionCallError::RespondToModel(format!(
+            "missing `code`: pass the {language} source of the program."
+        ))),
     }
 }
 
 #[cfg(test)]
 mod exec_function_tool_tests {
+    use super::CodeLanguage;
+    use super::FunctionCallError;
     use super::exec_function_arguments_to_source;
 
     #[test]
     fn extracts_code_from_function_arguments() {
+        let javascript = CodeLanguage::JavaScript;
         assert_eq!(
-            exec_function_arguments_to_source(r#"{"code":"text(1)"}"#).ok(),
+            exec_function_arguments_to_source(r#"{"code":"text(1)"}"#, javascript).ok(),
             Some("text(1)".to_string())
         );
-        assert!(exec_function_arguments_to_source("text(1)").is_err());
+        assert!(exec_function_arguments_to_source("text(1)", javascript).is_err());
         // `run_code` also carries a description, which is the program's label.
         assert_eq!(
-            exec_function_arguments_to_source(r#"{"code":"text(1)","description":"Show 1"}"#).ok(),
+            exec_function_arguments_to_source(
+                r#"{"code":"text(1)","description":"Show 1"}"#,
+                CodeLanguage::TypeScript
+            )
+            .ok(),
             Some("text(1)".to_string())
         );
         for arguments in [
@@ -332,9 +367,19 @@ mod exec_function_tool_tests {
             r#"{"description":"x"}"#,
         ] {
             assert!(
-                exec_function_arguments_to_source(arguments).is_err(),
+                exec_function_arguments_to_source(arguments, javascript).is_err(),
                 "{arguments}"
             );
         }
+        // `run_code`'s errors say it takes TypeScript.
+        let Err(FunctionCallError::RespondToModel(message)) =
+            exec_function_arguments_to_source(r#"{"description":"x"}"#, CodeLanguage::TypeScript)
+        else {
+            panic!("missing code is an error");
+        };
+        assert_eq!(
+            message,
+            "missing `code`: pass the TypeScript source of the program."
+        );
     }
 }

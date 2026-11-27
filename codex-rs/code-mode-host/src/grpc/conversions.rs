@@ -1,3 +1,4 @@
+use codex_code_mode_protocol::CodeLanguage;
 use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeSessionCellExecutionLimits;
 use codex_code_mode_protocol::CodeModeToolKind;
@@ -61,6 +62,13 @@ pub(super) fn execute_request(request: proto::ExecuteRequest) -> Result<ExecuteR
             .map(usize::try_from)
             .transpose()
             .map_err(|_| Status::invalid_argument("maximum output tokens exceeds this platform"))?,
+        language: match request.language.map(proto::CodeLanguage::try_from) {
+            None | Some(Ok(proto::CodeLanguage::Unspecified | proto::CodeLanguage::Javascript)) => {
+                CodeLanguage::JavaScript
+            }
+            Some(Ok(proto::CodeLanguage::Typescript)) => CodeLanguage::TypeScript,
+            Some(Err(_)) => return Err(Status::invalid_argument("unknown code language")),
+        },
     })
 }
 
@@ -84,7 +92,11 @@ fn tool_definition(definition: proto::ToolDefinition) -> Result<ToolDefinition, 
             }
         },
         input_schema: json_field(definition.input_schema_json, "input schema")?,
-        input_schema_max_bytes: None,
+        input_schema_max_bytes: definition
+            .input_schema_max_bytes
+            .map(usize::try_from)
+            .transpose()
+            .map_err(|_| Status::invalid_argument("input schema budget exceeds this platform"))?,
         output_schema: json_field(definition.output_schema_json, "output schema")?,
     })
 }

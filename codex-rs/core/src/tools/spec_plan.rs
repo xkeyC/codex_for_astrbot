@@ -1267,10 +1267,10 @@ fn register_code_mode_executors(
                 turn_context.config.code_mode.compact_exec_description,
             ),
         )));
-        registry.prepend_trusted(Arc::new(CodeModeExecuteHandler::new(
-            exec_spec,
-            code_mode_nested_tool_specs,
-        )));
+        registry.prepend_trusted(Arc::new(
+            CodeModeExecuteHandler::new(exec_spec, code_mode_nested_tool_specs)
+                .with_language(codex_code_mode::CodeLanguage::TypeScript),
+        ));
         return (code_mode_tool_names, None, code_mode_names);
     }
     let (mut exec_description, exec_definitions) =

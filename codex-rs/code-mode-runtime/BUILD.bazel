@@ -6,6 +6,10 @@ codex_rust_crate(
         "src/runtime/content.js",
         "src/runtime/inspect.js",
         "src/runtime/settled.js",
+        "src/typescript/checker.js",
+        "vendor/typescript/libs.json.zst",
+        "vendor/typescript/ts-blank-space.js",
+        "vendor/typescript/typescript.js.zst",
     ],
     crate_name = "codex_code_mode_runtime",
 )

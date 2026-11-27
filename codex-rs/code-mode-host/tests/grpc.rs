@@ -118,6 +118,7 @@ impl CodeModeSessionDelegate for SelfCancellingToolDelegate {
 
 fn request(source: &str) -> ExecuteRequest {
     ExecuteRequest {
+        language: Default::default(),
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),
@@ -1550,5 +1551,85 @@ async fn unix_socket_endpoints_execute_code_mode_cells() -> Result<()> {
     }
 
     server.abort();
+    Ok(())
+}
+
+/// Fork addition: TypeScript cells are type-checked in the host before they
+/// run; a type error fails the cell without calling a tool.
+#[tokio::test]
+async fn typescript_cells_are_checked_before_they_run() -> Result<()> {
+    let host = HostHarness::start("grpc://127.0.0.1:0").await?;
+    let provider = GrpcCodeModeSessionProvider::new(host.endpoint);
+    let delegate = Arc::new(RecordingDelegate::default());
+    let session = provider
+        .create_session()
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let echo = ToolDefinition {
+        input_schema: Some(json!({
+            "type": "object",
+            "properties": { "value": { "type": "string" } },
+            "required": ["value"],
+            "additionalProperties": false
+        })),
+        ..tool("echo")
+    };
+    let typescript = |source: &str| ExecuteRequest {
+        language: codex_code_mode::CodeLanguage::TypeScript,
+        enabled_tools: vec![echo.clone()],
+        ..request(source)
+    };
+
+    let failed = execute(
+        &session,
+        typescript("const r = await tools.echo({ value: 1 });\ntext(r.value);"),
+        delegate.clone(),
+    )
+    .await?;
+    let cold = failed.code_mode_host_duration();
+    let RuntimeResponse::Result { error_text, .. } = &failed else {
+        panic!("expected a result, got {failed:?}");
+    };
+    assert!(
+        error_text.as_deref().is_some_and(|text| text.starts_with(
+            "TypeScript check failed: 1 error. The program did not run; fix it and call run_code again.\n\
+             code.ts:1:30 - error TS2322: Type 'number' is not assignable to type 'string'."
+        )),
+        "{error_text:?}"
+    );
+
+    let passed = execute(
+        &session,
+        typescript(
+            "const r: { value: string } = await tools.echo({ value: \"a\" });\ntext(r.value);",
+        ),
+        delegate.clone(),
+    )
+    .await?;
+    assert_eq!(
+        passed,
+        text_response("2", "output", passed.code_mode_host_duration())
+    );
+    eprintln!(
+        "TypeScript cells in the host: first (cold checker) {cold:?}, second {:?}",
+        passed.code_mode_host_duration()
+    );
+    let invocations = delegate
+        .invocations
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(|invocation| invocation.input.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(invocations, vec![Some(json!({ "value": "a" }))]);
+
+    session.shutdown().await.map_err(anyhow::Error::msg)?;
+    assert_eq!(
+        *delegate
+            .closed_cells
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec![cell_id("1"), cell_id("2")]
+    );
     Ok(())
 }

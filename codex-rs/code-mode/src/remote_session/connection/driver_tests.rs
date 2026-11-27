@@ -155,6 +155,7 @@ impl DriverHarness {
                 session,
                 delegate,
                 request: WireExecuteRequest {
+                    language: Default::default(),
                     catalog_revision: None,
                     tool_call_id: format!("call-{request_id}"),
                     enabled_tools: Vec::new(),
@@ -587,6 +588,7 @@ async fn deferred_delegates_follow_cell_readiness_and_cancellation() {
                 delegate: delegate.clone(),
                 session: session.clone(),
                 request: WireExecuteRequest {
+                    language: Default::default(),
                     catalog_revision: None,
                     tool_call_id: tool_call_id.to_string(),
                     enabled_tools: Vec::new(),
@@ -776,6 +778,7 @@ async fn dropped_open_waiter_shuts_down_committed_session() {
             delegate: Arc::new(RecordingDelegate::default()),
             session: session.clone(),
             request: WireExecuteRequest {
+                language: Default::default(),
                 catalog_revision: None,
                 tool_call_id: "call-1".to_string(),
                 enabled_tools: Vec::new(),
@@ -1735,6 +1738,7 @@ async fn abandoned_execute_is_tracked_and_terminated_after_admission() {
             delegate: delegate.clone(),
             session: session.clone(),
             request: WireExecuteRequest {
+                language: Default::default(),
                 catalog_revision: None,
                 tool_call_id: "call-1".to_string(),
                 enabled_tools: Vec::new(),
@@ -1835,6 +1839,7 @@ async fn delivered_but_unclaimed_execute_is_terminated_when_the_caller_is_cancel
             delegate: delegate.clone(),
             session: session.clone(),
             request: WireExecuteRequest {
+                language: Default::default(),
                 catalog_revision: None,
                 tool_call_id: "call-1".to_string(),
                 enabled_tools: Vec::new(),
@@ -2001,6 +2006,7 @@ async fn connection_failure_closes_every_live_cell_once() {
             delegate: delegate.clone(),
             session,
             request: WireExecuteRequest {
+                language: Default::default(),
                 catalog_revision: None,
                 tool_call_id: "call-1".to_string(),
                 enabled_tools: Vec::new(),
@@ -2182,6 +2188,7 @@ async fn dropped_shutdown_waiter_does_not_abort_remote_cleanup() {
             delegate: Arc::new(RecordingDelegate::default()),
             session,
             request: WireExecuteRequest {
+                language: Default::default(),
                 catalog_revision: None,
                 tool_call_id: "call-2".to_string(),
                 enabled_tools: Vec::new(),

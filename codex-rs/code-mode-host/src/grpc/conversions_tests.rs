@@ -17,6 +17,7 @@ use super::wait_response;
 #[test]
 fn rejects_missing_names_unknown_tool_kinds_and_invalid_json_schemas() {
     let definition = proto::ToolDefinition {
+        input_schema_max_bytes: None,
         name: "echo".to_string(),
         tool_name: None,
         description: String::new(),
@@ -25,6 +26,7 @@ fn rejects_missing_names_unknown_tool_kinds_and_invalid_json_schemas() {
         output_schema_json: None,
     };
     let request = |definition| proto::ExecuteRequest {
+        language: Default::default(),
         catalog_revision: None,
         session_id: "session".to_string(),
         execution_id: "execution".to_string(),
@@ -174,4 +176,47 @@ fn grpc_encoding_rejects_untimed_runtime_output() {
             MissingCodeModeHostDuration
         );
     }
+}
+
+#[test]
+fn execute_request_reads_the_code_language() {
+    use codex_code_mode_protocol::CodeLanguage;
+
+    let request = |language| proto::ExecuteRequest {
+        language,
+        catalog_revision: None,
+        session_id: "session".to_string(),
+        execution_id: "execution".to_string(),
+        tool_call_id: "call".to_string(),
+        source: String::new(),
+        enabled_tools: Vec::new(),
+        yield_time_ms: None,
+        max_output_tokens: None,
+    };
+    for (language, expected) in [
+        (None, CodeLanguage::JavaScript),
+        (
+            Some(proto::CodeLanguage::Unspecified as i32),
+            CodeLanguage::JavaScript,
+        ),
+        (
+            Some(proto::CodeLanguage::Javascript as i32),
+            CodeLanguage::JavaScript,
+        ),
+        (
+            Some(proto::CodeLanguage::Typescript as i32),
+            CodeLanguage::TypeScript,
+        ),
+    ] {
+        assert_eq!(
+            execute_request(request(language))
+                .map(|request| request.language)
+                .map_err(|status| status.code()),
+            Ok(expected)
+        );
+    }
+    assert_eq!(
+        execute_request(request(Some(99))).map_err(|status| status.code()),
+        Err(Code::InvalidArgument)
+    );
 }

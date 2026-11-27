@@ -17,6 +17,7 @@ async fn run(source: &str) -> Vec<FunctionCallOutputContentItem> {
     let started = session
         .execute(
             ExecuteRequest {
+                language: Default::default(),
                 tool_call_id: "inspect".to_string(),
                 enabled_tools: Vec::new(),
                 source: source.to_string(),
@@ -67,8 +68,5 @@ async fn inspect_shows_strings_images_and_json() {
     assert_eq!(items[4..6], [text("undefined"), text("7n")]);
     assert_eq!(items[6], text("[object Object]"));
     // A value the image helper refuses is shown as JSON instead.
-    assert_eq!(
-        items[7],
-        text("{\n  \"image_url\": \"not an image\"\n}")
-    );
+    assert_eq!(items[7], text("{\n  \"image_url\": \"not an image\"\n}"));
 }

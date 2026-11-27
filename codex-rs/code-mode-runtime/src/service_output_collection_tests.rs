@@ -33,6 +33,7 @@ async fn start(session: &InProcessCodeModeSession, source: &str) -> RuntimeRespo
     session
         .execute(
             ExecuteRequest {
+                language: Default::default(),
                 tool_call_id: "bounded-output".to_owned(),
                 enabled_tools: Vec::new(),
                 source: source.to_owned(),

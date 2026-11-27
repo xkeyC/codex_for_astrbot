@@ -17,6 +17,7 @@ async fn array_sort_preserves_element_kinds_after_comparator_mutation() {
     let started = service
         .execute(
             ExecuteRequest {
+                language: Default::default(),
                 tool_call_id: "call_1".to_string(),
                 enabled_tools: Vec::new(),
                 source: r#"

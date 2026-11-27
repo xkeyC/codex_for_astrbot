@@ -93,7 +93,7 @@ pub(crate) fn create_run_code_function_tool(description: String) -> ToolSpec {
         (
             "code".to_string(),
             JsonSchema::string(Some(
-                "The JavaScript program. It may start with an optional `// @exec: {...}` line."
+                "The TypeScript program. It may start with an optional `// @exec: {...}` line."
                     .to_string(),
             )),
         ),

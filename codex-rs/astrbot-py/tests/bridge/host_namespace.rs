@@ -290,7 +290,7 @@ async fn run_code_resolves_conflicts_and_finds_tools_by_final_names() -> Result<
         const found = await tools.codex_tool_search({ query: \"vrchat chatbox\" });\n\
         inspect(finder, found.tools.map((tool) => tool.name), found.tools[0].description);\n\
         inspect(await tools.qq_file({}));\n\
-        inspect(typeof tools.tool_search, typeof tools.vrchat_chatbox);";
+        inspect(typeof (tools as any).tool_search, typeof (tools as any).vrchat_chatbox);";
     let mock = responses::mount_sse_sequence(
         &server,
         vec![

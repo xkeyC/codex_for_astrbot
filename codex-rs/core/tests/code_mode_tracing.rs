@@ -123,6 +123,7 @@ async fn stdio_callbacks_preserve_context_across_overlapping_yielded_cells() {
             session
                 .execute(
                     ExecuteRequest {
+                        language: Default::default(),
                         tool_call_id: format!("call-{sequence}"),
                         enabled_tools: vec![ToolDefinition {
                             name: "gate".to_string(),

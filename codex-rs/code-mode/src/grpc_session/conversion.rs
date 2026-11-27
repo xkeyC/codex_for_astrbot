@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use codex_code_mode_protocol::CellId;
+use codex_code_mode_protocol::CodeLanguage;
 use codex_code_mode_protocol::CodeModeNestedToolCall;
 use codex_code_mode_protocol::CodeModeOutputTruncation;
 use codex_code_mode_protocol::CodeModeToolKind;
@@ -48,10 +49,18 @@ pub(super) fn execute_request(
             .map(u64::try_from)
             .transpose()
             .map_err(|error| format!("invalid code-mode output token limit: {error}"))?,
+        language: match request.language {
+            CodeLanguage::JavaScript => None,
+            CodeLanguage::TypeScript => Some(grpc::CodeLanguage::Typescript as i32),
+        },
     })
 }
 
 fn tool_definition(definition: ToolDefinition) -> Result<grpc::ToolDefinition, String> {
+    let input_schema_max_bytes = definition
+        .input_schema
+        .as_ref()
+        .and(definition.input_schema_max_bytes);
     Ok(grpc::ToolDefinition {
         name: definition.name,
         tool_name: Some(grpc::ToolName {
@@ -73,6 +82,8 @@ fn tool_definition(definition: ToolDefinition) -> Result<grpc::ToolDefinition, S
             .map(|schema| serde_json::to_vec(&schema))
             .transpose()
             .map_err(|error| format!("failed to encode code-mode tool output schema: {error}"))?,
+        // Only with a schema to render: a request without one stays as it was.
+        input_schema_max_bytes: input_schema_max_bytes.map(|max_bytes| max_bytes as u64),
     })
 }
 

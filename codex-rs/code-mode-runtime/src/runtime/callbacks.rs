@@ -37,7 +37,7 @@ pub(super) fn tool_callback(
         }
     };
 
-    let (tool_name, tool_kind) = {
+    let (tool_name, tool_kind, argument_error) = {
         let Some(state) = scope.get_slot::<RuntimeState>() else {
             throw_type_error(scope, "runtime state unavailable");
             return;
@@ -50,7 +50,16 @@ pub(super) fn tool_callback(
             throw_type_error(scope, "tool callback data is out of range");
             return;
         };
-        (tool.tool_name.clone(), tool.kind)
+        // Fork addition: a TypeScript cell's arguments must fit the tool's
+        // input schema; a call that does not fails without being made.
+        let argument_error = state
+            .typescript
+            .as_ref()
+            .and_then(|catalog| catalog.input_schema(tool_index))
+            .zip(input.as_ref())
+            .and_then(|(schema, input)| crate::typescript::check_arguments(schema, input))
+            .map(|error| format!("tools.{}: {error}", tool.global_name));
+        (tool.tool_name.clone(), tool.kind, argument_error)
     };
 
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
@@ -58,6 +67,16 @@ pub(super) fn tool_callback(
         return;
     };
     let promise = resolver.get_promise(scope);
+    if let Some(error_text) = argument_error {
+        // Rejected like a failed tool call: with the message as a plain string.
+        let Some(error) = v8::String::new(scope, &error_text) else {
+            throw_type_error(scope, "failed to allocate tool error");
+            return;
+        };
+        resolver.reject(scope, error.into());
+        retval.set(promise.into());
+        return;
+    }
     let resolver = v8::Global::new(scope, resolver);
 
     let Some(state) = scope.get_slot_mut::<RuntimeState>() else {

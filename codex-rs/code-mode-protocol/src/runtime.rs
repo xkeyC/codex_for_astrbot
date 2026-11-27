@@ -16,6 +16,33 @@ pub const DEFAULT_EXEC_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 pub const DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL: usize = 10_000;
 
+/// Fork addition: the language of an [`ExecuteRequest`]'s source.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodeLanguage {
+    /// Plain JavaScript, evaluated as is.
+    #[default]
+    JavaScript,
+    /// TypeScript, type-checked against the cell's tool declarations before
+    /// it runs (type errors fail the cell without running it), then run with
+    /// its types stripped. Offered to open-weight models as `run_code`.
+    TypeScript,
+}
+
+impl CodeLanguage {
+    pub fn is_javascript(&self) -> bool {
+        *self == Self::JavaScript
+    }
+
+    /// The language's name, for messages to the model.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::JavaScript => "JavaScript",
+            Self::TypeScript => "TypeScript",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ExecuteRequest {
     pub tool_call_id: String,
@@ -23,6 +50,9 @@ pub struct ExecuteRequest {
     pub source: String,
     pub yield_time_ms: Option<u64>,
     pub max_output_tokens: Option<usize>,
+    /// Fork addition: JavaScript unless set; omitted from the wire then.
+    #[serde(default, skip_serializing_if = "CodeLanguage::is_javascript")]
+    pub language: CodeLanguage,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

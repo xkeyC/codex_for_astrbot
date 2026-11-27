@@ -106,3 +106,32 @@ fn stdio_encoding_rejects_untimed_runtime_output() {
         );
     }
 }
+
+#[test]
+fn code_language_is_left_out_for_javascript() {
+    use crate::CodeLanguage;
+    use crate::ExecuteRequest;
+    use crate::host::WireExecuteRequest;
+
+    let request = |language| ExecuteRequest {
+        tool_call_id: "call".to_string(),
+        enabled_tools: Vec::new(),
+        source: "1".to_string(),
+        yield_time_ms: None,
+        max_output_tokens: None,
+        language,
+    };
+    for language in [CodeLanguage::JavaScript, CodeLanguage::TypeScript] {
+        let wire = WireExecuteRequest::try_from(request(language)).expect("wire request");
+        let json = serde_json::to_value(&wire).expect("serialize");
+        assert_eq!(
+            json.get("language").and_then(serde_json::Value::as_str),
+            (language == CodeLanguage::TypeScript).then_some("typescript")
+        );
+        let decoded: WireExecuteRequest = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(
+            ExecuteRequest::try_from(decoded).expect("request").language,
+            language
+        );
+    }
+}

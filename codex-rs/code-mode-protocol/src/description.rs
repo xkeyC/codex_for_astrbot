@@ -9,6 +9,7 @@ use serde_json::Value as JsonValue;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use crate::CodeLanguage;
 use crate::PUBLIC_TOOL_NAME;
 use crate::json_schema_types::render_json_schema_to_typescript;
 use crate::json_schema_types::render_json_schema_to_typescript_with_budget;
@@ -187,10 +188,20 @@ pub struct ParsedExecSource {
 }
 
 pub fn parse_exec_source(input: &str) -> Result<ParsedExecSource, String> {
+    parse_exec_source_in(input, CodeLanguage::JavaScript)
+}
+
+/// Fork addition: [`parse_exec_source`] for a program in `language`, whose
+/// errors name that language (`run_code` takes TypeScript).
+pub fn parse_exec_source_in(
+    input: &str,
+    language: CodeLanguage,
+) -> Result<ParsedExecSource, String> {
     if input.trim().is_empty() {
-        return Err(
-            "exec expects raw JavaScript source text (non-empty). Provide JS only, optionally with first-line `// @exec: {\"yield_time_ms\": 10000, \"max_output_tokens\": 1000}`.".to_string(),
-        );
+        return Err(match language {
+            CodeLanguage::JavaScript => "exec expects raw JavaScript source text (non-empty). Provide JS only, optionally with first-line `// @exec: {\"yield_time_ms\": 10000, \"max_output_tokens\": 1000}`.".to_string(),
+            CodeLanguage::TypeScript => "run_code expects TypeScript source text (non-empty), optionally with first-line `// @exec: {\"yield_time_ms\": 10000, \"max_output_tokens\": 1000}`.".to_string(),
+        });
     }
 
     let mut args = ParsedExecSource {
@@ -208,9 +219,10 @@ pub fn parse_exec_source(input: &str) -> Result<ParsedExecSource, String> {
     };
 
     if rest.trim().is_empty() {
-        return Err(
-            "exec pragma must be followed by JavaScript source on subsequent lines".to_string(),
-        );
+        return Err(format!(
+            "exec pragma must be followed by {} source on subsequent lines",
+            language.name()
+        ));
     }
 
     let directive = pragma.trim();

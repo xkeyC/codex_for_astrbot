@@ -15,6 +15,7 @@ async fn code_mode_runs_with_jit_disabled() {
     let started = service
         .execute(
             ExecuteRequest {
+                language: Default::default(),
                 tool_call_id: "call_1".to_string(),
                 enabled_tools: Vec::new(),
                 source: "21 * 2;".to_string(),

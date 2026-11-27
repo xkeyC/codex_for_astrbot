@@ -99,6 +99,7 @@ pub(super) fn execute_request(
     source: &str,
 ) -> proto::ExecuteRequest {
     proto::ExecuteRequest {
+        language: Default::default(),
         catalog_revision: None,
         session_id: session_id.to_string(),
         execution_id: execution_id.to_string(),
@@ -112,6 +113,7 @@ pub(super) fn execute_request(
 
 pub(super) fn tool(name: &str) -> proto::ToolDefinition {
     proto::ToolDefinition {
+        input_schema_max_bytes: None,
         name: name.to_string(),
         tool_name: Some(proto::ToolName {
             name: name.to_string(),

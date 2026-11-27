@@ -99,6 +99,7 @@ async fn decode_frame(frame: EncodedFrame) -> HostToClient {
 
 fn execute_request(source: &str) -> WireExecuteRequest {
     WireExecuteRequest {
+        language: Default::default(),
         catalog_revision: None,
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),

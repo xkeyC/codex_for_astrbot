@@ -8,12 +8,13 @@ use super::value::value_to_error_text;
 pub(super) fn evaluate_main_module(
     scope: &mut v8::PinScope<'_, '_>,
     source_text: &str,
+    resource_name: &str,
 ) -> Result<Option<v8::Global<v8::Promise>>, String> {
     let tc = std::pin::pin!(v8::TryCatch::new(scope));
     let mut tc = tc.init();
     let source = v8::String::new(&tc, source_text)
         .ok_or_else(|| "failed to allocate exec source".to_string())?;
-    let origin = script_origin(&mut tc, "exec_main.mjs")?;
+    let origin = script_origin(&mut tc, resource_name)?;
     let mut source = v8::script_compiler::Source::new(source, Some(&origin));
     let module = v8::script_compiler::compile_module(&tc, &mut source).ok_or_else(|| {
         tc.exception()

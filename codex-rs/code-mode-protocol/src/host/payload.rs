@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 use crate::CellId;
+use crate::CodeLanguage;
 use crate::CodeModeNestedToolCall;
 use crate::CodeModeOutputTruncation;
 use crate::CodeModeSessionCellExecutionLimits;
@@ -170,6 +171,9 @@ pub struct WireToolDefinition {
     pub kind: WireToolKind,
     pub input_schema: Option<JsonValue>,
     pub output_schema: Option<JsonValue>,
+    /// Fork addition: the budget the input declaration was rendered with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema_max_bytes: Option<usize>,
 }
 
 impl From<ToolDefinition> for WireToolDefinition {
@@ -179,6 +183,11 @@ impl From<ToolDefinition> for WireToolDefinition {
             tool_name: value.tool_name.into(),
             description: value.description,
             kind: value.kind.into(),
+            // Only with a schema to render: a request without one stays as it was.
+            input_schema_max_bytes: value
+                .input_schema
+                .as_ref()
+                .and(value.input_schema_max_bytes),
             input_schema: value.input_schema,
             output_schema: value.output_schema,
         }
@@ -193,7 +202,7 @@ impl From<WireToolDefinition> for ToolDefinition {
             description: value.description,
             kind: value.kind.into(),
             input_schema: value.input_schema,
-            input_schema_max_bytes: None,
+            input_schema_max_bytes: value.input_schema_max_bytes,
             output_schema: value.output_schema,
         }
     }
@@ -211,6 +220,9 @@ pub struct WireExecuteRequest {
     pub source: String,
     pub yield_time_ms: Option<u64>,
     pub max_output_tokens: Option<i32>,
+    /// Fork addition: absent means JavaScript.
+    #[serde(default, skip_serializing_if = "CodeLanguage::is_javascript")]
+    pub language: CodeLanguage,
 }
 
 impl TryFrom<ExecuteRequest> for WireExecuteRequest {
@@ -224,6 +236,7 @@ impl TryFrom<ExecuteRequest> for WireExecuteRequest {
             source: value.source,
             yield_time_ms: value.yield_time_ms,
             max_output_tokens: value.max_output_tokens.map(i32::try_from).transpose()?,
+            language: value.language,
         })
     }
 }
@@ -238,6 +251,7 @@ impl TryFrom<WireExecuteRequest> for ExecuteRequest {
             source: value.source,
             yield_time_ms: value.yield_time_ms,
             max_output_tokens: value.max_output_tokens.map(usize::try_from).transpose()?,
+            language: value.language,
         })
     }
 }

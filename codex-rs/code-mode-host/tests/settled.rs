@@ -69,6 +69,7 @@ async fn assert_partial_results(provider: &dyn CodeModeSessionProvider) {
         let session = provider.create_session().await.expect("create session");
         let started = session
             .execute(ExecuteRequest {
+                language: Default::default(),
                 tool_call_id: "settled".to_string(),
                 enabled_tools: vec![ToolDefinition {
                     name: "slow".to_string(),

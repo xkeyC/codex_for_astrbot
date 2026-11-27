@@ -404,3 +404,70 @@ async fn deferred_tools_are_found_with_the_search_binding() -> Result<()> {
     assert!(output.contains("opened"), "{output}");
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_type_error_comes_back_and_nothing_runs() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                responses::ev_response_created("resp-1"),
+                run_code_call(
+                    "call-1",
+                    "// @exec: {\"yield_time_ms\": 10000}\n\
+                     const value = await tools.lookup({ key: 1 });\n\
+                     inspect(value.lenght);",
+                    "Look up 1",
+                ),
+                responses::ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                responses::ev_response_created("resp-2"),
+                run_code_call(
+                    "call-2",
+                    "const value: string = await tools.lookup({ key: \"1\" });\ninspect(value);",
+                    "Look up 1",
+                ),
+                responses::ev_completed("resp-2"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("msg-1", "done"),
+                responses::ev_completed("resp-3"),
+            ]),
+        ],
+    )
+    .await;
+    let test = open_model_thread(&server).await?;
+    start_turn(&test, "Look up 1.").await?;
+    // The first program never ran: the only tool call is the second one's.
+    let request = next_tool_request(&test).await;
+    assert_eq!(request.arguments, json!({ "key": "1" }));
+    answer(&test, request, "value-1").await?;
+    turn_complete(&test).await;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    let failed = outputs(&requests[1].input(), "call-1", "function_call_output");
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    // Positions are the model's: the pragma line counts.
+    assert!(
+        failed[0].starts_with("Script failed")
+            && failed[0].contains(
+                "TypeScript check failed: 1 error. The program did not run; fix it and call run_code again.\n\
+                 code.ts:2:36 - error TS2322: Type 'number' is not assignable to type 'string'.\n  \
+                 2 | const value = await tools.lookup({ key: 1 });"
+            ),
+        "{failed:?}"
+    );
+    let passed = outputs(&requests[2].input(), "call-2", "function_call_output");
+    assert!(
+        passed.len() == 1
+            && passed[0].starts_with("Script completed")
+            && passed[0].contains("value-1"),
+        "{passed:?}"
+    );
+    Ok(())
+}

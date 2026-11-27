@@ -5,10 +5,14 @@
 //! the tool's name, arguments and description differ. The description is a
 //! guide to writing the program and one consolidated TypeScript block that
 //! declares the runtime's globals and every declared tool (sorted by name, so
-//! its bytes stay the same for the prompt cache).
+//! its bytes stay the same for the prompt cache). Programs are TypeScript:
+//! the runtime type-checks each one against the same block, rendered for the
+//! checker by [`build_run_code_checker_declarations`], before it runs.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
+use std::ops::Range;
 
 use crate::ImageDetailVisibility;
 use crate::ToolDefinition;
@@ -26,15 +30,17 @@ pub const RUN_CODE_TOOL_SEARCH_DESCRIPTION: &str = "Finds tools that are not dec
 
 const TOOL_SEARCH_NAME: &str = "tool_search";
 
-const RUN_CODE_INTRO: &str = "Run a JavaScript program against the available tools. Takes two required arguments: `code`, the program to run, and `description`, a short active-voice summary of what the program does (for example \"Look up the weather in Paris\"), shown as its label. Call tools as `await tools.name(args)` per the declarations below, and show what you need with `inspect(...values)`.";
+const RUN_CODE_INTRO: &str = "Run a TypeScript program against the available tools. Takes two required arguments: `code`, the program to run, and `description`, a short active-voice summary of what the program does (for example \"Look up the weather in Paris\"), shown as its label. Call tools as `await tools.name(args)` per the declarations below, and show what you need with `inspect(...values)`.";
 
 const RUN_CODE_GUIDE: &str = r#"## Writing code for run_code
 
-`run_code` takes two required arguments: `code`, the JavaScript source of the program (no markdown fences), and `description`, a short summary of what the program does. The program runs as an async module (top-level `await` works) in a fresh V8 isolate: plain JavaScript, with no Node APIs, file system, network or console. The declarations below are SDK bindings for this program. A declaration does not make its name a directly callable tool; only names supplied as separate tool schemas may be called directly.
+`run_code` takes two required arguments: `code`, the TypeScript source of the program (no markdown fences), and `description`, a short summary of what the program does. The program is type-checked against the declarations below before it runs: on a type error nothing runs, and the result lists the errors to fix before you call `run_code` again. It then runs as an async module (top-level `await` works) in a fresh V8 isolate, with no Node APIs, file system, network or `console` (show values with `inspect`). The declarations below are SDK bindings for this program. A declaration does not make its name a directly callable tool; only names supplied as separate tool schemas may be called directly.
 
 Inside the program:
 
-- Call tools as `await tools.name(args)` — quoted access for exotic names: `tools["my-tool"](args)`. Tool arguments must be lossless JSON.
+- Write erasable TypeScript only: annotations, interfaces, type aliases, `as`, generics, `satisfies`; no `enum`, `namespace`, parameter properties or decorators. Annotate empty containers: `const seen: Record<string, number> = {}`.
+- Call tools as `await tools.name(args)` — quoted access for exotic names: `tools["my-tool"](args)`. Tool arguments must be lossless JSON, and are also checked against the tool's schema when the call is made.
+- A result typed `unknown` has no declared shape: `inspect` it first, or cast it (`as { items: string[] }`).
 - A FAILED tool call rejects with its error message as a plain string: `try/catch` it to handle the failure and continue.
 - Independent read-only calls MAY overlap under `Promise.all`; sequence dependent work with `await`.
 - Show selected values and images with `inspect(...values)` (`text(value)` and `image(...)` append one item each); every other intermediate result stays out of the conversation, so extract just what you need. `notify(value)` shows a value at once, while the program keeps running.
@@ -59,16 +65,33 @@ declare function image(imageUrlOrItem: string | { image_url: string; detail?: "a
 const IMAGE_DECLARATION: &str = r#"/** Appends an image: a base64 `data:` URL, `{ image_url }`, or an MCP image block of a tool result. */
 declare function image(imageUrlOrItem: string | { image_url: string } | { type: "image"; data: string; mimeType: string }): void;"#;
 
-const RUNTIME_DECLARATIONS_TAIL: &str = r#"/** Sends a text update to the conversation right away, while the program keeps running; a value other than a string is JSON-stringified. */
+const GENERATED_IMAGE_DECLARATION: &str = r#"/** Appends an image-generation result: its image, then its `output_hint` as text when present. */
+declare function generatedImage(result: { image_url: string; output_hint?: string }): void;"#;
+
+const RUNTIME_DECLARATIONS_STORE: &str = r#"/** Sends a text update to the conversation right away, while the program keeps running; a value other than a string is JSON-stringified. */
 declare function notify(value: unknown): void;
 /** Keeps a JSON-serializable value under `key` for later run_code calls of this conversation. */
 declare function store(key: string, value: unknown): void;
-/** The value an earlier run_code call stored under `key`, or undefined. */
-declare function load(key: string): unknown;
-/** Ends the program successfully, right away. */
+/** The value an earlier run_code call stored under `key`, or undefined. */"#;
+
+const LOAD_DECLARATION: &str = "declare function load(key: string): unknown;";
+
+/// The checker reads a stored value as `any`, as a tool result without a
+/// declared shape: neither has a type to check against.
+const CHECKER_LOAD_DECLARATION: &str = "declare function load(key: string): any;";
+
+const RUNTIME_DECLARATIONS_TAIL: &str = r#"/** Ends the program successfully, right away. */
 declare function exit(): never;
 /** Every tool the program can call, declared here or not, with its description. */
 declare const ALL_TOOLS: ReadonlyArray<{ name: string; description: string }>;"#;
+
+/// Globals the runtime installs that the prompt leaves out; declared for the
+/// checker so a program that uses them type-checks.
+const CHECKER_ONLY_DECLARATIONS: &str = r#"declare function content(value: unknown): void;
+declare function audio(audioUrlOrItem: unknown): void;
+declare function setTimeout(callback: (...args: any[]) => void, delayMs?: number, ...args: any[]): number;
+declare function clearTimeout(timeoutId?: number): void;
+declare function yield_control(): void;"#;
 
 const RUN_CODE_WAIT_DESCRIPTION: &str = r#"Waits on a `run_code` program that is still running, and returns its new output or its result.
 - Use `wait` only after `run_code` returned `Script running with cell ID ...`: that program kept running (its tool calls too), and `wait` collects what it produced since.
@@ -98,12 +121,7 @@ pub fn build_run_code_tool_description(
     namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
     options: RunCodeDescriptionOptions,
 ) -> String {
-    let mut tools = enabled_tools
-        .iter()
-        .map(|tool| (normalize_code_mode_identifier(&tool.name), tool))
-        .collect::<Vec<_>>();
-    tools.sort_by(|(left, _), (right, _)| left.cmp(right));
-    tools.dedup_by(|(left, _), (right, _)| left == right);
+    let tools = sorted_tools(enabled_tools);
 
     // Code mode's own search tool, by the name it has here (`codex_tool_search`
     // where a host tool took `tool_search`).
@@ -124,32 +142,155 @@ pub fn build_run_code_tool_description(
             "{{ yield_time_ms }}",
             &options.default_exec_yield_time_ms.to_string(),
         );
+    let declarations = render_sdk(
+        &tools,
+        namespace_descriptions,
+        SdkFlavor::Prompt(options.image_detail_visibility),
+        &BTreeSet::new(),
+    )
+    .text;
 
+    format!("{RUN_CODE_INTRO}\n\n{guide}\n\nProgram-only SDK bindings:\n```ts\n{declarations}\n```")
+}
+
+/// The declarations a `run_code` program is type-checked against: the SDK
+/// block of the description, rendered from the cell's whole catalog (deferred
+/// tools included) by the same code, with three differences that only make
+/// it accept more. Tool results without an output schema and stored values
+/// are `any`, not `unknown`; every global the runtime installs is declared;
+/// and comments are left out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RunCodeCheckerDeclarations {
+    pub text: String,
+    /// The lines (0-based, end exclusive) of each tool's `ToolArgsMap` and
+    /// `ToolOutputMap` entries.
+    entries: Vec<SdkEntry>,
+}
+
+impl RunCodeCheckerDeclarations {
+    /// The tools whose entries span any of `lines` (0-based).
+    pub fn tools_at_lines(&self, lines: &[usize]) -> BTreeSet<String> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                lines
+                    .iter()
+                    .any(|line| entry.args.contains(line) || entry.output.contains(line))
+            })
+            .map(|entry| entry.name.clone())
+            .collect()
+    }
+}
+
+/// See [`RunCodeCheckerDeclarations`]. The tools named in `untyped_tools`
+/// (by their global name) take and return `any`: a fallback for a tool whose
+/// rendered declaration does not compile.
+pub fn build_run_code_checker_declarations(
+    enabled_tools: &[ToolDefinition],
+    untyped_tools: &BTreeSet<String>,
+) -> RunCodeCheckerDeclarations {
+    let sdk = render_sdk(
+        &sorted_tools(enabled_tools),
+        &BTreeMap::new(),
+        SdkFlavor::Checker,
+        untyped_tools,
+    );
+    RunCodeCheckerDeclarations {
+        text: sdk.text,
+        entries: sdk.entries,
+    }
+}
+
+fn sorted_tools(enabled_tools: &[ToolDefinition]) -> Vec<(String, &ToolDefinition)> {
+    let mut tools = enabled_tools
+        .iter()
+        .map(|tool| (normalize_code_mode_identifier(&tool.name), tool))
+        .collect::<Vec<_>>();
+    tools.sort_by(|(left, _), (right, _)| left.cmp(right));
+    tools.dedup_by(|(left, _), (right, _)| left == right);
+    tools
+}
+
+#[derive(Clone, Copy)]
+enum SdkFlavor {
+    Prompt(ImageDetailVisibility),
+    Checker,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SdkEntry {
+    name: String,
+    args: Range<usize>,
+    output: Range<usize>,
+}
+
+struct Sdk {
+    text: String,
+    entries: Vec<SdkEntry>,
+}
+
+/// The one renderer of the SDK block, for the prompt and for the checker.
+fn render_sdk(
+    tools: &[(String, &ToolDefinition)],
+    namespace_descriptions: &BTreeMap<String, ToolNamespaceDescription>,
+    flavor: SdkFlavor,
+    untyped_tools: &BTreeSet<String>,
+) -> Sdk {
+    let checker = matches!(flavor, SdkFlavor::Checker);
     let mut args_map = String::new();
     let mut output_map = String::new();
+    let mut entries = Vec::new();
     let mut current_namespace: Option<&str> = None;
-    for (name, tool) in &tools {
-        let namespace = tool
-            .tool_name
-            .namespace
-            .as_deref()
-            .and_then(|namespace| namespace_descriptions.get(namespace));
-        let namespace_name = namespace.map(|namespace| namespace.name.as_str());
-        if namespace_name != current_namespace
-            && let Some(namespace) = namespace
-            && !namespace.description.trim().is_empty()
-        {
-            for line in namespace.description.trim().lines() {
-                let _ = writeln!(args_map, "  // {}", line.trim_end());
+    for (name, tool) in tools {
+        if !checker {
+            let namespace = tool
+                .tool_name
+                .namespace
+                .as_deref()
+                .and_then(|namespace| namespace_descriptions.get(namespace));
+            let namespace_name = namespace.map(|namespace| namespace.name.as_str());
+            if namespace_name != current_namespace
+                && let Some(namespace) = namespace
+                && !namespace.description.trim().is_empty()
+            {
+                for line in namespace.description.trim().lines() {
+                    let _ = writeln!(args_map, "  // {}", line.trim_end());
+                }
             }
+            current_namespace = namespace_name;
+            let description = if is_search_tool(tool) {
+                RUN_CODE_TOOL_SEARCH_DESCRIPTION
+            } else {
+                tool.description.as_str()
+            };
+            push_doc_comment(&mut args_map, description);
         }
-        current_namespace = namespace_name;
-        let description = if is_search_tool(tool) {
-            RUN_CODE_TOOL_SEARCH_DESCRIPTION
+        let args_start = line_count(&args_map);
+        let output_start = line_count(&output_map);
+        let (input_type, output_type) = if !checker {
+            (definition_input_type(tool), definition_output_type(tool))
+        } else if untyped_tools.contains(name) {
+            ("any".to_string(), "any".to_string())
         } else {
-            tool.description.as_str()
+            let output_type = if tool.output_schema.is_some() {
+                definition_output_type(tool)
+            } else {
+                "any".to_string()
+            };
+            (definition_input_type(tool), output_type)
         };
-        push_tool_entry(&mut args_map, &mut output_map, name, description, tool);
+        push_map_entry(
+            &mut args_map,
+            &mut output_map,
+            name,
+            &input_type,
+            &output_type,
+        );
+        entries.push(SdkEntry {
+            name: name.clone(),
+            args: args_start..line_count(&args_map),
+            output: output_start..line_count(&output_map),
+        });
     }
 
     let output_types_use_mcp = output_map.contains("CallToolResult");
@@ -160,20 +301,52 @@ pub fn build_run_code_tool_description(
     }
     declarations.push_str(RUNTIME_DECLARATIONS_HEAD);
     declarations.push('\n');
-    declarations.push_str(match options.image_detail_visibility {
-        ImageDetailVisibility::Visible => IMAGE_DECLARATION_WITH_DETAIL,
-        ImageDetailVisibility::Hidden => IMAGE_DECLARATION,
+    declarations.push_str(match flavor {
+        SdkFlavor::Prompt(ImageDetailVisibility::Hidden) => IMAGE_DECLARATION,
+        // The checker accepts the detail argument the runtime takes either way.
+        SdkFlavor::Prompt(ImageDetailVisibility::Visible) | SdkFlavor::Checker => {
+            IMAGE_DECLARATION_WITH_DETAIL
+        }
+    });
+    declarations.push('\n');
+    declarations.push_str(GENERATED_IMAGE_DECLARATION);
+    declarations.push('\n');
+    declarations.push_str(RUNTIME_DECLARATIONS_STORE);
+    declarations.push('\n');
+    declarations.push_str(if checker {
+        CHECKER_LOAD_DECLARATION
+    } else {
+        LOAD_DECLARATION
     });
     declarations.push('\n');
     declarations.push_str(RUNTIME_DECLARATIONS_TAIL);
+    if checker {
+        declarations.push('\n');
+        declarations.push_str(CHECKER_ONLY_DECLARATIONS);
+    }
+    declarations.push_str("\ninterface ToolArgsMap {\n");
+    let args_offset = line_count(&declarations);
+    declarations.push_str(&args_map);
+    declarations.push_str("}\ninterface ToolOutputMap {\n");
+    let output_offset = line_count(&declarations);
     let _ = write!(
         declarations,
-        "\ninterface ToolArgsMap {{\n{args_map}}}\ninterface ToolOutputMap {{\n{output_map}}}\n\
+        "{output_map}}}\n\
 type ToolName = keyof ToolArgsMap;\n\
 declare const tools: {{ [K in ToolName]: (args: ToolArgsMap[K]) => Promise<ToolOutputMap[K]> }};"
     );
+    for entry in &mut entries {
+        entry.args = entry.args.start + args_offset..entry.args.end + args_offset;
+        entry.output = entry.output.start + output_offset..entry.output.end + output_offset;
+    }
+    Sdk {
+        text: declarations,
+        entries,
+    }
+}
 
-    format!("{RUN_CODE_INTRO}\n\n{guide}\n\nProgram-only SDK bindings:\n```ts\n{declarations}\n```")
+fn line_count(text: &str) -> usize {
+    text.bytes().filter(|byte| *byte == b'\n').count()
 }
 
 fn is_search_tool(tool: &ToolDefinition) -> bool {
@@ -186,12 +359,13 @@ pub fn render_run_code_tool_declaration(definition: &ToolDefinition) -> String {
     let name = normalize_code_mode_identifier(&definition.name);
     let mut args_map = String::new();
     let mut output_map = String::new();
-    push_tool_entry(
+    push_doc_comment(&mut args_map, &definition.description);
+    push_map_entry(
         &mut args_map,
         &mut output_map,
         &name,
-        &definition.description,
-        definition,
+        &definition_input_type(definition),
+        &definition_output_type(definition),
     );
     format!("interface ToolArgsMap {{\n{args_map}}}\ninterface ToolOutputMap {{\n{output_map}}}")
 }
@@ -205,17 +379,16 @@ pub fn build_run_code_wait_tool_description(compact: bool) -> &'static str {
     }
 }
 
-fn push_tool_entry(
+fn push_map_entry(
     args_map: &mut String,
     output_map: &mut String,
     name: &str,
-    description: &str,
-    tool: &ToolDefinition,
+    input_type: &str,
+    output_type: &str,
 ) {
     let key = serde_json::to_string(name).unwrap_or_else(|_| format!("\"{name}\""));
-    push_doc_comment(args_map, description);
-    let _ = writeln!(args_map, "  {key}: {};", definition_input_type(tool));
-    let _ = writeln!(output_map, "  {key}: {};", definition_output_type(tool));
+    let _ = writeln!(args_map, "  {key}: {input_type};");
+    let _ = writeln!(output_map, "  {key}: {output_type};");
 }
 
 /// `description` as a JSDoc comment at the map entries' indent.

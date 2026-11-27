@@ -1,4 +1,6 @@
+use codex_code_mode_protocol::CodeLanguage;
 use codex_code_mode_protocol::EnabledToolMetadata;
+use codex_code_mode_protocol::ToolDefinition;
 use codex_code_mode_protocol::normalize_code_mode_identifier;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -34,13 +36,31 @@ use crate::cell_actor::take_completed_event;
 use crate::output::OutputCollector;
 use crate::session_runtime as runtime;
 use crate::session_runtime::SessionRuntime;
+use crate::typescript::TypeScriptCatalog;
 
 const YIELD_GRACE_PERIOD: Duration = Duration::from_secs(1);
 const MIN_YIELD_TIME_FOR_GRACE: Duration = Duration::from_secs(10);
 
+/// The session's latest catalog revision.
+struct CatalogRevision {
+    revision: u64,
+    tools: runtime::ToolCatalog,
+    types: Arc<TypeScriptCatalog>,
+}
+
+impl Default for CatalogRevision {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            tools: Arc::new([]),
+            types: Arc::new(TypeScriptCatalog::new(Vec::new())),
+        }
+    }
+}
+
 pub struct InProcessCodeModeSession {
     runtime: SessionRuntime,
-    catalog: Mutex<(u64, runtime::ToolCatalog)>,
+    catalog: Mutex<CatalogRevision>,
     options: CodeModeSessionOptions,
 }
 
@@ -83,43 +103,66 @@ impl InProcessCodeModeSession {
         request: ExecuteRequest,
         revision: Option<u64>,
     ) -> Result<runtime::CreateCellRequest, String> {
-        let tools: Vec<EnabledToolMetadata> = request
-            .enabled_tools
-            .into_iter()
+        let ExecuteRequest {
+            tool_call_id,
+            enabled_tools,
+            source,
+            language,
+            ..
+        } = request;
+        let shared = revision.is_some() && !enabled_tools.is_empty();
+        let tools: Vec<EnabledToolMetadata> = enabled_tools
+            .iter()
             .map(|tool| EnabledToolMetadata {
                 global_name: normalize_code_mode_identifier(&tool.name),
-                tool_name: tool.tool_name,
-                description: tool.description,
+                tool_name: tool.tool_name.clone(),
+                description: tool.description.clone(),
                 kind: tool.kind,
             })
             .collect();
-        let mut tools: runtime::ToolCatalog = if revision.is_some() && !tools.is_empty() {
+        let mut tools: runtime::ToolCatalog = if shared {
             EnabledToolMetadata::shared_catalog(tools).into()
         } else {
             tools.into_iter().map(Arc::new).collect()
         };
+        // Fork addition: the full definitions, for TypeScript cells.
+        let mut types = Arc::new(TypeScriptCatalog::new(if shared {
+            ToolDefinition::shared_catalog(&enabled_tools)
+        } else {
+            enabled_tools.into_iter().map(Arc::new).collect()
+        }));
         if let Some(revision) = revision {
             let mut cache = self.catalog.lock().unwrap_or_else(PoisonError::into_inner);
             if revision == 0 {
                 return Err("invalid code-mode catalog revision".into());
             }
             if tools.is_empty() {
-                if revision != cache.0 {
+                if revision != cache.revision {
                     return Err("unknown code-mode catalog revision".into());
                 }
-                tools = Arc::clone(&cache.1);
-            } else if revision > cache.0 {
-                *cache = (revision, Arc::clone(&tools));
-            } else if revision == cache.0 && tools != cache.1 {
-                return Err("conflicting code-mode catalog revision".into());
+                tools = Arc::clone(&cache.tools);
+                types = Arc::clone(&cache.types);
+            } else if revision > cache.revision {
+                *cache = CatalogRevision {
+                    revision,
+                    tools: Arc::clone(&tools),
+                    types: Arc::clone(&types),
+                };
+            } else if revision == cache.revision {
+                if tools != cache.tools {
+                    return Err("conflicting code-mode catalog revision".into());
+                }
+                // The revision's checker declarations are rendered once.
+                types = Arc::clone(&cache.types);
             }
             // A late full request runs with its own tools after cancellation.
         }
         Ok(runtime::CreateCellRequest {
             output_truncation: self.options.output_truncation,
-            tool_call_id: request.tool_call_id,
+            tool_call_id,
             enabled_tools: tools,
-            source: request.source,
+            source,
+            typescript: (language == CodeLanguage::TypeScript).then_some(types),
         })
     }
 
@@ -558,3 +601,7 @@ mod contract_tests;
 #[cfg(test)]
 #[path = "service_output_collection_tests.rs"]
 mod output_collection_tests;
+
+#[cfg(test)]
+#[path = "service_typescript_tests.rs"]
+mod typescript_tests;

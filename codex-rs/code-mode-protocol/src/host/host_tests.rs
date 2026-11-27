@@ -77,10 +77,12 @@ where
 
 fn execute_request() -> WireExecuteRequest {
     WireExecuteRequest {
+        language: Default::default(),
         catalog_revision: None,
         tool_call_id: "call-1".to_string(),
         enabled_tools: vec![
             WireToolDefinition {
+                input_schema_max_bytes: None,
                 name: "function_tool".to_string(),
                 tool_name: WireToolName {
                     name: "function_tool".to_string(),
@@ -92,6 +94,7 @@ fn execute_request() -> WireExecuteRequest {
                 output_schema: None,
             },
             WireToolDefinition {
+                input_schema_max_bytes: None,
                 name: "freeform_tool".to_string(),
                 tool_name: WireToolName {
                     name: "freeform_tool".to_string(),

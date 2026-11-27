@@ -3,6 +3,7 @@ mod output;
 mod runtime;
 mod service;
 mod session_runtime;
+mod typescript;
 mod ui;
 mod v8_init;
 

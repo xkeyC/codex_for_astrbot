@@ -133,6 +133,7 @@ fn spawn_cell_actor_harness_with_host_and_failure_handler<H: CellHost>(
     let (runtime_tx, _runtime_control_tx, runtime_terminate_handle) = spawn_runtime(
         HashMap::new(),
         CellRequest {
+            typescript: None,
             tool_call_id: "call-1".to_string(),
             enabled_tools: Default::default(),
             source: "await new Promise(() => {});".to_string(),

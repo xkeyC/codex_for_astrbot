@@ -58,6 +58,7 @@ async fn execution_timing_includes_javascript_but_excludes_delayed_reads() -> Re
         let observed = Instant::now();
         let mut execution = client
             .execute(grpc::ExecuteRequest {
+                language: Default::default(),
                 catalog_revision: None,
                 session_id: opened.session_id.clone(),
                 execution_id: format!("execution-{index}"),
@@ -133,6 +134,7 @@ async fn stdio_execution_timing_includes_javascript_but_excludes_delayed_reads()
         let started = session
             .execute(
                 ExecuteRequest {
+                    language: Default::default(),
                     tool_call_id: format!("call-{index}"),
                     source: format!(
                         "const until = Date.now() + 150; while (Date.now() < until) {{}} \
@@ -197,6 +199,7 @@ async fn observation_timing_excludes_previous_requests_and_background_time() -> 
         let started = session
             .execute(
                 ExecuteRequest {
+                    language: Default::default(),
                     tool_call_id: "call-1".to_string(),
                     source: "await new Promise(() => {});".to_string(),
                     enabled_tools: Vec::new(),

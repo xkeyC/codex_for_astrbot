@@ -159,6 +159,7 @@ fn cell_id(value: &str) -> CellId {
 
 fn execute_request(source: &str) -> ExecuteRequest {
     ExecuteRequest {
+        language: Default::default(),
         tool_call_id: "call-1".to_string(),
         enabled_tools: Vec::new(),
         source: source.to_string(),

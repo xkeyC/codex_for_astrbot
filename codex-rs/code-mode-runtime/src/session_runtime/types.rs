@@ -91,6 +91,9 @@ pub(crate) struct CreateCellRequest {
     pub(crate) tool_call_id: String,
     pub(crate) enabled_tools: ToolCatalog,
     pub(crate) source: String,
+    /// Fork addition: set for a TypeScript cell, with the definitions of
+    /// `enabled_tools` (same order) its program is checked against.
+    pub(crate) typescript: Option<Arc<crate::typescript::TypeScriptCatalog>>,
 }
 
 /// A tool name with an optional namespace.

@@ -85,6 +85,7 @@ async fn assert_shared_capacity(
     for index in 0..cells {
         let session = &sessions[index % sessions.len()];
         let request = ExecuteRequest {
+            language: Default::default(),
             tool_call_id: format!("capacity-{index}"),
             enabled_tools: vec![ToolDefinition {
                 name: "block".to_string(),
@@ -124,6 +125,7 @@ async fn assert_shared_capacity(
     let probe = sessions[0]
         .execute(
             ExecuteRequest {
+                language: Default::default(),
                 tool_call_id: "unrelated-probe".to_string(),
                 enabled_tools: Vec::new(),
                 source: "text('ready');".to_string(),

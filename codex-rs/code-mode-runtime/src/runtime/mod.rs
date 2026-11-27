@@ -17,6 +17,8 @@ use crate::TaskFailureHandler;
 use crate::session_runtime::CreateCellRequest;
 use crate::session_runtime::OutputItem;
 use crate::session_runtime::ToolCatalog;
+use crate::typescript;
+use crate::typescript::TypeScriptCatalog;
 use crate::v8_init::ensure_v8_initialized;
 use codex_code_mode_protocol::ATTACH_IMAGES_KEY;
 use codex_code_mode_protocol::CodeModeToolKind;
@@ -99,6 +101,7 @@ pub(crate) fn spawn_runtime(
         enabled_tools: request.enabled_tools,
         source: request.source,
         stored_values,
+        typescript: request.typescript,
     };
 
     let runtime_handle = tokio::runtime::Handle::current();
@@ -143,6 +146,7 @@ struct RuntimeConfig {
     enabled_tools: ToolCatalog,
     source: String,
     stored_values: HashMap<String, Arc<JsonValue>>,
+    typescript: Option<Arc<TypeScriptCatalog>>,
 }
 
 pub(super) struct RuntimeState {
@@ -157,6 +161,9 @@ pub(super) struct RuntimeState {
     tool_call_id: String,
     runtime_command_tx: std_mpsc::Sender<RuntimeCommand>,
     exit_requested: bool,
+    /// Fork addition: a TypeScript cell's tool definitions, whose input
+    /// schemas its nested calls are checked against.
+    typescript: Option<Arc<TypeScriptCatalog>>,
 }
 
 pub(super) enum CompletionState {
@@ -178,6 +185,18 @@ fn run_runtime(
     if isolate_handle_tx.send(isolate_handle).is_err() {
         return;
     }
+    // Fork addition: a TypeScript program runs only once it type-checks, as
+    // the JavaScript its types blank out to (same lines and columns).
+    let (source, resource_name) = match &config.typescript {
+        Some(catalog) => match typescript::prepare_program(catalog, &config.source) {
+            Ok(javascript) => (javascript, typescript::PROGRAM_NAME),
+            Err(error_text) => {
+                send_result(&event_tx, HashMap::new(), Some(error_text));
+                return;
+            }
+        },
+        None => (config.source, "exec_main.mjs"),
+    };
     isolate.set_host_import_module_dynamically_callback(module_loader::dynamic_import_callback);
 
     v8::scope!(let scope, isolate);
@@ -201,11 +220,12 @@ fn run_runtime(
         tool_call_id: config.tool_call_id,
         runtime_command_tx,
         exit_requested: false,
+        typescript: config.typescript,
     });
 
     let _ = event_tx.blocking_send(RuntimeEvent::Started);
 
-    let pending_promise = match module_loader::evaluate_main_module(scope, &config.source) {
+    let pending_promise = match module_loader::evaluate_main_module(scope, &source, resource_name) {
         Ok(pending_promise) => pending_promise,
         Err(error_text) => {
             send_scope_result(scope, &event_tx, Some(error_text));
@@ -368,6 +388,7 @@ mod tests {
             enabled_tools: Default::default(),
             source: source.to_string(),
             output_truncation: codex_code_mode_protocol::CodeModeOutputTruncation::Client,
+            typescript: None,
         }
     }
 
