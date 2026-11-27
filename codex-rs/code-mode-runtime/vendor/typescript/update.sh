@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regenerates the vendored TypeScript checker inputs of code mode's `run_code`:
 #   typescript.js.zst   typescript/lib/typescript.js (the compiler, run in its own V8 isolate)
-#   libs.json.zst       {"lib.es5.d.ts": "...", ...}: the lib files reachable from lib.es2024.d.ts
+#   libs.json.zst       {"lib.es5.d.ts": "...", ...}: the lib files reachable from lib.es2025.d.ts
 #   ts-blank-space.js   ts-blank-space's out/*.js as one classic script on the global `ts`
 #   LICENSE-typescript.txt, ThirdPartyNoticeText-typescript.txt, LICENSE-ts-blank-space.txt
 #
@@ -49,7 +49,7 @@ from pathlib import Path
 
 lib_dir, out = Path(sys.argv[1]), Path(sys.argv[2])
 reference = re.compile(r'^/// <reference lib="([^"]+)" />', re.M)
-libs, pending = {}, ["es2024"]
+libs, pending = {}, ["es2025"]
 while pending:
     name = f"lib.{pending.pop()}.d.ts"
     if name in libs:

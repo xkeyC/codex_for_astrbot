@@ -211,6 +211,8 @@ clearTimeout(setTimeout(() => yield_control(), 10));
 await new Promise((resolve) => setTimeout(resolve, 1));
 class Counter { private count = 0; add(n: number): this { this.count += n; return this; } }
 inspect(new Counter().add(1));
+// ES2025 library: Set methods and iterator helpers, which V8 has.
+inspect(new Set([1]).union(new Set([2])).size, [1, 2, 3].values().take(2).toArray());
 exit();
 "#;
     let javascript = check(source).expect("the program type-checks");

@@ -158,13 +158,17 @@ async fn a_checked_program_runs_and_calls_its_tools() {
             "interface Counted { echo: { n: number } }\n\
              const twice = <T,>(value: T): [T, T] => [value, value];\n\
              const result = (await tools.count({ n: 2 })) as Counted;\n\
-             text(twice(result.echo.n).join(\",\"));",
+             text(twice(result.echo.n).join(\",\"));\n\
+             text([...new Set([1]).union(new Set([2]))].concat([3, 4].values().take(1).toArray()).join(\",\"));",
         ),
         None,
         &delegate,
     )
     .await;
-    assert_eq!((output, error_text), (vec!["2,2".to_string()], None));
+    assert_eq!(
+        (output, error_text),
+        (vec!["2,2".to_string(), "1,2,3".to_string()], None)
+    );
     assert_eq!(delegate.inputs(), vec![Some(json!({ "n": 2 }))]);
 }
 

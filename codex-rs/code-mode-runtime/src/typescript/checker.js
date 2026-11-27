@@ -13,8 +13,8 @@
   const SDK = "/sdk.d.ts";
   const LIB_DIR = "/lib/";
   const options = {
-    target: ts.ScriptTarget.ES2024,
-    lib: ["lib.es2024.d.ts"],
+    target: ts.ScriptTarget.ES2025,
+    lib: ["lib.es2025.d.ts"],
     module: ts.ModuleKind.ESNext,
     moduleDetection: ts.ModuleDetectionKind.Force,
     strict: false,
@@ -111,7 +111,7 @@
         if (fileName.startsWith(LIB_DIR)) return libFile(fileName, languageVersion);
         return undefined;
       },
-      getDefaultLibFileName: () => LIB_DIR + "lib.es2024.d.ts",
+      getDefaultLibFileName: () => LIB_DIR + "lib.es2025.d.ts",
       getDefaultLibLocation: () => LIB_DIR.slice(0, -1),
       writeFile() {},
       getCurrentDirectory: () => "/",
