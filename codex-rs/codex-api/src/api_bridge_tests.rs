@@ -966,3 +966,48 @@ fn runtime_auth_denials_stop_retries_without_losing_http_diagnostics() {
         }
     }
 }
+
+/// AstrBot: open-model servers word a context overflow their own way.
+#[test]
+fn map_http_error_recognizes_open_model_context_overflow() {
+    let halogen = serde_json::json!({"error": {
+        "message": "the prompt does not fit: it is 330549 tokens and the context is 262144, 68405 tokens over. Shorten the prompt, or raise the context (HALOGEN_CTX, and HALOGEN_ROPE_YARN for more than the native 262144).",
+        "type": "invalid_request_error", "param": null, "code": null}});
+    let vllm = serde_json::json!({"error": {"message": "This model's maximum context length is 32768 tokens. However, you requested 40000 tokens.", "type": "BadRequestError", "code": 400}});
+    let plain = serde_json::json!({"error": {"message": "unknown parameter: foo", "type": "invalid_request_error", "code": null}});
+    let map = |status: u16, body: &serde_json::Value| {
+        map_api_error(ApiError::Transport(TransportError::Http {
+            retry_after: None,
+            status: http::StatusCode::from_u16(status).unwrap(),
+            url: None,
+            headers: None,
+            body: Some(body.to_string()),
+        }))
+    };
+    assert!(matches!(
+        map(400, &halogen).details(),
+        CodexErrorDetails::ContextWindowExceeded
+    ));
+    assert!(matches!(
+        map(400, &vllm).details(),
+        CodexErrorDetails::ContextWindowExceeded
+    ));
+    assert!(matches!(
+        map(
+            413,
+            &serde_json::json!({"error": {"message": "prompt is too long"}})
+        )
+        .details(),
+        CodexErrorDetails::ContextWindowExceeded
+    ));
+    assert!(!matches!(
+        map(400, &plain).details(),
+        CodexErrorDetails::ContextWindowExceeded
+    ));
+    // The same body as a terminal stream error.
+    assert!(matches!(
+        parse_terminal_provider_error(halogen.get("error"), None),
+        Some(ApiError::ContextWindowExceeded)
+    ));
+    assert!(parse_terminal_provider_error(plain.get("error"), None).is_none());
+}

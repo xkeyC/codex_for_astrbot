@@ -37,6 +37,7 @@ mod thread_input;
 pub use thread_input::InputWaitOutcome;
 mod turn_extension_data;
 pub use turn_extension_data::WithTurnExtensionData;
+mod compact_chunked;
 mod compact_model_fallback;
 mod compact_pending_input;
 mod compact_remote_history;

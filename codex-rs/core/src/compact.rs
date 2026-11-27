@@ -307,6 +307,23 @@ async fn run_compact_task_inner_impl(
     // Reuse one client session so turn-scoped state (sticky routing and websocket incremental
     // request tracking) survives retries within this compact turn.
     let mut client_session = sess.services.model_client.new_session();
+    // AstrBot: a history larger than this model's window is summarized in
+    // parts first, oldest first, instead of losing its oldest items unread.
+    {
+        let responses_metadata = sess
+            .compaction_responses_metadata(&step_context, compaction_metadata)
+            .await;
+        crate::compact_chunked::summarize_oversized_history(
+            &mut request,
+            &sess,
+            &step_context,
+            &mut client_session,
+            &responses_metadata,
+            &mut history,
+            &fallback_instructions,
+        )
+        .await?;
+    }
     let compaction_response = loop {
         // Clone is required because of the loop
         let mut prompt_history = history.clone();
@@ -978,6 +995,65 @@ async fn drain_to_completed(
                 }
                 return Err(e);
             }
+        }
+    }
+}
+
+/// AstrBot: streams one summarization request and returns its output without
+/// recording anything in the session (no history items, no token usage): a
+/// partial summary of an oversized history belongs only to the final
+/// compaction prompt. See `compact_chunked`.
+pub(crate) async fn drain_summary_only(
+    request: &mut crate::hook_runtime::sampling::SamplingRequest,
+    sess: &Arc<Session>,
+    step_context: &Arc<StepContext>,
+    client_session: &mut ModelClientSession,
+    responses_metadata: &CodexResponsesMetadata,
+    prompt: &Arc<Prompt>,
+) -> CodexResult<Vec<ResponseItem>> {
+    let turn_context = step_context.turn.as_ref();
+    let cancellation = &step_context.turn_cancellation;
+    let mut stream = request
+        .open(
+            sess,
+            step_context,
+            &turn_context.model_info().slug,
+            cancellation,
+            client_session.open_model_response(
+                prompt,
+                turn_context.model_info(),
+                &turn_context.session_telemetry,
+                SamplingOptions {
+                    reasoning_effort: sess
+                        .reasoning_effort_for_request(
+                            &turn_context.initial_settings,
+                            RequestEffortUsage::Compaction,
+                        )
+                        .await,
+                    reasoning_summary: turn_context.reasoning_summary(),
+                    service_tier: turn_context.config.service_tier.clone(),
+                },
+                responses_metadata,
+                &InferenceTraceContext::disabled(),
+            ),
+        )
+        .or_cancel(cancellation)
+        .await??;
+    let mut output = Vec::new();
+    loop {
+        let Some(SamplingEvent { event, .. }) = stream.next_for_turn(cancellation).await else {
+            return Err(CodexErr::Stream(
+                "stream closed before response.completed".into(),
+            ));
+        };
+        match event {
+            Ok(ResponseEvent::OutputItemDone(item)) => output.push(item),
+            Ok(ResponseEvent::RateLimits(snapshot)) => {
+                sess.update_rate_limits(turn_context, snapshot).await;
+            }
+            Ok(ResponseEvent::Completed { .. }) => return Ok(output),
+            Ok(_) => continue,
+            Err(e) => return Err(e),
         }
     }
 }

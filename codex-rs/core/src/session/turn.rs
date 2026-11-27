@@ -549,6 +549,7 @@ pub(crate) async fn run_turn(
 
     let mut next_step_context = Some(first_step_context);
     let mut guardian_budget_compacted = false;
+    let mut overflow_compacted = false;
     let mut unfinished_plan_id = None;
     loop {
         // Note that pending_input would be something like a message the user
@@ -680,6 +681,7 @@ pub(crate) async fn run_turn(
             Ok(result) => {
                 let (sampling_request_output, notify_messages) = result;
                 guardian_budget_compacted = false;
+                overflow_compacted = false;
 
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
@@ -961,6 +963,30 @@ pub(crate) async fn run_turn(
                 sess.services
                     .thread_extension_data
                     .insert(crate::guardian::ExhaustedReviewBudget::Compacting);
+                run_auto_compact(
+                    &sess,
+                    Arc::clone(&step_context),
+                    Arc::clone(&step_context),
+                    &mut client_session,
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                    /*candidate*/ None,
+                )
+                .await?;
+                can_drain_pending_input = false;
+                continue;
+            }
+            // AstrBot: any other request over the model's window (an open
+            // model's smaller window, one large tool output) compacts, in parts
+            // if need be, and retries once per model step instead of ending
+            // the turn with the provider's error.
+            Err(err)
+                if auto_summarization_enabled
+                    && matches!(err.details(), CodexErrorDetails::ContextWindowExceeded)
+                    && !overflow_compacted =>
+            {
+                overflow_compacted = true;
+                warn!(error = %err, "request exceeded the context window; compacting and retrying");
                 run_auto_compact(
                     &sess,
                     Arc::clone(&step_context),

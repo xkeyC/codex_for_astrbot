@@ -818,8 +818,7 @@ fn chat_error(error: &Value) -> ApiError {
         .and_then(Value::as_str)
         .map(str::to_string)
         .unwrap_or_else(|| error.to_string());
-    let lowered = message.to_lowercase();
-    if lowered.contains("context length") || lowered.contains("maximum context") {
+    if crate::error::is_context_overflow_message(&message) {
         ApiError::ContextWindowExceeded
     } else {
         ApiError::Stream(message)

@@ -12,4 +12,5 @@ pub(crate) use history::estimate_item_token_count_with_audio;
 pub(crate) use history::is_user_turn_boundary;
 pub(crate) use history::rejected_audio;
 pub(crate) use media_availability::replace_unresolvable_media_files;
+pub(crate) use normalize::remove_orphan_outputs;
 pub(crate) use sampling::sampled_through;

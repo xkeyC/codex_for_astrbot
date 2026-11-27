@@ -217,9 +217,21 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                         .contains("The image data you provided does not represent a valid image")
                     {
                         CodexErr::InvalidImageRequest()
+                    } else if crate::error::is_context_overflow_message(
+                        provider_error
+                            .and_then(|e| e.get("message"))
+                            .and_then(Value::as_str)
+                            .unwrap_or(&body_text),
+                    ) {
+                        // AstrBot: an open-model server's overflow, worded its own way.
+                        CodexErr::ContextWindowExceeded
                     } else {
                         CodexErr::InvalidRequest(body_text)
                     }
+                } else if status == http::StatusCode::PAYLOAD_TOO_LARGE
+                    && crate::error::is_context_overflow_message(&body_text)
+                {
+                    CodexErr::ContextWindowExceeded
                 } else if status == http::StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
                 } else if status == http::StatusCode::TOO_MANY_REQUESTS {

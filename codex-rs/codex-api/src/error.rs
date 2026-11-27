@@ -89,16 +89,46 @@ impl From<RateLimitError> for ApiError {
     }
 }
 
+/// AstrBot: whether a provider's error text means the request exceeded the
+/// model's context window. Providers other than OpenAI word it freely; these
+/// are the phrasings seen from llama.cpp/vLLM/SGLang/halogen/DeepSeek/Anthropic.
+pub(crate) fn is_context_overflow_message(message: &str) -> bool {
+    let m = message.to_lowercase();
+    const PHRASES: [&str; 12] = [
+        "context_length_exceeded",
+        "context length",
+        "context_length",
+        "maximum context",
+        "context window",
+        "context size",
+        "prompt does not fit",
+        "prompt is too long",
+        "input is too long",
+        "too many tokens",
+        "exceeds the context",
+        "maximum input length",
+    ];
+    PHRASES.iter().any(|p| m.contains(p))
+        || (m.contains("does not fit") && m.contains("context"))
+        || (m.contains("exceed") && m.contains("token") && m.contains("limit"))
+}
+
 pub(crate) fn parse_terminal_provider_error(
     error: Option<&Value>,
     status: Option<StatusCode>,
 ) -> Option<ApiError> {
     let error = error?;
-    let code = error.get("code")?.as_str()?;
     let message = error
         .get("message")
         .and_then(Value::as_str)
         .filter(|message| !message.trim().is_empty());
+    // AstrBot: open-model servers report an overflow without OpenAI's code
+    // (halogen: `"code": null`, "the prompt does not fit ...").
+    let Some(code) = error.get("code").and_then(Value::as_str) else {
+        return message
+            .filter(|m| is_context_overflow_message(m))
+            .map(|_| ApiError::ContextWindowExceeded);
+    };
     match (code, status) {
         ("inference_hook_denied", None | Some(StatusCode::FORBIDDEN)) => {
             Some(ApiError::InferenceHookDenied {
