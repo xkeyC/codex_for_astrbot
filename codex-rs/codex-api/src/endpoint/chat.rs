@@ -47,6 +47,9 @@ use codex_client::RequestCompression;
 use codex_client::RequestTelemetry;
 use codex_client::StreamResponse;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
@@ -443,6 +446,10 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
     let mut step = AssistantStep::default();
     // Calls of the last assistant message without an output yet.
     let mut open: Vec<String> = Vec::new();
+    // Image parts of tool outputs, not yet sent: a chat `tool` message
+    // carries text only, so they follow as a user message once every open
+    // call is answered (a user message between them breaks the history).
+    let mut images: Vec<Value> = Vec::new();
     for item in &request.input {
         match item {
             ResponseItem::Message { role, content, .. } if role == "assistant" => {
@@ -450,16 +457,18 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
             }
             // The base instructions (Codex sends them as the first input item).
             ResponseItem::Message { role, content, .. } if role == "system" => {
-                flush_step(&mut messages, &mut step, &mut open);
+                flush_step(&mut messages, &mut step, &mut open, &mut images);
                 close_calls(&mut messages, &mut open);
+                flush_images(&mut messages, &mut images);
                 let text = message_text(content);
                 if !text.is_empty() {
                     messages.push(json!({"role": "system", "content": text}));
                 }
             }
             ResponseItem::Message { role, content, .. } => {
-                flush_step(&mut messages, &mut step, &mut open);
+                flush_step(&mut messages, &mut step, &mut open, &mut images);
                 close_calls(&mut messages, &mut open);
+                flush_images(&mut messages, &mut images);
                 let content = match role.as_str() {
                     "system" | "developer" => system_content(content),
                     _ => message_content(content),
@@ -474,7 +483,7 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
             } => {
                 // Reasoning after text or calls starts another step.
                 if !step.content.is_empty() || !step.tool_calls.is_empty() {
-                    flush_step(&mut messages, &mut step, &mut open);
+                    flush_step(&mut messages, &mut step, &mut open, &mut images);
                 }
                 push_line(
                     &mut step.reasoning,
@@ -517,20 +526,26 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
             ResponseItem::FunctionCallOutput {
                 call_id, output, ..
             } => {
-                let text = output.body.to_text().unwrap_or_default();
                 push_tool_output(
                     &mut messages,
                     &mut step,
                     &mut open,
+                    &mut images,
                     call_id.as_deref(),
-                    text,
+                    output,
                 );
             }
             ResponseItem::CustomToolCallOutput {
                 call_id, output, ..
             } => {
-                let text = output.body.to_text().unwrap_or_default();
-                push_tool_output(&mut messages, &mut step, &mut open, Some(call_id), text);
+                push_tool_output(
+                    &mut messages,
+                    &mut step,
+                    &mut open,
+                    &mut images,
+                    Some(call_id),
+                    output,
+                );
             }
             ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. } => {
                 debug!("a server-side compaction item has no chat form; left out");
@@ -539,8 +554,9 @@ fn chat_messages(request: &ResponsesApiRequest, names: &ToolNames) -> Vec<Value>
             _ => {}
         }
     }
-    flush_step(&mut messages, &mut step, &mut open);
+    flush_step(&mut messages, &mut step, &mut open, &mut images);
     close_calls(&mut messages, &mut open);
+    flush_images(&mut messages, &mut images);
     messages
 }
 
@@ -565,12 +581,18 @@ fn tool_call(call_id: &str, name: &str, arguments: &str) -> Value {
 
 /// Sends the step gathered so far as an assistant message (reasoning alone,
 /// with nothing said or called, is dropped).
-fn flush_step(messages: &mut Vec<Value>, step: &mut AssistantStep, open: &mut Vec<String>) {
+fn flush_step(
+    messages: &mut Vec<Value>,
+    step: &mut AssistantStep,
+    open: &mut Vec<String>,
+    images: &mut Vec<Value>,
+) {
     let step = std::mem::take(step);
     if step.content.is_empty() && step.tool_calls.is_empty() {
         return;
     }
     close_calls(messages, open);
+    flush_images(messages, images);
     let mut message = json!({
         "role": "assistant",
         "content": if step.content.is_empty() {
@@ -609,10 +631,28 @@ fn push_tool_output(
     messages: &mut Vec<Value>,
     step: &mut AssistantStep,
     open: &mut Vec<String>,
+    images: &mut Vec<Value>,
     call_id: Option<&str>,
-    text: String,
+    output: &FunctionCallOutputPayload,
 ) {
-    flush_step(messages, step, open);
+    flush_step(messages, step, open, images);
+    let mut text = output.body.to_text().unwrap_or_default();
+    let parts = output_image_parts(output);
+    if !parts.is_empty() {
+        let label = call_id.unwrap_or("without an id");
+        push_line(
+            &mut text,
+            &format!(
+                "[{} image(s) of this output follow in a user message]",
+                parts.len()
+            ),
+        );
+        images.push(json!({
+            "type": "text",
+            "text": format!("Images returned by tool call {label}:"),
+        }));
+        images.extend(parts);
+    }
     match call_id.and_then(|id| open.iter().position(|open_id| open_id == id)) {
         Some(at) => {
             let call_id = open.remove(at);
@@ -623,6 +663,47 @@ fn push_tool_output(
             messages.push(json!({"role": "user", "content": format!("(Tool output)\n{text}")}));
         }
     }
+    if open.is_empty() {
+        flush_images(messages, images);
+    }
+}
+
+/// A tool output's images as chat content parts (an uploaded image as a
+/// `file` part, DeepSeek's form).
+fn output_image_parts(output: &FunctionCallOutputPayload) -> Vec<Value> {
+    output
+        .content_items()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|item| match item {
+            FunctionCallOutputContentItem::InputImage {
+                image: ImageReference::Inline { image_url },
+                detail,
+            } => {
+                let mut url = json!({"url": image_url});
+                // Chat knows auto / low / high; `original` has no chat form.
+                if let Some(detail @ (ImageDetail::Auto | ImageDetail::Low | ImageDetail::High)) =
+                    detail
+                {
+                    url["detail"] = json!(detail);
+                }
+                Some(json!({"type": "image_url", "image_url": url}))
+            }
+            FunctionCallOutputContentItem::InputImage {
+                image: ImageReference::File { file_id },
+                ..
+            } => Some(json!({"type": "file", "file_id": file_id})),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Sends the images of tool outputs gathered so far as one user message.
+fn flush_images(messages: &mut Vec<Value>, images: &mut Vec<Value>) {
+    if images.is_empty() {
+        return;
+    }
+    messages.push(json!({"role": "user", "content": std::mem::take(images)}));
 }
 
 fn message_text(content: &[ContentItem]) -> String {

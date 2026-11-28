@@ -745,3 +745,96 @@ fn reasoning_without_thinking_blocks_goes_back_as_before() {
         "{CHAT_THINKING_BLOCKS_PREFIX}[]"
     )));
 }
+
+#[test]
+fn tool_output_images_follow_as_a_user_message_after_every_answer() {
+    let image_output = ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: Some("call_a".to_string()),
+        name: None,
+        namespace: None,
+        output: FunctionCallOutputPayload::from_content_items(vec![
+            FunctionCallOutputContentItem::InputText {
+                text: "Screenshot taken.".to_string(),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image: ImageReference::Inline {
+                    image_url: "data:image/png;base64,AAAA".to_string(),
+                },
+                detail: Some(ImageDetail::Low),
+            },
+            FunctionCallOutputContentItem::InputImage {
+                image: ImageReference::File {
+                    file_id: "file-1".to_string(),
+                },
+                detail: None,
+            },
+        ]),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let input = vec![
+        message("user", "Hi"),
+        // Two calls of one step: the images wait for both answers.
+        call("call_a", None, "backend_task", "{}"),
+        call("call_b", None, "backend_task", "{}"),
+        image_output,
+        output("call_b", "ok"),
+        message("assistant", "I see it."),
+    ];
+    let (body, _) = chat_request(&request(input, tools()), &ChatOptions::default());
+    assert_eq!(
+        body["messages"].as_array().unwrap()[2..],
+        [
+            json!({"role": "assistant", "content": null, "tool_calls": [
+                {"id": "call_a", "type": "function",
+                 "function": {"name": "backend_task", "arguments": "{}"}},
+                {"id": "call_b", "type": "function",
+                 "function": {"name": "backend_task", "arguments": "{}"}}]}),
+            json!({"role": "tool", "tool_call_id": "call_a",
+                   "content": "Screenshot taken.\n[2 image(s) of this output follow in a user message]"}),
+            json!({"role": "tool", "tool_call_id": "call_b", "content": "ok"}),
+            json!({"role": "user", "content": [
+                {"type": "text", "text": "Images returned by tool call call_a:"},
+                {"type": "image_url",
+                 "image_url": {"url": "data:image/png;base64,AAAA", "detail": "low"}},
+                {"type": "file", "file_id": "file-1"}]}),
+            json!({"role": "assistant", "content": "I see it."}),
+        ]
+    );
+}
+
+#[test]
+fn images_of_the_last_outputs_end_the_history() {
+    let input = vec![
+        message("user", "Look"),
+        call("call_a", None, "backend_task", "{}"),
+        ResponseItem::FunctionCallOutput {
+            id: None,
+            call_id: Some("call_a".to_string()),
+            name: None,
+            namespace: None,
+            output: FunctionCallOutputPayload::from_content_items(vec![
+                FunctionCallOutputContentItem::InputImage {
+                    image: ImageReference::Inline {
+                        image_url: "data:image/png;base64,BBBB".to_string(),
+                    },
+                    detail: Some(ImageDetail::Original),
+                },
+            ]),
+            internal_chat_message_metadata_passthrough: None,
+        },
+    ];
+    let (body, _) = chat_request(&request(input, tools()), &ChatOptions::default());
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(
+        messages[messages.len() - 2..],
+        [
+            json!({"role": "tool", "tool_call_id": "call_a",
+                   "content": "[1 image(s) of this output follow in a user message]"}),
+            // `original` has no chat form: no detail.
+            json!({"role": "user", "content": [
+                {"type": "text", "text": "Images returned by tool call call_a:"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}}]}),
+        ]
+    );
+}
