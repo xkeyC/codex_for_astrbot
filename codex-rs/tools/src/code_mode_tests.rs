@@ -285,3 +285,34 @@ fn tool_search_spec_converts_to_a_callable_code_mode_definition() {
     );
     assert!(!definition.description.contains("Native tool discovery"));
 }
+
+#[test]
+fn an_mcp_array_without_items_takes_any_items_in_code_mode() {
+    // local-multimodal's sign_assets: `items` is a bare array of objects.
+    let tool = rmcp::model::Tool::new(
+        "sign_assets",
+        "Create signed URLs",
+        std::sync::Arc::new(rmcp::model::object(json!({
+            "type": "object",
+            "properties": {"items": {"type": "array", "description": "Assets to sign."}},
+            "additionalProperties": true,
+        }))),
+    );
+    let parsed = crate::mcp_tool_to_responses_api_tool(
+        &ToolName::plain("sign_assets"),
+        &tool,
+        /*schema_max_bytes*/ None,
+    )
+    .unwrap();
+    let definitions = super::collect_code_mode_tool_definitions(
+        [&ToolSpec::Function(parsed)],
+        /*code_mode_input_schema_max_bytes*/ None,
+    );
+    let schema = definitions[0].input_schema.as_ref().unwrap();
+    assert_eq!(schema["properties"]["items"]["items"], json!({}));
+    let description = codex_code_mode::augment_tool_definition(definitions[0].clone()).description;
+    assert!(
+        description.contains("items?: Array<unknown>"),
+        "{description}"
+    );
+}

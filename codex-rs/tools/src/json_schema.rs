@@ -202,8 +202,11 @@ fn ensure_default_children_for_schema_types(
         );
     }
 
+    // An array without `items` takes any items: `{}`, as for an untyped
+    // property. A string default made code mode type its items `string` and
+    // reject the objects such a tool takes.
     if schema_types.contains(&JsonSchemaPrimitiveType::Array) && !map.contains_key("items") {
-        map.insert("items".to_string(), json!({ "type": "string" }));
+        map.insert("items".to_string(), json!({}));
     }
 }
 

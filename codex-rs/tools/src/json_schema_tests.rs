@@ -115,7 +115,7 @@ fn parse_tool_input_schema_preserves_integer_and_defaults_array_items() {
     //
     // Expected normalization behavior:
     // - `"integer"` is preserved distinctly from `"number"`.
-    // - Arrays missing `items` receive a permissive string `items` schema.
+    // - Arrays missing `items` take any items: `{}`.
     let schema = parse_tool_input_schema(&serde_json::json!({
         "type": "object",
         "properties": {
@@ -136,7 +136,7 @@ fn parse_tool_input_schema_preserves_integer_and_defaults_array_items() {
                 (
                     "tags".to_string(),
                     JsonSchema::array(
-                        JsonSchema::string(/*description*/ None),
+                        JsonSchema::default(),
                         /*description*/ None,
                     )
                 ),
@@ -366,8 +366,8 @@ fn parse_tool_input_schema_infers_array_from_prefix_items() {
     //
     // Expected normalization behavior:
     // - `prefixItems` implies an array schema when `type` is omitted.
-    // - The normalized result is stored as a regular array schema with string
-    //   items.
+    // - The normalized result is stored as a regular array schema with any
+    //   items (`prefixItems` itself is not kept).
     let schema = parse_tool_input_schema(&serde_json::json!({
         "prefixItems": [
             {"type": "string"}
@@ -378,7 +378,7 @@ fn parse_tool_input_schema_infers_array_from_prefix_items() {
     assert_eq!(
         schema,
         JsonSchema::array(
-            JsonSchema::string(/*description*/ None),
+            JsonSchema::default(),
             /*description*/ None,
         )
     );
@@ -539,7 +539,7 @@ fn parse_tool_input_schema_fills_default_items_for_nullable_array_union() {
                 JsonSchemaPrimitiveType::Array,
                 JsonSchemaPrimitiveType::Null,
             ]))),
-            items: Some(Box::new(JsonSchema::string(/*description*/ None))),
+            items: Some(Box::new(JsonSchema::default())),
             ..Default::default()
         }
     );
